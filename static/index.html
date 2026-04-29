@@ -1314,10 +1314,12 @@ async function restoreBudget(id) {
 
 // ── Users ─────────────────────────────────────────────────────────────────────
 async function renderUsers() {
+  document.getElementById('tb-actions').innerHTML = currentUser.role === 'admin'
+    ? `<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add volunteer</button>` : '';
   try {
     const users = await api('GET', '/users');
     document.getElementById('content').innerHTML = `
-      <div class="section-sub">${users.length} registered volunteers</div>
+      <div class="section-sub">${users.length} registered volunteer${users.length!==1?'s':''}</div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Training</th><th>Joined</th><th>Actions</th></tr></thead>
@@ -1328,25 +1330,123 @@ async function renderUsers() {
               <td>
                 ${currentUser.role === 'admin' ? `
                   <select class="form-select" style="font-size:12px;padding:4px 8px" onchange="updateUserRole(${u.id}, this.value)">
-                    <option ${u.role==='volunteer'?'selected':''}>volunteer</option>
-                    <option ${u.role==='treasurer'?'selected':''}>treasurer</option>
-                    <option ${u.role==='president'?'selected':''}>president</option>
-                    <option ${u.role==='admin'?'selected':''}>admin</option>
+                    <option ${u.role==='volunteer'?'selected':''} value="volunteer">Volunteer</option>
+                    <option ${u.role==='treasurer'?'selected':''} value="treasurer">Treasurer</option>
+                    <option ${u.role==='president'?'selected':''} value="president">President</option>
+                    <option ${u.role==='admin'?'selected':''} value="admin">Admin</option>
                   </select>` : `<span class="text-sm" style="text-transform:capitalize">${u.role}</span>`}
               </td>
               <td>
                 ${u.training_complete
                   ? '<span class="badge badge-approved">✓ Complete</span>'
-                  : `<span class="badge badge-denied">Incomplete</span>${currentUser.role==='admin'?`<button class="btn btn-outline btn-sm ml-4" onclick="markTrained(${u.id})">Mark complete</button>`:''}`}
+                  : `<span class="badge badge-denied">Incomplete</span>${currentUser.role==='admin'?` <button class="btn btn-outline btn-sm" style="margin-left:6px" onclick="markTrained(${u.id})">Mark complete</button>`:''}`}
               </td>
               <td class="td-muted">${fmtDate(u.created_at)}</td>
-              <td>—</td>
+              <td>
+                ${currentUser.role === 'admin' ? `
+                  <div class="flex gap-8">
+                    <button class="btn btn-outline btn-sm" onclick="showResetPasswordModal(${u.id}, '${u.name.replace(/'/g,"\\'")}')">Reset password</button>
+                  </div>` : '—'}
+              </td>
             </tr>`).join('')}
           </tbody>
         </table>
       </div>`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+function showAddUserModal() {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Add volunteer</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Full name <span class="req">*</span></label><input type="text" id="new-name" class="form-input" placeholder="Jane Smith"></div>
+      <div class="form-group"><label class="form-label">Email address <span class="req">*</span></label><input type="email" id="new-email" class="form-input" placeholder="jane@example.com"></div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Role</label>
+          <select id="new-role" class="form-select">
+            <option value="volunteer">Volunteer</option>
+            <option value="treasurer">Treasurer</option>
+            <option value="president">President</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Temporary password <span class="req">*</span></label>
+          <input type="text" id="new-password" class="form-input" placeholder="They can change this later">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400">
+          <input type="checkbox" id="new-training" checked>
+          <span>Mark training as complete</span>
+        </label>
+        <div class="form-hint">Check this if they've already completed training in person</div>
+      </div>
+      <div id="add-user-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doAddUser()">Create account</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doAddUser() {
+  const name = document.getElementById('new-name').value.trim();
+  const email = document.getElementById('new-email').value.trim();
+  const password = document.getElementById('new-password').value.trim();
+  const role = document.getElementById('new-role').value;
+  const training = document.getElementById('new-training').checked ? 1 : 0;
+  const errEl = document.getElementById('add-user-error');
+  errEl.classList.add('hidden');
+  if (!name || !email || !password) {
+    errEl.textContent = 'Name, email and password are all required.';
+    errEl.classList.remove('hidden'); return;
+  }
+  try {
+    await api('POST', '/users/create', {name, email, password, role, training_complete: training});
+    toast(`Account created for ${name}!`, 'success');
+    closeModal();
+    renderUsers();
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+function showResetPasswordModal(uid, name) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Reset password</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm mb-16">Set a new temporary password for <strong>${name}</strong>. Share it with them directly — they can update it after signing in.</p>
+      <div class="form-group"><label class="form-label">New password <span class="req">*</span></label><input type="text" id="reset-pw" class="form-input" placeholder="Temporary password"></div>
+      <div id="reset-pw-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doResetPassword(${uid})">Set password</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doResetPassword(uid) {
+  const pw = document.getElementById('reset-pw').value.trim();
+  const errEl = document.getElementById('reset-pw-error');
+  errEl.classList.add('hidden');
+  if (!pw || pw.length < 4) {
+    errEl.textContent = 'Password must be at least 4 characters.';
+    errEl.classList.remove('hidden'); return;
+  }
+  try {
+    await api('PATCH', `/users/${uid}`, {password: pw});
+    toast('Password updated!', 'success');
+    closeModal();
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.classList.remove('hidden');
   }
 }
 
@@ -1366,6 +1466,249 @@ async function markTrained(uid) {
 }
 
 // ── Training ──────────────────────────────────────────────────────────────────
+const HWTC_SLIDES = [
+  {
+    section: 'Smart Theater Spending',
+    icon: '🎭',
+    color: '#0f6e56',
+    title: 'Smart Theater Spending',
+    subtitle: 'Stretch every dollar for Horizon West Theater Company',
+    points: []
+  },
+  {
+    section: 'Smart Theater Spending',
+    icon: '🏪',
+    color: '#0f6e56',
+    title: 'Check Storage First',
+    subtitle: 'Don\'t reinvent the wheel',
+    points: [
+      'HWTC has storage full of costumes, props, and set pieces — check before buying',
+      'Something similar can often be modified to fit your needs',
+      'Contact our Storage Chair Jillian at jillian@hwtco.org for inventory questions',
+      'Also check with your production\'s producer about what we already have'
+    ]
+  },
+  {
+    section: 'Smart Theater Spending',
+    icon: '🛍️',
+    color: '#0f6e56',
+    title: 'Shop Smart, Shop Local',
+    subtitle: 'Big box stores aren\'t always the best deal',
+    points: [
+      'Thrift stores, craft stores, hardware stores & small local businesses often have what we need',
+      'Shopping local supports our community and avoids shipping costs',
+      'The Orlando theater community has theaters & orgs we can borrow from — sometimes for free!',
+      'Resources: Facebook Marketplace, Orlando Theater Facebook Groups, Orlando Area Theater Borrow & Return Green Room, Buy Nothing Groups'
+    ]
+  },
+  {
+    section: 'Smart Theater Spending',
+    icon: '🔄',
+    color: '#0f6e56',
+    title: 'Rent vs. Buy',
+    subtitle: 'Storage is tight and budgets are tighter',
+    points: [
+      'Before purchasing, ask: will this item have future use for HWTC?',
+      'Very show-specific items (e.g. "A Bourbon Room sign for Rock of Ages") are great rental candidates',
+      'If you wouldn\'t buy it with your own money, double-check if we really need it',
+      'When in doubt, ask your producer before purchasing'
+    ]
+  },
+  {
+    section: 'Credit Card',
+    icon: '💳',
+    color: '#7a5a10',
+    title: 'Using the HWTC Credit Card',
+    subtitle: 'A tool to make purchasing easier — use it with care',
+    points: [
+      'The producer of each production decides who can use the card — not everyone gets automatic access',
+      'If you\'re not eligible, the company can complete a purchase on your behalf',
+      'Use it ONLY for HWTC-approved purchases at known, trusted stores',
+      'Never share the card number with anyone'
+    ]
+  },
+  {
+    section: 'Credit Card',
+    icon: '💰',
+    color: '#7a5a10',
+    title: 'Credit Card Limits',
+    subtitle: 'Know the rules before you swipe',
+    points: [
+      'As of 9/1/2025 the HWTC production credit card has a set purchasing limit',
+      'Any purchase outside that limit must be completed by an eligible HWTC Board Member',
+      'Save every receipt — paper or digital — for every purchase',
+      'If unsure whether to use the card, pause and check with your producer or the Treasurer'
+    ]
+  },
+  {
+    section: 'Reimbursements',
+    icon: '🧾',
+    color: '#185fa5',
+    title: 'Getting Reimbursed',
+    subtitle: 'What you need to know before spending your own money',
+    points: [
+      'Always check with the production team before making a purchase — only approved purchases are eligible',
+      'All reimbursable purchases must be completed before the first day of tech/load-in',
+      'Last-minute costs during tech week or performances must be purchased by an eligible Board Member',
+      'Purchases made outside this window may not be approved for reimbursement'
+    ]
+  },
+  {
+    section: 'Reimbursements',
+    icon: '📸',
+    color: '#185fa5',
+    title: 'Receipts & Submission',
+    subtitle: 'No receipt = no reimbursement',
+    points: [
+      'Paper or digital — you need a record of every single purchase',
+      'Snap a photo of your receipt right away so you don\'t lose it',
+      'Submit using the HWTC Receipt Submission Form with all receipts attached',
+      'All receipts must be submitted before the first day of tech/load-in — incomplete forms may delay payment',
+      'Reimbursement for production costs should be distributed within one week of opening night'
+    ]
+  },
+  {
+    section: 'Donations',
+    icon: '🎁',
+    color: '#2d7d4f',
+    title: 'Donating Items',
+    subtitle: 'We love donations — but check first!',
+    points: [
+      'HWTC loves donations of costumes, props, set pieces, and craft materials',
+      'Before donating, check with the production team — storage is limited',
+      'Disney Cast Members may be able to submit for a matching gift — ask the producer for details',
+      'Coordinate drop-off timing with the production team and label donations clearly'
+    ]
+  },
+  {
+    section: 'Summary',
+    icon: '✅',
+    color: '#0f6e56',
+    title: 'You\'re Almost Ready!',
+    subtitle: 'Key things to remember',
+    points: [
+      'Always get pre-approval before purchasing — use BloomBooks to submit requests',
+      'Check storage and existing inventory before buying anything new',
+      'Keep every receipt and submit before tech/load-in',
+      'When in doubt, ask your producer or the Treasurer',
+      'Complete the quiz below to unlock your purchasing access'
+    ]
+  }
+];
+
+const HWTC_QUESTIONS = [
+  {
+    question: "Before buying props or costumes for a production, what should you do first?",
+    options: [
+      "Go straight to Amazon or Target for convenience",
+      "Check HWTC storage and ask the producer what we already have",
+      "Ask a fellow cast member if they have it at home",
+      "Post in the group chat to crowdsource ideas"
+    ],
+    correct: 1,
+    explanation: "HWTC has storage full of costumes, props, and set pieces. Always check storage first and ask the producer — you might find something that just needs minor modification, saving the org money."
+  },
+  {
+    question: "Who should you contact for questions about what's in HWTC's storage unit?",
+    options: [
+      "The director of your production",
+      "Any board member",
+      "Jillian, the Storage Committee Chair, at jillian@hwtco.org",
+      "The HWTC Treasurer"
+    ],
+    correct: 2,
+    explanation: "Jillian is our Storage Committee Chair and the right person to contact about inventory at jillian@hwtco.org. She can tell you what's available and help you find something that works."
+  },
+  {
+    question: "You need a very specific set piece that will only be used for this one production. What should you consider?",
+    options: [
+      "Buy it new — quality matters for the show",
+      "It's fine since it's for the production",
+      "Whether it can be rented instead of purchased outright",
+      "Asking cast members to build it themselves"
+    ],
+    correct: 2,
+    explanation: "Show-specific items like a 'Bourbon Room sign for Rock of Ages' are perfect rental candidates. They're needed for the show but won't have future use for HWTC — renting saves storage space and budget."
+  },
+  {
+    question: "Which of these is the BEST place to look for affordable props and costumes?",
+    options: [
+      "Walmart or Amazon — they have everything",
+      "Thrift stores, Facebook Marketplace, and the Orlando Area Theater Borrow & Return Green Room",
+      "Only brand-new items from craft stores",
+      "Ordering custom pieces online"
+    ],
+    correct: 1,
+    explanation: "Thrift stores, Facebook Marketplace, Orlando Theater groups, and the Area Theater Borrow & Return Green Room are goldmines for affordable or free items. Shopping local also avoids shipping costs!"
+  },
+  {
+    question: "Who decides who gets to use the HWTC credit card for a production?",
+    options: [
+      "Any volunteer who needs it can use it",
+      "The HWTC Treasurer assigns it to everyone",
+      "The producer of each production decides",
+      "Board members vote on it each season"
+    ],
+    correct: 2,
+    explanation: "The producer of each production decides who can use the card — not everyone gets automatic access. This keeps the card safe and organized. If you're not eligible, the company can purchase on your behalf."
+  },
+  {
+    question: "You used the HWTC credit card to buy supplies. What must you do?",
+    options: [
+      "Nothing — the card handles tracking automatically",
+      "Just email the producer the total",
+      "Save every receipt and be prepared to submit it to the producer or Treasurer",
+      "Write it down in a notebook for the end of the season"
+    ],
+    correct: 2,
+    explanation: "Save all receipts — paper or digital — for every purchase made on the card. You may be asked to submit them to the producer or HWTC Treasurer. No receipt = a big problem for accountability."
+  },
+  {
+    question: "What is the deadline for completing all reimbursable purchases?",
+    options: [
+      "Anytime before closing night",
+      "Before the first day of tech/load-in",
+      "Within a week of opening night",
+      "There's no deadline as long as receipts are submitted"
+    ],
+    correct: 1,
+    explanation: "All reimbursable purchases must be completed BEFORE the first day of tech/load-in. Any last-minute costs during tech week or performances must be handled by an eligible Board Member."
+  },
+  {
+    question: "You bought something for the show and lost the receipt. What happens?",
+    options: [
+      "Submit the request anyway — amounts under $20 don't need receipts",
+      "The treasurer will trust you and pay it",
+      "No receipt means no reimbursement — always snap a photo right away",
+      "Ask the store to reprint it whenever you get a chance"
+    ],
+    correct: 2,
+    explanation: "No receipt = no reimbursement, full stop. The policy is clear — snap a photo of every receipt immediately after purchase so you don't lose it. This protects you and the organization."
+  },
+  {
+    question: "When should reimbursements for production costs typically be distributed?",
+    options: [
+      "At the end of the fiscal year",
+      "Within 30 days of submitting receipts",
+      "Within one week of opening night",
+      "Only after the production has broken even financially"
+    ],
+    correct: 2,
+    explanation: "Unless unexpected delays occur, reimbursement for production costs should be distributed within one week of opening night. Submit your receipts on time to ensure you get paid on schedule."
+  },
+  {
+    question: "You have extra costumes at home that would be perfect for the current show. What's the right move?",
+    options: [
+      "Drop them off at rehearsal without asking — more is more!",
+      "Check with the production team first to confirm they're needed, then coordinate drop-off",
+      "Sell them to the organization at a fair price",
+      "Only donate if you can get a tax receipt"
+    ],
+    correct: 1,
+    explanation: "HWTC loves donations, but storage is limited! Always check with the production team first to confirm the item is actually needed, then coordinate timing and drop-off. Label everything clearly so we know which production it's for."
+  }
+];
+
 let trainingModule = null;
 let currentSlide = 0;
 let quizAnswers = {};
@@ -1374,145 +1717,206 @@ let quizSubmitted = false;
 async function renderTraining() {
   try {
     const status = await api('GET', '/training/status');
-    const d = await api('GET', '/training');
-    trainingModule = d.module;
     quizAnswers = {};
     quizSubmitted = false;
 
-    if (!trainingModule) {
-      document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-icon">📋</div><h3>No training available</h3><p>An admin needs to set up the training module.</p></div>`;
-      return;
-    }
-
     if (status.completed) {
       document.getElementById('content').innerHTML = `
-        <div class="panel" style="max-width:560px;text-align:center;padding:40px 32px">
-          <div style="font-size:48px;margin-bottom:16px">🎓</div>
-          <h2 style="font-size:22px;font-weight:700;margin-bottom:8px">Training complete!</h2>
-          <p class="text-muted text-sm">You passed with a score of <strong>${status.score}%</strong>. You are authorized to submit purchase requests.</p>
-          <button class="btn btn-primary mt-24" onclick="nav('new-request')">Submit a purchase request →</button>
+        <div class="panel" style="max-width:580px;text-align:center;padding:48px 40px">
+          <div style="font-size:52px;margin-bottom:16px">🎓</div>
+          <h2 style="font-size:24px;font-weight:700;margin-bottom:8px;color:var(--green)">Training complete!</h2>
+          <p class="text-muted text-sm">You passed with a score of <strong>${status.score}%</strong>. You are authorized to submit purchase requests for Horizon West Theater Company.</p>
+          <div style="margin-top:24px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="nav('new-request')">Submit a purchase request →</button>
+            <button class="btn btn-outline" onclick="startTrainingReview()">Review training again</button>
+          </div>
         </div>`;
       return;
     }
 
     currentSlide = 0;
-    renderTrainingView();
+    renderSlideView();
   } catch(e) {
     document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
   }
 }
 
-function renderTrainingView() {
-  const m = trainingModule;
-  const hasSlides = m.slides && m.slides.length > 0;
-  const showQuiz = !hasSlides || currentSlide >= m.slides.length;
+function startTrainingReview() {
+  currentSlide = 0;
+  quizAnswers = {};
+  quizSubmitted = false;
+  renderSlideView();
+}
 
-  let slideHtml = '';
-  if (hasSlides && !showQuiz) {
-    const slide = m.slides[currentSlide];
-    slideHtml = `
-      <div class="slide-viewer">
-        <img src="${slide}" alt="Slide ${currentSlide+1}" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
-        <div class="slide-placeholder" style="display:none"><svg width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="opacity:.4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg><p>Slide ${currentSlide+1}</p></div>
-      </div>
-      <div class="slide-nav">
-        <button class="btn btn-outline btn-sm" onclick="prevSlide()" ${currentSlide===0?'disabled':''}>← Prev</button>
-        <div class="slide-dots">${m.slides.map((_,i) => `<button class="slide-dot ${i===currentSlide?'active':''}" onclick="goSlide(${i})"></button>`).join('')}</div>
-        <button class="btn btn-primary btn-sm" onclick="nextSlide()">
-          ${currentSlide === m.slides.length-1 ? 'Take quiz →' : 'Next →'}
-        </button>
-      </div>
-      <div class="text-xs text-muted" style="text-align:center">Slide ${currentSlide+1} of ${m.slides.length}</div>`;
-  }
+function renderSlideView() {
+  const slide = HWTC_SLIDES[currentSlide];
+  const isLast = currentSlide === HWTC_SLIDES.length - 1;
+  const progress = Math.round(((currentSlide + 1) / HWTC_SLIDES.length) * 100);
 
-  let quizHtml = '';
-  if (showQuiz && m.questions && m.questions.length > 0) {
-    quizHtml = `
-      <div class="panel mb-16" style="background:var(--teal3);border-color:var(--teal)">
-        <div class="fw-600">${m.title} — Knowledge Check</div>
-        <div class="text-sm text-muted mt-4">Answer all questions. You need ${m.pass_mark}% to pass.</div>
-      </div>
-      ${m.questions.map((q, qi) => `
-        <div class="quiz-card" id="quiz-card-${qi}">
-          <div class="quiz-q">Q${qi+1}. ${q.question}</div>
-          ${q.options.map((opt, oi) => `
-            <div class="quiz-option" id="qo-${qi}-${oi}" onclick="selectAnswer(${qi},${oi})">
-              <span style="width:20px;height:20px;border-radius:50%;border:2px solid var(--border2);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0" id="qr-${qi}-${oi}"></span>
-              ${opt}
-            </div>`).join('')}
-          <div id="quiz-exp-${qi}" class="quiz-explanation hidden"></div>
-        </div>`).join('')}
-      <div id="quiz-result" class="hidden"></div>
-      <button class="btn btn-primary btn-lg mt-8" id="quiz-submit" onclick="submitQuiz()" disabled>Submit answers</button>`;
-  }
+  // Build section progress pills
+  const sections = [...new Set(HWTC_SLIDES.map(s => s.section))];
+  const currentSection = slide.section;
 
   document.getElementById('content').innerHTML = `
-    <div style="max-width:680px">
-      <div class="mb-16">
-        <div class="section-title">${m.title}</div>
-        <div class="section-sub">${m.description||''}</div>
+    <div style="max-width:700px">
+      <!-- Progress bar -->
+      <div style="margin-bottom:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span class="text-xs text-muted">Slide ${currentSlide + 1} of ${HWTC_SLIDES.length}</span>
+          <span class="text-xs text-muted">${progress}% complete</span>
+        </div>
+        <div style="background:var(--cream3);border-radius:99px;height:6px">
+          <div style="height:6px;border-radius:99px;background:var(--teal);width:${progress}%;transition:width .4s ease"></div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+          ${sections.map(s => `<span style="font-size:10px;font-weight:600;padding:3px 10px;border-radius:99px;background:${s===currentSection?'var(--teal)':'var(--cream3)'};color:${s===currentSection?'#fff':'var(--ink3)'}">${s}</span>`).join('')}
+        </div>
       </div>
-      ${slideHtml}
-      ${quizHtml}
+
+      <!-- Slide card -->
+      <div class="card mb-16" style="border-top:4px solid ${slide.color};overflow:visible">
+        <div class="card-body" style="padding:28px 32px">
+          <div style="font-size:40px;margin-bottom:12px">${slide.icon}</div>
+          <h2 style="font-size:22px;font-weight:700;color:var(--ink);margin-bottom:6px;letter-spacing:-.3px">${slide.title}</h2>
+          <p style="font-size:14px;color:var(--ink3);margin-bottom:${slide.points.length?'24px':'0'}">${slide.subtitle}</p>
+          ${slide.points.length > 0 ? `
+            <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px">
+              ${slide.points.map(p => `
+                <li style="display:flex;gap:12px;align-items:flex-start">
+                  <span style="width:20px;height:20px;border-radius:50%;background:${slide.color}22;color:${slide.color};font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">✓</span>
+                  <span style="font-size:14px;line-height:1.6;color:var(--ink2)">${p}</span>
+                </li>`).join('')}
+            </ul>` : ''}
+        </div>
+      </div>
+
+      <!-- Navigation -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <button class="btn btn-outline" onclick="prevSlide()" ${currentSlide===0?'disabled':''}>← Previous</button>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:center">
+          ${HWTC_SLIDES.map((_,i) => `<button onclick="goSlide(${i})" style="width:8px;height:8px;border-radius:50%;border:none;cursor:pointer;background:${i===currentSlide?'var(--teal)':'var(--cream3)'};padding:0;transition:background .2s"></button>`).join('')}
+        </div>
+        ${isLast
+          ? `<button class="btn btn-primary" onclick="renderQuizView()">Take the quiz →</button>`
+          : `<button class="btn btn-primary" onclick="nextSlide()">Next →</button>`}
+      </div>
     </div>`;
 }
 
-function prevSlide() { if (currentSlide > 0) { currentSlide--; renderTrainingView(); } }
-function nextSlide() { currentSlide++; renderTrainingView(); }
-function goSlide(i)   { currentSlide = i; renderTrainingView(); }
+function prevSlide() { if (currentSlide > 0) { currentSlide--; renderSlideView(); } }
+function nextSlide() { currentSlide++; renderSlideView(); }
+function goSlide(i)  { currentSlide = i; renderSlideView(); }
+
+function renderQuizView() {
+  quizAnswers = {};
+  quizSubmitted = false;
+  document.getElementById('content').innerHTML = `
+    <div style="max-width:700px">
+      <div class="panel mb-20" style="background:var(--teal3);border-color:var(--teal);display:flex;align-items:center;gap:16px">
+        <div style="font-size:28px">📝</div>
+        <div>
+          <div class="fw-600" style="font-size:16px">HWTC Purchasing Knowledge Check</div>
+          <div class="text-sm text-muted mt-4">${HWTC_QUESTIONS.length} questions · You need 80% to pass · Take your time</div>
+        </div>
+      </div>
+      ${HWTC_QUESTIONS.map((q, qi) => `
+        <div class="quiz-card mb-12" id="quiz-card-${qi}" style="border:1px solid var(--border);border-radius:var(--r);padding:20px">
+          <div style="font-size:11px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Question ${qi+1} of ${HWTC_QUESTIONS.length}</div>
+          <div class="quiz-q" style="font-size:15px;font-weight:600;margin-bottom:14px;color:var(--ink)">${q.question}</div>
+          ${q.options.map((opt, oi) => `
+            <div class="quiz-option" id="qo-${qi}-${oi}" onclick="selectAnswer(${qi},${oi})" style="display:flex;align-items:flex-start;gap:12px;padding:11px 14px;border:1.5px solid var(--border);border-radius:var(--r-sm);margin-bottom:8px;cursor:pointer;transition:all .15s;font-size:14px">
+              <span style="width:22px;height:22px;border-radius:50%;border:2px solid var(--border2);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;margin-top:1px;font-weight:700" id="qr-${qi}-${oi}"></span>
+              <span>${opt}</span>
+            </div>`).join('')}
+          <div id="quiz-exp-${qi}" class="quiz-explanation hidden" style="font-size:13px;color:var(--ink2);margin-top:10px;padding:10px 12px;background:var(--cream2);border-radius:var(--r-sm);border-left:3px solid var(--teal)"></div>
+        </div>`).join('')}
+      <div id="quiz-result"></div>
+      <button class="btn btn-primary btn-lg w-full mt-8" id="quiz-submit" onclick="submitQuiz()" disabled style="margin-top:8px">Submit answers</button>
+      <button class="btn btn-outline w-full mt-8" onclick="renderSlideView();currentSlide=0" style="margin-top:8px">← Review slides again</button>
+    </div>`;
+}
 
 function selectAnswer(qi, oi) {
   if (quizSubmitted) return;
   quizAnswers[qi] = oi;
-  trainingModule.questions[qi].options.forEach((_, i) => {
+  HWTC_QUESTIONS[qi].options.forEach((_, i) => {
     const el = document.getElementById(`qo-${qi}-${i}`);
-    el.classList.toggle('selected', i === oi);
-    document.getElementById(`qr-${qi}-${i}`).textContent = i === oi ? '●' : '';
+    const radio = document.getElementById(`qr-${qi}-${i}`);
+    if (i === oi) {
+      el.style.borderColor = 'var(--teal)';
+      el.style.background = 'var(--teal3)';
+      radio.textContent = '●';
+      radio.style.borderColor = 'var(--teal)';
+      radio.style.color = 'var(--teal)';
+    } else {
+      el.style.borderColor = 'var(--border)';
+      el.style.background = '';
+      radio.textContent = '';
+      radio.style.borderColor = 'var(--border2)';
+    }
   });
-  const allAnswered = trainingModule.questions.every((_,i) => quizAnswers[i] !== undefined);
+  const allAnswered = HWTC_QUESTIONS.every((_,i) => quizAnswers[i] !== undefined);
   document.getElementById('quiz-submit').disabled = !allAnswered;
+  if (allAnswered) {
+    document.getElementById('quiz-submit').scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
 }
 
 async function submitQuiz() {
   quizSubmitted = true;
   let correct = 0;
-  trainingModule.questions.forEach((q, qi) => {
+  HWTC_QUESTIONS.forEach((q, qi) => {
     const selected = quizAnswers[qi];
     const isCorrect = selected === q.correct;
     if (isCorrect) correct++;
-    trainingModule.questions[qi].options.forEach((_, oi) => {
+    q.options.forEach((_, oi) => {
       const el = document.getElementById(`qo-${qi}-${oi}`);
-      el.classList.add('disabled');
-      if (oi === q.correct) el.classList.add('correct');
-      else if (oi === selected && !isCorrect) el.classList.add('wrong');
+      const radio = document.getElementById(`qr-${qi}-${oi}`);
+      el.style.cursor = 'default';
+      if (oi === q.correct) {
+        el.style.borderColor = 'var(--green)';
+        el.style.background = 'var(--green-bg)';
+        radio.textContent = '✓';
+        radio.style.borderColor = 'var(--green)';
+        radio.style.color = 'var(--green)';
+      } else if (oi === selected && !isCorrect) {
+        el.style.borderColor = 'var(--red)';
+        el.style.background = 'var(--red-bg)';
+        radio.textContent = '✕';
+        radio.style.borderColor = 'var(--red)';
+        radio.style.color = 'var(--red)';
+      }
     });
     const expEl = document.getElementById(`quiz-exp-${qi}`);
-    expEl.textContent = q.explanation || '';
+    expEl.textContent = q.explanation;
     expEl.classList.remove('hidden');
   });
 
-  const score = Math.round((correct / trainingModule.questions.length) * 100);
+  const score = Math.round((correct / HWTC_QUESTIONS.length) * 100);
   document.getElementById('quiz-submit').style.display = 'none';
+  document.querySelector('button[onclick="renderSlideView();currentSlide=0"]').style.display = 'none';
 
   try {
     const d = await api('POST', '/training/complete', {score});
     const passed = d.passed;
     const resultEl = document.getElementById('quiz-result');
-    resultEl.classList.remove('hidden');
     resultEl.innerHTML = passed
-      ? `<div class="panel mt-16" style="background:var(--green-bg);border-color:#a8d8b9;text-align:center;padding:28px">
-           <div style="font-size:36px;margin-bottom:8px">🎓</div>
-           <div class="fw-600" style="font-size:18px;color:var(--green)">You passed!</div>
-           <div class="text-sm text-muted mt-4">Score: ${score}% (${correct}/${trainingModule.questions.length} correct)</div>
-           <button class="btn btn-primary mt-16" onclick="nav('new-request')">Start submitting purchase requests →</button>
+      ? `<div class="panel mt-20" style="background:var(--green-bg);border-color:#a8d8b9;text-align:center;padding:32px;border-radius:var(--r)">
+           <div style="font-size:48px;margin-bottom:12px">🎓</div>
+           <div style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:6px">You passed!</div>
+           <div class="text-sm text-muted">${correct} of ${HWTC_QUESTIONS.length} correct · ${score}%</div>
+           <p class="text-sm mt-12" style="color:var(--ink2)">You are now authorized to submit purchase requests for Horizon West Theater Company.</p>
+           <button class="btn btn-primary mt-16" onclick="nav('new-request')">Submit your first purchase request →</button>
          </div>`
-      : `<div class="panel mt-16" style="background:var(--red-bg);border-color:#e8b4b4;text-align:center;padding:28px">
-           <div style="font-size:36px;margin-bottom:8px">📖</div>
-           <div class="fw-600" style="font-size:18px;color:var(--red)">Not quite — ${score}%</div>
-           <div class="text-sm text-muted mt-4">You need ${d.pass_mark}% to pass. Review the material and try again.</div>
-           <button class="btn btn-outline mt-16" onclick="renderTraining()">Try again</button>
+      : `<div class="panel mt-20" style="background:var(--red-bg);border-color:#e8b4b4;text-align:center;padding:32px;border-radius:var(--r)">
+           <div style="font-size:48px;margin-bottom:12px">📖</div>
+           <div style="font-size:22px;font-weight:700;color:var(--red);margin-bottom:6px">Not quite — ${score}%</div>
+           <div class="text-sm text-muted">${correct} of ${HWTC_QUESTIONS.length} correct · Need 80% to pass</div>
+           <p class="text-sm mt-12" style="color:var(--ink2)">Review the explanations above, then try again. You've got this!</p>
+           <button class="btn btn-outline mt-16" onclick="renderTraining()">Try again from the start</button>
          </div>`;
 
+    resultEl.scrollIntoView({behavior:'smooth', block:'start'});
     if (passed) {
       currentUser.training_complete = 1;
       document.getElementById('sb-training-badge').style.display = 'none';
