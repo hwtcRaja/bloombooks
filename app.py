@@ -180,7 +180,7 @@ def init_db():
                      VALUES (%s,%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING''', u)
 
     # Seed budgets (only if table is empty)
-    c.execute('SELECT COUNT(*) as count as n FROM bb_budgets')
+    c.execute('SELECT COUNT(*) AS n FROM bb_budgets')
     if c.fetchone()['n'] == 0:
         seed_budgets = [
             ('Spring Musical 2025', 'Production', '2024-2025', 3500),
@@ -193,7 +193,7 @@ def init_db():
             c.execute('INSERT INTO bb_budgets (name,area,season,total_amount) VALUES (%s,%s,%s,%s)', b)
 
     # Seed training module (only if table is empty)
-    c.execute('SELECT COUNT(*) as count as n FROM bb_training_modules')
+    c.execute('SELECT COUNT(*) AS n FROM bb_training_modules')
     if c.fetchone()['n'] == 0:
         sample_questions = json.dumps([
             {
