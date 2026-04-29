@@ -1,0 +1,1687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BloomBooks — Horizon West Theater Company</title>
+<style>
+/* ── Reset & base ───────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --cream:#faf8f3;--cream2:#f2efe6;--cream3:#e8e4d8;
+  --teal:#0f6e56;--teal2:#1a8a6c;--teal3:#e1f5ee;
+  --ink:#1e1e1b;--ink2:#4a4a45;--ink3:#888880;
+  --amber:#c97c10;--amber-bg:#fef3e2;
+  --red:#b53030;--red-bg:#fdf0f0;
+  --green:#2d7d4f;--green-bg:#edf7f2;
+  --border:#dddad0;--border2:#c8c4b8;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 4px 12px rgba(0,0,0,.04);
+  --shadow-lg:0 4px 16px rgba(0,0,0,.12);
+  --r:10px;--r-sm:6px;--r-lg:14px;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--cream);color:var(--ink);font-size:15px;line-height:1.6;min-height:100vh}
+button{cursor:pointer;font-family:inherit;font-size:14px}
+input,select,textarea{font-family:inherit;font-size:14px}
+a{color:var(--teal);text-decoration:none}
+img{max-width:100%}
+
+/* ── Layout ─────────────────────────────────────────────────────────── */
+#app{display:flex;min-height:100vh}
+#sidebar{width:240px;min-height:100vh;background:var(--ink);display:flex;flex-direction:column;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#topbar{height:56px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:12px;flex-shrink:0;position:sticky;top:0;z-index:50}
+#content{flex:1;padding:28px 28px;overflow-y:auto}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────── */
+.sb-brand{padding:20px 20px 16px;border-bottom:1px solid rgba(255,255,255,.08)}
+.sb-org{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.sb-org-dot{width:32px;height:32px;border-radius:8px;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0}
+.sb-org-name{font-size:11px;color:rgba(255,255,255,.5);line-height:1.3;letter-spacing:.2px}
+.sb-app-name{font-size:18px;font-weight:700;color:#fff;letter-spacing:-.3px}
+.sb-app-sub{font-size:11px;color:rgba(255,255,255,.4);letter-spacing:.3px;text-transform:uppercase;margin-top:2px}
+
+.sb-nav{flex:1;padding:12px 0}
+.sb-section{padding:0 12px;margin-bottom:4px}
+.sb-section-label{font-size:10px;font-weight:600;color:rgba(255,255,255,.3);text-transform:uppercase;letter-spacing:.8px;padding:8px 8px 4px}
+.sb-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r-sm);cursor:pointer;transition:background .15s;color:rgba(255,255,255,.65);font-size:13.5px;font-weight:500;border:none;background:none;width:100%;text-align:left}
+.sb-item:hover{background:rgba(255,255,255,.07);color:#fff}
+.sb-item.active{background:var(--teal);color:#fff}
+.sb-item .sb-icon{width:18px;height:18px;flex-shrink:0;opacity:.8}
+.sb-item.active .sb-icon{opacity:1}
+.sb-badge{margin-left:auto;background:var(--amber);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:99px;min-width:18px;text-align:center}
+.sb-badge.red{background:var(--red)}
+
+.sb-footer{padding:12px;border-top:1px solid rgba(255,255,255,.08)}
+.sb-user{display:flex;align-items:center;gap:10px;padding:8px;border-radius:var(--r-sm)}
+.sb-user-av{width:30px;height:30px;border-radius:50%;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
+.sb-user-name{font-size:13px;font-weight:500;color:#fff}
+.sb-user-role{font-size:11px;color:rgba(255,255,255,.4);text-transform:capitalize}
+.sb-logout{margin-left:auto;background:none;border:none;color:rgba(255,255,255,.35);cursor:pointer;font-size:12px;padding:4px;border-radius:4px}
+.sb-logout:hover{color:rgba(255,255,255,.7)}
+
+/* ── Topbar ─────────────────────────────────────────────────────────── */
+.tb-title{font-size:16px;font-weight:600;color:var(--ink);flex:1}
+.tb-breadcrumb{font-size:12px;color:var(--ink3)}
+.tb-actions{display:flex;gap:8px}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--r-sm);font-weight:500;font-size:13.5px;border:1px solid transparent;transition:all .15s;line-height:1.4;white-space:nowrap}
+.btn-primary{background:var(--teal);color:#fff;border-color:var(--teal)}
+.btn-primary:hover{background:var(--teal2)}
+.btn-outline{background:#fff;color:var(--ink2);border-color:var(--border2)}
+.btn-outline:hover{background:var(--cream2);border-color:var(--border2)}
+.btn-danger{background:var(--red-bg);color:var(--red);border-color:#e8b4b4}
+.btn-danger:hover{background:#fbe0e0}
+.btn-approve{background:var(--green-bg);color:var(--green);border-color:#a8d8b9}
+.btn-approve:hover{background:#d8f0e5}
+.btn-sm{padding:5px 10px;font-size:12.5px}
+.btn-lg{padding:10px 20px;font-size:15px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ── Cards & panels ─────────────────────────────────────────────────── */
+.card{background:#fff;border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.card-title{font-size:15px;font-weight:600;color:var(--ink)}
+.card-body{padding:20px}
+.panel{background:#fff;border:1px solid var(--border);border-radius:var(--r);padding:20px;box-shadow:var(--shadow)}
+
+/* ── Stat cards ─────────────────────────────────────────────────────── */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px}
+.stat-card{background:#fff;border:1px solid var(--border);border-radius:var(--r);padding:16px 20px;box-shadow:var(--shadow)}
+.stat-label{font-size:12px;color:var(--ink3);font-weight:500;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.stat-value{font-size:26px;font-weight:700;color:var(--ink);line-height:1.1}
+.stat-sub{font-size:12px;color:var(--ink3);margin-top:2px}
+.stat-card.amber .stat-value{color:var(--amber)}
+.stat-card.teal .stat-value{color:var(--teal)}
+.stat-card.red .stat-value{color:var(--red)}
+.stat-card.green .stat-value{color:var(--green)}
+
+/* ── Forms ───────────────────────────────────────────────────────────── */
+.form-group{margin-bottom:16px}
+.form-label{display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px}
+.form-label .req{color:var(--red)}
+.form-input,.form-select,.form-textarea{width:100%;padding:8px 12px;border:1px solid var(--border2);border-radius:var(--r-sm);font-size:14px;color:var(--ink);background:#fff;transition:border-color .15s;outline:none}
+.form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(15,110,86,.12)}
+.form-textarea{resize:vertical;min-height:80px}
+.form-hint{font-size:12px;color:var(--ink3);margin-top:4px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.form-error{color:var(--red);font-size:12.5px;margin-top:4px}
+
+/* ── Badges & status ────────────────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:99px;font-size:11.5px;font-weight:600}
+.badge-pending{background:#fef3e2;color:#8a5a10}
+.badge-treasurer{background:#e8effe;color:#3a4ea8}
+.badge-president{background:#f0e8fe;color:#6a38b5}
+.badge-approved{background:var(--green-bg);color:var(--green)}
+.badge-denied{background:var(--red-bg);color:var(--red)}
+.badge-reimbursed{background:var(--teal3);color:var(--teal)}
+.badge-emergency{background:#fff0e0;color:#a05c10;border:1px solid #f5cc90}
+.badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+
+/* ── Tables ─────────────────────────────────────────────────────────── */
+.table-wrap{overflow-x:auto;border-radius:var(--r);border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;background:#fff}
+th{background:var(--cream2);padding:10px 14px;text-align:left;font-size:12px;font-weight:600;color:var(--ink2);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--cream3);font-size:13.5px;color:var(--ink);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--cream)}
+.td-muted{color:var(--ink3)}
+
+/* ── Modal ───────────────────────────────────────────────────────────── */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.modal{background:#fff;border-radius:var(--r-lg);box-shadow:var(--shadow-lg);width:100%;max-width:520px;max-height:90vh;overflow-y:auto;animation:modal-in .18s ease}
+@keyframes modal-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.modal-header{padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:16px;font-weight:700;color:var(--ink)}
+.modal-close{background:none;border:none;font-size:20px;color:var(--ink3);cursor:pointer;padding:2px 6px;border-radius:4px}
+.modal-close:hover{background:var(--cream2);color:var(--ink)}
+.modal-body{padding:20px 24px}
+.modal-footer{padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
+
+/* ── Training ────────────────────────────────────────────────────────── */
+.slide-viewer{background:var(--ink);border-radius:var(--r);overflow:hidden;margin-bottom:20px;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;position:relative}
+.slide-viewer img{width:100%;height:100%;object-fit:contain}
+.slide-placeholder{text-align:center;color:rgba(255,255,255,.4)}
+.slide-placeholder p{font-size:13px;margin-top:8px}
+.slide-nav{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:20px}
+.slide-dots{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;max-width:300px}
+.slide-dot{width:8px;height:8px;border-radius:50%;background:var(--border2);cursor:pointer;transition:background .15s;border:none}
+.slide-dot.active{background:var(--teal)}
+
+.quiz-card{border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-bottom:16px}
+.quiz-q{font-size:15px;font-weight:600;margin-bottom:14px;color:var(--ink)}
+.quiz-option{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1.5px solid var(--border);border-radius:var(--r-sm);margin-bottom:8px;cursor:pointer;transition:all .15s;font-size:14px}
+.quiz-option:hover:not(.disabled){border-color:var(--teal);background:var(--teal3)}
+.quiz-option.selected{border-color:var(--teal);background:var(--teal3)}
+.quiz-option.correct{border-color:var(--green);background:var(--green-bg)}
+.quiz-option.wrong{border-color:var(--red);background:var(--red-bg)}
+.quiz-option.disabled{cursor:default}
+.quiz-explanation{font-size:13px;color:var(--ink2);margin-top:10px;padding:10px;background:var(--cream2);border-radius:var(--r-sm);border-left:3px solid var(--teal)}
+
+/* ── Budget bar ─────────────────────────────────────────────────────── */
+.budget-bar-wrap{background:var(--cream3);border-radius:99px;height:8px;overflow:hidden;margin-top:8px}
+.budget-bar-fill{height:100%;border-radius:99px;background:var(--teal);transition:width .4s ease}
+.budget-bar-fill.warn{background:var(--amber)}
+.budget-bar-fill.danger{background:var(--red)}
+
+/* ── Empty states ────────────────────────────────────────────────────── */
+.empty{text-align:center;padding:48px 24px;color:var(--ink3)}
+.empty-icon{font-size:36px;margin-bottom:12px;opacity:.5}
+.empty h3{font-size:15px;font-weight:600;color:var(--ink2);margin-bottom:6px}
+.empty p{font-size:13.5px}
+
+/* ── Toast ───────────────────────────────────────────────────────────── */
+#toast-wrap{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:9999}
+.toast{padding:12px 16px;border-radius:var(--r-sm);font-size:13.5px;font-weight:500;box-shadow:var(--shadow-lg);animation:toast-in .2s ease;display:flex;align-items:center;gap:8px;max-width:320px}
+.toast.success{background:var(--green-bg);color:var(--green);border:1px solid #9ad4b8}
+.toast.error{background:var(--red-bg);color:var(--red);border:1px solid #e8b4b4}
+.toast.info{background:#fff;color:var(--ink);border:1px solid var(--border)}
+@keyframes toast-in{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
+
+/* ── Auth screen ─────────────────────────────────────────────────────── */
+#auth-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--cream);padding:20px}
+.auth-box{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);width:100%;max-width:400px;padding:36px 32px}
+.auth-brand{text-align:center;margin-bottom:28px}
+.auth-brand-door{display:flex;justify-content:center;margin-bottom:12px}
+.auth-brand h1{font-size:22px;font-weight:800;color:var(--ink);letter-spacing:-.4px}
+.auth-brand p{font-size:13px;color:var(--ink3);margin-top:3px}
+.auth-tabs{display:flex;border:1px solid var(--border);border-radius:var(--r-sm);margin-bottom:24px;overflow:hidden}
+.auth-tab{flex:1;padding:8px;font-size:13.5px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--ink3);transition:all .15s}
+.auth-tab.active{background:var(--teal);color:#fff}
+
+/* ── Training gate banner ────────────────────────────────────────────── */
+.training-gate{background:var(--amber-bg);border:1px solid #f0c97a;border-radius:var(--r);padding:16px 20px;margin-bottom:24px;display:flex;align-items:center;gap:14px}
+.training-gate-icon{font-size:22px;flex-shrink:0}
+.training-gate h3{font-size:14px;font-weight:700;color:#7a4e0a;margin-bottom:3px}
+.training-gate p{font-size:13px;color:#8a5a10}
+
+/* ── Upload area ─────────────────────────────────────────────────────── */
+.upload-area{border:2px dashed var(--border2);border-radius:var(--r);padding:24px;text-align:center;cursor:pointer;transition:all .15s;background:var(--cream2)}
+.upload-area:hover,.upload-area.drag{border-color:var(--teal);background:var(--teal3)}
+.upload-area p{font-size:13px;color:var(--ink3);margin-top:6px}
+
+/* ── Utilities ───────────────────────────────────────────────────────── */
+.hidden{display:none!important}
+.flex{display:flex}.flex-center{align-items:center}.gap-8{gap:8px}.gap-12{gap:12px}
+.text-sm{font-size:13px}.text-xs{font-size:11.5px}.text-muted{color:var(--ink3)}
+.text-right{text-align:right}.fw-600{font-weight:600}
+.mt-4{margin-top:4px}.mt-8{margin-top:8px}.mt-12{margin-top:12px}.mt-16{margin-top:16px}.mt-24{margin-top:24px}
+.mb-8{margin-bottom:8px}.mb-16{margin-bottom:16px}.mb-20{margin-bottom:20px}.mb-24{margin-bottom:24px}
+.w-full{width:100%}
+.divider{border:none;border-top:1px solid var(--border);margin:16px 0}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+.section-title{font-size:18px;font-weight:700;color:var(--ink);letter-spacing:-.3px;margin-bottom:4px}
+.section-sub{font-size:13.5px;color:var(--ink3);margin-bottom:20px}
+
+/* ── Receipt thumbnails ─────────────────────────────────────────────── */
+.receipt-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.receipt-thumb{width:70px;height:70px;border-radius:var(--r-sm);overflow:hidden;border:1px solid var(--border);cursor:pointer;background:var(--cream2);display:flex;align-items:center;justify-content:center}
+.receipt-thumb img{width:100%;height:100%;object-fit:cover}
+
+/* ── Approve panel ───────────────────────────────────────────────────── */
+.approve-panel{background:var(--cream2);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-top:16px}
+.approve-panel h4{font-size:13px;font-weight:700;color:var(--ink2);margin-bottom:12px}
+
+/* ── Mobile hamburger ────────────────────────────────────────────────── */
+#mobile-topbar{display:none;height:52px;background:var(--ink);align-items:center;padding:0 16px;gap:12px;position:sticky;top:0;z-index:60}
+#mobile-topbar .app-name{font-size:16px;font-weight:700;color:#fff;letter-spacing:-.3px}
+#hamburger{background:none;border:none;color:#fff;font-size:22px;cursor:pointer;padding:4px}
+#sidebar-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:80;display:none}
+#sidebar-overlay.open{display:block}
+
+@media(max-width:768px){
+  #mobile-topbar{display:flex}
+  #sidebar{position:fixed;left:-260px;top:0;height:100vh;z-index:90;transition:left .25s ease;width:240px}
+  #sidebar.open{left:0}
+  #main{margin-left:0}
+  #content{padding:16px}
+  .form-row{grid-template-columns:1fr}
+  .stat-grid{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- Auth screen -->
+<div id="auth-screen">
+  <div class="auth-box">
+    <div class="auth-brand">
+      <div class="auth-brand-door">
+        <svg width="72" height="96" viewBox="0 0 72 112" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="2" width="68" height="108" rx="3" fill="#b8b4ac"/>
+          <rect x="0" y="0" width="68" height="108" rx="3" fill="#ece8e0"/>
+          <rect x="0" y="0" width="3" height="108" rx="1" fill="#f5f2ec"/>
+          <rect x="6" y="8" width="56" height="92" rx="2" fill="none" stroke="#ccc9be" stroke-width="1"/>
+          <rect x="18" y="13" width="32" height="13" rx="2" fill="#d4c87a" stroke="#b8ac60" stroke-width="0.5"/>
+          <text x="34" y="23" text-anchor="middle" font-family="Georgia, serif" font-size="7" font-weight="700" fill="#4a3e18" letter-spacing="1.5">108</text>
+          <rect x="10" y="32" width="48" height="58" rx="2" fill="#faf8f3" stroke="#d0ccc0" stroke-width="0.8"/>
+          <rect x="13" y="35" width="42" height="52" rx="1" fill="none" stroke="#e4e0d4" stroke-width="0.5"/>
+          <text x="34" y="47" text-anchor="middle" font-family="Georgia, serif" font-size="4" fill="#aaa" letter-spacing="1">HORIZON WEST</text>
+          <text x="34" y="54" text-anchor="middle" font-family="Georgia, serif" font-size="4" fill="#aaa" letter-spacing="1">THEATER CO.</text>
+          <line x1="17" y1="58" x2="51" y2="58" stroke="#e0ddd4" stroke-width="0.6"/>
+          <text x="34" y="67" text-anchor="middle" font-family="Georgia, serif" font-size="7" font-weight="700" fill="#8a7a2a" letter-spacing="1">BLOOM</text>
+          <text x="34" y="76" text-anchor="middle" font-family="Georgia, serif" font-size="7" font-weight="700" fill="#8a7a2a" letter-spacing="1">BOOKS</text>
+          <line x1="17" y1="80" x2="51" y2="80" stroke="#e0ddd4" stroke-width="0.6"/>
+          <g transform="translate(34,88)">
+            <circle cx="0" cy="-4" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="3.8" cy="-1.2" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="2.4" cy="3.2" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="-2.4" cy="3.2" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="-3.8" cy="-1.2" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="0" cy="0" r="2" fill="#7a6a20"/>
+          </g>
+          <rect x="20" y="96" width="28" height="6" rx="1.5" fill="#c4c0b8" stroke="#aaa" stroke-width="0.4"/>
+          <rect x="21" y="97" width="26" height="4" rx="1" fill="#1a1812" opacity=".2"/>
+          <circle cx="60" cy="72" r="4" fill="#ccc8c0" stroke="#aaa" stroke-width="0.4"/>
+          <circle cx="60" cy="72" r="2.2" fill="#e0dcd4"/>
+          <circle cx="60" cy="72" r="1" fill="#aaa"/>
+        </svg>
+      </div>
+      <h1>BloomBooks</h1>
+      <p>Horizon West Theater Company</p>
+    </div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="showAuthTab('login')">Sign in</button>
+      <button class="auth-tab" onclick="showAuthTab('register')">New account</button>
+    </div>
+    <!-- Login -->
+    <div id="auth-login">
+      <div class="form-group">
+        <label class="form-label">Email address</label>
+        <input type="email" id="login-email" class="form-input" placeholder="you@example.com" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="login-password" class="form-input" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <div id="login-error" class="form-error hidden"></div>
+      <button class="btn btn-primary w-full btn-lg mt-8" onclick="doLogin()">Sign in</button>
+      <div class="text-xs text-muted mt-12" style="text-align:center">
+        Demo: volunteer@horizonwest.org / volunteer123
+      </div>
+    </div>
+    <!-- Register -->
+    <div id="auth-register" class="hidden">
+      <div class="form-group">
+        <label class="form-label">Full name</label>
+        <input type="text" id="reg-name" class="form-input" placeholder="Jane Smith">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email address</label>
+        <input type="email" id="reg-email" class="form-input" placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="reg-password" class="form-input" placeholder="Min 6 characters">
+      </div>
+      <div id="reg-error" class="form-error hidden"></div>
+      <button class="btn btn-primary w-full btn-lg mt-8" onclick="doRegister()">Create account</button>
+    </div>
+  </div>
+</div>
+
+<!-- Main app -->
+<div id="app" class="hidden">
+  <!-- Mobile topbar -->
+  <div id="mobile-topbar">
+    <button id="hamburger" onclick="toggleSidebar()">☰</button>
+    <span class="app-name">BloomBooks</span>
+  </div>
+  <div id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div class="sb-brand">
+      <div class="sb-org">
+        <div class="sb-org-dot">HW</div>
+        <div class="sb-org-name">Horizon West<br>Theater Company</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+        <svg width="32" height="42" viewBox="0 0 68 108" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+          <rect x="1" y="1" width="66" height="106" rx="3" fill="#2a2520"/>
+          <rect x="0" y="0" width="66" height="106" rx="3" fill="#ece8e0"/>
+          <rect x="0" y="0" width="3" height="106" rx="1" fill="#f5f2ec"/>
+          <rect x="6" y="8" width="54" height="90" rx="2" fill="none" stroke="#ccc9be" stroke-width="1"/>
+          <rect x="17" y="13" width="30" height="12" rx="2" fill="#d4c87a" stroke="#b8ac60" stroke-width="0.5"/>
+          <text x="32" y="22" text-anchor="middle" font-family="Georgia,serif" font-size="6.5" font-weight="700" fill="#4a3e18" letter-spacing="1">108</text>
+          <rect x="9" y="30" width="48" height="56" rx="2" fill="#faf8f3" stroke="#d0ccc0" stroke-width="0.8"/>
+          <text x="33" y="48" text-anchor="middle" font-family="Georgia,serif" font-size="6.5" font-weight="700" fill="#8a7a2a" letter-spacing="1">BLOOM</text>
+          <text x="33" y="58" text-anchor="middle" font-family="Georgia,serif" font-size="6.5" font-weight="700" fill="#8a7a2a" letter-spacing="1">BOOKS</text>
+          <g transform="translate(33,74)">
+            <circle cx="0" cy="-4" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="3.8" cy="-1.2" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="2.4" cy="3.2" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="-2.4" cy="3.2" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="-3.8" cy="-1.2" r="2" fill="#C8951A" opacity=".8"/>
+            <circle cx="0" cy="0" r="2" fill="#7a6a20"/>
+          </g>
+          <rect x="19" y="92" width="26" height="5" rx="1.5" fill="#c4c0b8" stroke="#aaa" stroke-width="0.4"/>
+          <circle cx="56" cy="68" r="3.5" fill="#ccc8c0" stroke="#aaa" stroke-width="0.4"/>
+          <circle cx="56" cy="68" r="2" fill="#e0dcd4"/>
+        </svg>
+        <div>
+          <div class="sb-app-name">BloomBooks</div>
+          <div class="sb-app-sub">Purchasing & Reimb.</div>
+        </div>
+      </div>
+    </div>
+    <div class="sb-nav">
+      <div class="sb-section">
+        <div class="sb-section-label">Overview</div>
+        <button class="sb-item active" data-page="dashboard" onclick="nav('dashboard')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M3 4a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm0 8a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4zm8-8a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V4zm0 8a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
+          Dashboard
+        </button>
+      </div>
+      <div class="sb-section">
+        <div class="sb-section-label">Purchasing</div>
+        <button class="sb-item" data-page="my-requests" onclick="nav('my-requests')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/></svg>
+          My Requests
+        </button>
+        <button class="sb-item" data-page="new-request" onclick="nav('new-request')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+          New Request
+        </button>
+        <button class="sb-item" data-page="reimbursements" onclick="nav('reimbursements')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z"/><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.941c-.391-.127-.68-.317-.843-.504a1 1 0 10-1.51 1.31c.562.649 1.413 1.076 2.353 1.253V15a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C13.398 13.766 14 12.991 14 12c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0011 9.092V7.151c.391.127.68.317.843.504a1 1 0 101.511-1.31c-.563-.649-1.413-1.076-2.354-1.253V5z" clip-rule="evenodd"/></svg>
+          Reimbursements
+          <span class="sb-badge" id="sb-reimb-badge" style="display:none">0</span>
+        </button>
+      </div>
+      <div class="sb-section" id="sb-admin-section">
+        <div class="sb-section-label">Admin</div>
+        <button class="sb-item" data-page="approvals" onclick="nav('approvals')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          Approval Queue
+          <span class="sb-badge red" id="sb-approval-badge" style="display:none">0</span>
+        </button>
+        <button class="sb-item" data-page="all-requests" onclick="nav('all-requests')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/><path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"/></svg>
+          All Requests
+        </button>
+        <button class="sb-item" data-page="budgets" onclick="nav('budgets')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11 4a1 1 0 10-2 0v4a1 1 0 102 0V7zm-3 1a1 1 0 10-2 0v3a1 1 0 102 0V8zM8 9a1 1 0 00-2 0v2a1 1 0 102 0V9z" clip-rule="evenodd"/></svg>
+          Budgets
+        </button>
+        <button class="sb-item" data-page="users" onclick="nav('users')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/></svg>
+          Volunteers
+        </button>
+      </div>
+      <div class="sb-section">
+        <div class="sb-section-label">Training</div>
+        <button class="sb-item" data-page="training" onclick="nav('training')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838L7.667 9.088l1.94.831a1 1 0 00.787 0l7-3a1 1 0 000-1.838l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0zM6 18a1 1 0 001-1v-2.065a8.935 8.935 0 00-2-.712V17a1 1 0 001 1z"/></svg>
+          Training
+          <span id="sb-training-badge" class="sb-badge" style="display:none;background:var(--teal)">!</span>
+        </button>
+        <button class="sb-item" id="sb-training-admin" data-page="training-admin" onclick="nav('training-admin')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
+          Manage Training
+        </button>
+      </div>
+    </div>
+    <div class="sb-footer">
+      <div class="sb-user">
+        <div class="sb-user-av" id="sb-av">?</div>
+        <div>
+          <div class="sb-user-name" id="sb-name">—</div>
+          <div class="sb-user-role" id="sb-role">—</div>
+        </div>
+        <button class="sb-logout" onclick="doLogout()" title="Sign out">✕</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <div id="main">
+    <div id="topbar">
+      <div class="tb-title" id="tb-title">Dashboard</div>
+      <div class="tb-actions" id="tb-actions"></div>
+    </div>
+    <div id="content">
+      <!-- Pages injected here -->
+    </div>
+  </div>
+</div>
+
+<div id="toast-wrap"></div>
+
+<!-- Receipt lightbox -->
+<div id="lightbox" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:2000;display:flex;align-items:center;justify-content:center" onclick="this.classList.add('hidden')">
+  <img id="lightbox-img" style="max-width:90vw;max-height:90vh;border-radius:8px">
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let currentUser = null;
+let currentPage = 'dashboard';
+let allBudgets  = [];
+let pendingCounts = {treasurer: 0, president: 0, reimb: 0};
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function api(method, path, body, isFile) {
+  const opts = {method, credentials:'include'};
+  if (body && !isFile) {
+    opts.headers = {'Content-Type':'application/json'};
+    opts.body = JSON.stringify(body);
+  } else if (isFile) {
+    opts.body = body;
+  }
+  const r = await fetch('/api' + path, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const d = await api('GET', '/auth/me');
+    if (d.user) {
+      currentUser = d.user;
+      showApp();
+    }
+  } catch(e) {}
+}
+
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.classList.add('hidden');
+  try {
+    const d = await api('POST', '/auth/login', {email, password});
+    currentUser = d.user;
+    showApp();
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+async function doRegister() {
+  const name = document.getElementById('reg-name').value.trim();
+  const email = document.getElementById('reg-email').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const errEl = document.getElementById('reg-error');
+  errEl.classList.add('hidden');
+  if (password.length < 6) {
+    errEl.textContent = 'Password must be at least 6 characters';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  try {
+    const d = await api('POST', '/auth/register', {name, email, password});
+    currentUser = d.user;
+    showApp();
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+async function doLogout() {
+  await api('POST', '/auth/logout');
+  currentUser = null;
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('auth-screen').style.display = 'flex';
+}
+
+function showAuthTab(tab) {
+  document.getElementById('auth-login').classList.toggle('hidden', tab !== 'login');
+  document.getElementById('auth-register').classList.toggle('hidden', tab !== 'register');
+  document.querySelectorAll('.auth-tab').forEach((t,i) => t.classList.toggle('active', (i===0&&tab==='login')||(i===1&&tab==='register')));
+}
+
+// ── App init ──────────────────────────────────────────────────────────────────
+function showApp() {
+  document.getElementById('auth-screen').style.display = 'none';
+  document.getElementById('app').classList.remove('hidden');
+  // sidebar user info
+  document.getElementById('sb-av').textContent = currentUser.name.charAt(0).toUpperCase();
+  document.getElementById('sb-name').textContent = currentUser.name;
+  document.getElementById('sb-role').textContent = currentUser.role;
+  // show/hide admin section
+  const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
+  document.getElementById('sb-admin-section').style.display = isAdmin ? '' : 'none';
+  document.getElementById('sb-training-admin').style.display = currentUser.role === 'admin' ? '' : 'none';
+  loadBudgets();
+  refreshBadges();
+  nav('dashboard');
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function nav(page) {
+  currentPage = page;
+  closeSidebar();
+  document.querySelectorAll('.sb-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
+  const titles = {
+    dashboard: 'Dashboard', 'my-requests': 'My Requests', 'new-request': 'New Purchase Request',
+    reimbursements: 'Reimbursements', approvals: 'Approval Queue', 'all-requests': 'All Requests',
+    budgets: 'Budget Tracker', users: 'Volunteers', training: 'Purchasing Training',
+    'training-admin': 'Manage Training'
+  };
+  document.getElementById('tb-title').textContent = titles[page] || page;
+  document.getElementById('tb-actions').innerHTML = '';
+  const content = document.getElementById('content');
+  content.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div><p>Loading...</p></div>';
+  const pages = {
+    'dashboard': renderDashboard, 'my-requests': renderMyRequests,
+    'new-request': renderNewRequest, 'reimbursements': renderReimbursements,
+    'approvals': renderApprovals, 'all-requests': renderAllRequests,
+    'budgets': renderBudgets, 'users': renderUsers,
+    'training': renderTraining, 'training-admin': renderTrainingAdmin
+  };
+  if (pages[page]) pages[page]();
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
+// ── Badges ─────────────────────────────────────────────────────────────────
+async function refreshBadges() {
+  try {
+    const s = await api('GET', '/stats');
+    const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
+    if (isAdmin) {
+      const total = (s.pending_treasurer||0) + (s.pending_president||0);
+      const apBadge = document.getElementById('sb-approval-badge');
+      apBadge.textContent = total;
+      apBadge.style.display = total > 0 ? '' : 'none';
+      const reBadge = document.getElementById('sb-reimb-badge');
+      reBadge.textContent = s.pending_reimburse || 0;
+      reBadge.style.display = (s.pending_reimburse||0) > 0 ? '' : 'none';
+    }
+    if (!currentUser.training_complete) {
+      document.getElementById('sb-training-badge').style.display = '';
+    }
+  } catch(e) {}
+}
+
+async function loadBudgets() {
+  try {
+    allBudgets = await api('GET', '/budgets');
+  } catch(e) {}
+}
+
+// ── Status helpers ──────────────────────────────────────────────────────────
+function statusBadge(status, isEmergency) {
+  const map = {
+    pending_treasurer: ['badge-pending', 'Awaiting treasurer'],
+    pending_president: ['badge-president', 'Awaiting president'],
+    approved:          ['badge-approved', 'Approved'],
+    denied:            ['badge-denied', 'Denied'],
+    reimbursed:        ['badge-reimbursed', 'Reimbursed']
+  };
+  const [cls, label] = map[status] || ['badge-pending', status];
+  const emerg = isEmergency ? '<span class="badge badge-emergency ml-4">Emergency</span>' : '';
+  return `<span class="badge ${cls}"><span class="badge-dot"></span>${label}</span>${emerg}`;
+}
+
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+}
+
+function fmtMoney(n) {
+  return '$' + (parseFloat(n)||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// ── Dashboard ──────────────────────────────────────────────────────────────
+async function renderDashboard() {
+  const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
+  try {
+    const stats = await api('GET', '/stats');
+    const reqs = await api('GET', '/requests?mine=1');
+    const recent = reqs.slice(0, 5);
+
+    let statsHtml = '';
+    if (isAdmin) {
+      statsHtml = `
+        <div class="stat-grid">
+          <div class="stat-card amber"><div class="stat-label">Awaiting treasurer</div><div class="stat-value">${stats.pending_treasurer}</div></div>
+          <div class="stat-card"><div class="stat-label">Awaiting president</div><div class="stat-value">${stats.pending_president}</div></div>
+          <div class="stat-card teal"><div class="stat-label">Pending reimbursement</div><div class="stat-value">${stats.pending_reimburse}</div></div>
+          <div class="stat-card"><div class="stat-label">Total requests</div><div class="stat-value">${stats.total_requests}</div></div>
+          <div class="stat-card green"><div class="stat-label">Total approved spend</div><div class="stat-value">${fmtMoney(stats.total_spent)}</div></div>
+          <div class="stat-card"><div class="stat-label">Emergency purchases</div><div class="stat-value">${stats.emergency_count}</div></div>
+        </div>`;
+    } else {
+      statsHtml = `
+        <div class="stat-grid">
+          <div class="stat-card"><div class="stat-label">My requests</div><div class="stat-value">${stats.my_requests}</div></div>
+          <div class="stat-card green"><div class="stat-label">Approved</div><div class="stat-value">${stats.my_approved}</div></div>
+          <div class="stat-card amber"><div class="stat-label">Pending</div><div class="stat-value">${stats.my_pending}</div></div>
+          <div class="stat-card teal"><div class="stat-label">I'm owed</div><div class="stat-value">${fmtMoney(stats.my_owed)}</div></div>
+        </div>`;
+    }
+
+    const trainingGate = !currentUser.training_complete && currentUser.role === 'volunteer' ? `
+      <div class="training-gate mb-24">
+        <div class="training-gate-icon">📋</div>
+        <div>
+          <h3>Complete your purchasing training</h3>
+          <p>You need to complete the HWTC purchasing training before submitting purchase requests.</p>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="nav('training')" style="margin-left:auto;flex-shrink:0">Start training →</button>
+      </div>` : '';
+
+    const recentHtml = recent.length === 0 ?
+      `<div class="empty"><div class="empty-icon">📄</div><h3>No requests yet</h3><p>Submit your first purchase request to get started.</p></div>` :
+      `<div class="table-wrap"><table>
+        <thead><tr><th>Title</th><th>Amount</th><th>Budget</th><th>Submitted</th><th>Status</th></tr></thead>
+        <tbody>${recent.map(r => `
+          <tr style="cursor:pointer" onclick="showRequestDetail(${r.id})">
+            <td><div class="fw-600">${r.title}</div><div class="text-xs text-muted">${r.vendor||''}</div></td>
+            <td>${fmtMoney(r.estimated_cost)}</td>
+            <td class="td-muted">${r.budget_name||'—'}</td>
+            <td class="td-muted">${fmtDate(r.submitted_at)}</td>
+            <td>${statusBadge(r.status, r.is_emergency)}</td>
+          </tr>`).join('')}
+        </tbody></table></div>`;
+
+    let budgetHtml = '';
+    if (isAdmin && allBudgets.length > 0) {
+      const active = allBudgets.filter(b => b.is_active).slice(0,4);
+      budgetHtml = `
+        <div class="card mt-24">
+          <div class="card-header"><span class="card-title">Budget overview</span><button class="btn btn-outline btn-sm" onclick="nav('budgets')">View all</button></div>
+          <div class="card-body">
+            ${active.map(b => {
+              const pct = b.total_amount > 0 ? Math.min(100, (b.spent/b.total_amount)*100) : 0;
+              const cls = pct>90?'danger':pct>70?'warn':'';
+              return `<div class="mb-16">
+                <div class="flex flex-center gap-8 mb-4">
+                  <span class="fw-600 text-sm">${b.name}</span>
+                  <span class="text-xs text-muted" style="margin-left:auto">${fmtMoney(b.spent)} / ${fmtMoney(b.total_amount)}</span>
+                </div>
+                <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div></div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+    }
+
+    document.getElementById('content').innerHTML = `
+      ${trainingGate}
+      <div class="section-title">Welcome back, ${currentUser.name.split(' ')[0]}</div>
+      <div class="section-sub">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</div>
+      ${statsHtml}
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Recent requests</span>
+          <button class="btn btn-outline btn-sm" onclick="nav('my-requests')">View all</button>
+        </div>
+        <div class="card-body" style="padding:0">${recentHtml}</div>
+      </div>
+      ${budgetHtml}`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>Error loading dashboard: ${e.message}</p></div>`;
+  }
+}
+
+// ── My Requests ───────────────────────────────────────────────────────────────
+async function renderMyRequests() {
+  document.getElementById('tb-actions').innerHTML = `<button class="btn btn-primary btn-sm" onclick="nav('new-request')">+ New request</button>`;
+  try {
+    const reqs = await api('GET', '/requests?mine=1');
+    if (reqs.length === 0) {
+      document.getElementById('content').innerHTML = `
+        <div class="empty"><div class="empty-icon">📄</div><h3>No requests yet</h3>
+        <p>Submit your first purchase request to get started.</p>
+        <button class="btn btn-primary mt-16" onclick="nav('new-request')">Submit a request</button></div>`;
+      return;
+    }
+    document.getElementById('content').innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Amount</th><th>Budget</th><th>Type</th><th>Submitted</th><th>Status</th><th></th></tr></thead>
+          <tbody>${reqs.map(r => `
+            <tr>
+              <td><div class="fw-600">${r.title}</div><div class="text-xs text-muted">${r.vendor||''}</div></td>
+              <td>${fmtMoney(r.estimated_cost)}</td>
+              <td class="td-muted">${r.budget_name||'—'}</td>
+              <td>${r.is_emergency ? '<span class="badge badge-emergency">Emergency</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
+              <td class="td-muted">${fmtDate(r.submitted_at)}</td>
+              <td>${statusBadge(r.status, false)}</td>
+              <td><button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">View</button></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+// ── New Request ────────────────────────────────────────────────────────────────
+async function renderNewRequest() {
+  if (!currentUser.training_complete && currentUser.role === 'volunteer') {
+    document.getElementById('content').innerHTML = `
+      <div class="training-gate">
+        <div class="training-gate-icon">📋</div>
+        <div>
+          <h3>Training required before submitting requests</h3>
+          <p>Please complete the HWTC purchasing training first.</p>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="nav('training')">Go to training →</button>`;
+    return;
+  }
+  const budgetOpts = allBudgets.filter(b=>b.is_active).map(b =>
+    `<option value="${b.id}">${b.name} — ${b.area} (${fmtMoney(b.total_amount - b.spent)} remaining)</option>`).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div style="max-width:640px">
+      <div class="card mb-20">
+        <div class="card-header"><span class="card-title">Request type</span></div>
+        <div class="card-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <label style="display:block;cursor:pointer">
+              <input type="radio" name="req-type" value="pre" checked onchange="toggleEmergency(false)" style="display:none">
+              <div id="type-pre" style="border:2px solid var(--teal);border-radius:var(--r);padding:14px;background:var(--teal3)">
+                <div class="fw-600 text-sm">Pre-approval request</div>
+                <div class="text-xs text-muted mt-4">Submit before buying. Wait for approval.</div>
+              </div>
+            </label>
+            <label style="display:block;cursor:pointer">
+              <input type="radio" name="req-type" value="emergency" onchange="toggleEmergency(true)" style="display:none">
+              <div id="type-emerg" style="border:2px solid var(--border);border-radius:var(--r);padding:14px">
+                <div class="fw-600 text-sm">Emergency purchase</div>
+                <div class="text-xs text-muted mt-4">Already bought — thrift store, time-sensitive.</div>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Purchase details</span></div>
+        <div class="card-body">
+          <div class="form-group">
+            <label class="form-label">Item / purpose <span class="req">*</span></label>
+            <input type="text" id="req-title" class="form-input" placeholder="e.g. Paint brushes for set construction">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Estimated cost <span class="req">*</span></label>
+              <input type="number" id="req-cost" class="form-input" placeholder="0.00" min="0" step="0.01">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Vendor / store</label>
+              <input type="text" id="req-vendor" class="form-input" placeholder="e.g. Home Depot, Amazon">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Budget area <span class="req">*</span></label>
+            <select id="req-budget" class="form-select"><option value="">Select a budget...</option>${budgetOpts}</select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Description / notes</label>
+            <textarea id="req-desc" class="form-textarea" placeholder="Why is this needed? Any additional context..."></textarea>
+          </div>
+          <div id="emergency-field" class="form-group hidden">
+            <label class="form-label">Why was this an emergency purchase? <span class="req">*</span></label>
+            <textarea id="req-emergency-reason" class="form-textarea" placeholder="Explain why this could not wait for pre-approval..."></textarea>
+          </div>
+          <div id="emergency-upload" class="hidden">
+            <label class="form-label">Receipt (required for emergency purchases)</label>
+            <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()" id="upload-drop">
+              <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto;opacity:.5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              <p>Click to upload receipt photo or PDF</p>
+            </div>
+            <input type="file" id="receipt-file-new" accept="image/*,application/pdf" class="hidden" onchange="handleNewFileSelect(this)">
+            <div id="receipt-preview-new" class="mt-8"></div>
+          </div>
+          <div id="req-error" class="form-error hidden mt-8"></div>
+          <div class="flex gap-8 mt-16">
+            <button class="btn btn-primary" onclick="submitRequest()">Submit request</button>
+            <button class="btn btn-outline" onclick="nav('my-requests')">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+let newReceiptFile = null;
+function handleNewFileSelect(input) {
+  newReceiptFile = input.files[0];
+  if (!newReceiptFile) return;
+  const prev = document.getElementById('receipt-preview-new');
+  prev.innerHTML = `<div class="flex flex-center gap-8 mt-8"><span class="badge badge-approved">✓ ${newReceiptFile.name}</span></div>`;
+}
+
+function toggleEmergency(isEmergency) {
+  document.getElementById('emergency-field').classList.toggle('hidden', !isEmergency);
+  document.getElementById('emergency-upload').classList.toggle('hidden', !isEmergency);
+  document.getElementById('type-pre').style.border = isEmergency ? '2px solid var(--border)' : '2px solid var(--teal)';
+  document.getElementById('type-pre').style.background = isEmergency ? '' : 'var(--teal3)';
+  document.getElementById('type-emerg').style.border = isEmergency ? '2px solid var(--amber)' : '2px solid var(--border)';
+  document.getElementById('type-emerg').style.background = isEmergency ? 'var(--amber-bg)' : '';
+}
+
+async function submitRequest() {
+  const title = document.getElementById('req-title').value.trim();
+  const cost  = document.getElementById('req-cost').value;
+  const budget = document.getElementById('req-budget').value;
+  const desc  = document.getElementById('req-desc').value.trim();
+  const vendor = document.getElementById('req-vendor').value.trim();
+  const isEmergency = document.querySelector('input[name="req-type"]:checked').value === 'emergency';
+  const emergencyReason = document.getElementById('req-emergency-reason').value.trim();
+  const errEl = document.getElementById('req-error');
+  errEl.classList.add('hidden');
+
+  if (!title || !cost || !budget) {
+    errEl.textContent = 'Please fill in all required fields.'; errEl.classList.remove('hidden'); return;
+  }
+  if (isEmergency && !emergencyReason) {
+    errEl.textContent = 'Please explain why this was an emergency purchase.'; errEl.classList.remove('hidden'); return;
+  }
+
+  try {
+    const d = await api('POST', '/requests', {title, description:desc, vendor, estimated_cost:parseFloat(cost), budget_id:parseInt(budget), is_emergency:isEmergency, emergency_reason:emergencyReason});
+    // upload receipt if emergency
+    if (isEmergency && newReceiptFile) {
+      const fd = new FormData();
+      fd.append('file', newReceiptFile);
+      await api('POST', `/requests/${d.id}/receipts`, fd, true);
+    }
+    toast('Request submitted! You\'ll hear back by email.', 'success');
+    newReceiptFile = null;
+    nav('my-requests');
+    refreshBadges();
+  } catch(e) {
+    errEl.textContent = e.message; errEl.classList.remove('hidden');
+  }
+}
+
+// ── Request Detail Modal ───────────────────────────────────────────────────────
+async function showRequestDetail(rid) {
+  const reqs = await api('GET', '/requests');
+  const r = reqs.find(x => x.id === rid) || (await api('GET', `/requests?mine=1`)).find(x => x.id === rid);
+  if (!r) return;
+
+  const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
+  const canApprove = isAdmin && (r.status === 'pending_treasurer' || r.status === 'pending_president');
+  const canApproveNow = (currentUser.role === 'treasurer' || currentUser.role === 'admin') && r.status === 'pending_treasurer'
+    || (currentUser.role === 'president' || currentUser.role === 'admin') && r.status === 'pending_president';
+
+  const receiptsHtml = r.receipts && r.receipts.length > 0 ?
+    `<div class="receipt-grid">${r.receipts.map(rc => `
+      <div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')">
+        <img src="${rc.image_url}" alt="Receipt" loading="lazy">
+      </div>`).join('')}</div>` :
+    `<span class="text-xs text-muted">No receipts uploaded</span>`;
+
+  const uploadHtml = (r.status !== 'denied') ? `
+    <div class="mt-16">
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('receipt-upload-modal').click()">+ Add receipt</button>
+      <input type="file" id="receipt-upload-modal" accept="image/*,application/pdf" class="hidden" onchange="uploadReceiptForRequest(${r.id}, this)">
+    </div>` : '';
+
+  const approvalHtml = canApproveNow ? `
+    <div class="approve-panel">
+      <h4>${r.status === 'pending_treasurer' ? 'Treasurer review' : 'President sign-off'}</h4>
+      ${r.status === 'pending_president' ? `
+        <div class="form-group">
+          <label class="form-label">Confirm actual cost</label>
+          <input type="number" id="actual-cost" class="form-input" value="${r.actual_cost || r.estimated_cost}" step="0.01">
+        </div>` : ''}
+      <div class="form-group">
+        <label class="form-label">Note (optional)</label>
+        <textarea id="approval-note" class="form-textarea" style="min-height:60px" placeholder="Add a comment for the volunteer..."></textarea>
+      </div>
+      <div class="flex gap-8">
+        <button class="btn btn-approve" onclick="doApprove(${r.id}, 'approve')">✓ Approve</button>
+        <button class="btn btn-danger" onclick="doApprove(${r.id}, 'deny')">✕ Deny</button>
+      </div>
+    </div>` : '';
+
+  const html = `
+    <div class="modal-header">
+      <span class="modal-title">${r.title}</span>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="flex gap-8 mb-16 flex-wrap">${statusBadge(r.status, r.is_emergency)}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        <div><div class="text-xs text-muted">Submitted by</div><div class="fw-600 text-sm mt-4">${r.submitter_name}</div></div>
+        <div><div class="text-xs text-muted">Date</div><div class="fw-600 text-sm mt-4">${fmtDate(r.submitted_at)}</div></div>
+        <div><div class="text-xs text-muted">Estimated cost</div><div class="fw-600 text-sm mt-4">${fmtMoney(r.estimated_cost)}</div></div>
+        <div><div class="text-xs text-muted">Vendor</div><div class="fw-600 text-sm mt-4">${r.vendor||'—'}</div></div>
+        <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div></div>
+        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.is_emergency ? 'Emergency' : 'Pre-approval'}</div></div>
+      </div>
+      ${r.description ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Description</div><div class="text-sm">${r.description}</div></div>` : ''}
+      ${r.emergency_reason ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Emergency reason</div><div class="text-sm" style="color:var(--amber)">${r.emergency_reason}</div></div>` : ''}
+      ${r.treasurer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Treasurer note</div><div class="text-sm">${r.treasurer_note}</div></div>` : ''}
+      ${r.president_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">President note</div><div class="text-sm">${r.president_note}</div></div>` : ''}
+      <hr class="divider">
+      <div class="text-xs text-muted mb-8">Receipts</div>
+      ${receiptsHtml}
+      ${uploadHtml}
+      ${approvalHtml}
+    </div>`;
+
+  showModal(html, 'large');
+}
+
+async function uploadReceiptForRequest(rid, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    await api('POST', `/requests/${rid}/receipts`, fd, true);
+    toast('Receipt uploaded!', 'success');
+    closeModal();
+    refreshBadges();
+  } catch(e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function doApprove(rid, action) {
+  const note = document.getElementById('approval-note')?.value || '';
+  const actualCostEl = document.getElementById('actual-cost');
+  const actual_cost = actualCostEl ? parseFloat(actualCostEl.value) : undefined;
+  try {
+    const d = await api('POST', `/requests/${rid}/approve`, {action, note, actual_cost});
+    toast(action === 'approve' ? 'Request approved!' : 'Request denied.', action === 'approve' ? 'success' : 'info');
+    closeModal();
+    refreshBadges();
+    if (currentPage === 'approvals') renderApprovals();
+    else if (currentPage === 'all-requests') renderAllRequests();
+  } catch(e) {
+    toast(e.message, 'error');
+  }
+}
+
+// ── Approvals Queue ──────────────────────────────────────────────────────────
+async function renderApprovals() {
+  try {
+    const all = await api('GET', '/requests');
+    const queue = all.filter(r => r.status === 'pending_treasurer' || r.status === 'pending_president');
+    const myQueue = queue.filter(r => {
+      if (currentUser.role === 'treasurer') return r.status === 'pending_treasurer';
+      if (currentUser.role === 'president') return r.status === 'pending_president';
+      return true; // admin sees all
+    });
+
+    if (myQueue.length === 0) {
+      document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-icon">✓</div><h3>All clear!</h3><p>No requests awaiting approval.</p></div>`;
+      return;
+    }
+
+    document.getElementById('content').innerHTML = `
+      <div class="section-sub">${myQueue.length} request${myQueue.length!==1?'s':''} awaiting action</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        ${myQueue.map(r => {
+          const canAct = (currentUser.role==='treasurer'||currentUser.role==='admin') && r.status==='pending_treasurer'
+            || (currentUser.role==='president'||currentUser.role==='admin') && r.status==='pending_president';
+          const budget_pct = r.budget_total > 0 ? Math.min(100, ((r.budget_spent + r.estimated_cost)/r.budget_total)*100) : 0;
+          return `<div class="card">
+            <div class="card-body">
+              <div class="flex flex-center gap-8 mb-12">
+                ${statusBadge(r.status, r.is_emergency)}
+                <span class="text-xs text-muted" style="margin-left:auto">${fmtDate(r.submitted_at)}</span>
+              </div>
+              <div class="flex flex-center gap-12 mb-8">
+                <div>
+                  <div class="fw-600">${r.title}</div>
+                  <div class="text-xs text-muted">${r.submitter_name} · ${r.vendor||'No vendor specified'}</div>
+                </div>
+                <div style="margin-left:auto;text-align:right">
+                  <div class="fw-600" style="font-size:18px">${fmtMoney(r.estimated_cost)}</div>
+                  <div class="text-xs text-muted">${r.budget_name||''}</div>
+                </div>
+              </div>
+              ${r.description ? `<div class="text-sm text-muted mb-8">${r.description}</div>` : ''}
+              ${r.emergency_reason ? `<div class="text-sm mb-8" style="color:var(--amber);background:var(--amber-bg);padding:8px 10px;border-radius:var(--r-sm)">Emergency: ${r.emergency_reason}</div>` : ''}
+              <div class="mb-8">
+                <div class="flex flex-center gap-8">
+                  <span class="text-xs text-muted">Budget usage after approval</span>
+                  <span class="text-xs text-muted" style="margin-left:auto">${fmtMoney(r.budget_spent+r.estimated_cost)} / ${fmtMoney(r.budget_total)}</span>
+                </div>
+                <div class="budget-bar-wrap mt-4"><div class="budget-bar-fill ${budget_pct>90?'danger':budget_pct>70?'warn':''}" style="width:${budget_pct}%"></div></div>
+              </div>
+              ${r.receipts && r.receipts.length > 0 ? `<div class="receipt-grid mb-8">${r.receipts.map(rc=>`<div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" loading="lazy"></div>`).join('')}</div>` : ''}
+              ${canAct ? `
+                <div class="approve-panel mt-8">
+                  ${r.status==='pending_president' ? `<div class="form-group"><label class="form-label">Confirm actual cost</label><input type="number" id="act-${r.id}" class="form-input" value="${r.actual_cost||r.estimated_cost}" step="0.01"></div>` : ''}
+                  <div class="form-group"><label class="form-label">Note for volunteer (optional)</label><textarea id="note-${r.id}" class="form-textarea" style="min-height:56px"></textarea></div>
+                  <div class="flex gap-8">
+                    <button class="btn btn-approve" onclick="quickApprove(${r.id},'approve','${r.status}')">✓ Approve</button>
+                    <button class="btn btn-danger" onclick="quickApprove(${r.id},'deny','${r.status}')">✕ Deny</button>
+                    <button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">Full detail</button>
+                  </div>
+                </div>` : `<button class="btn btn-outline btn-sm mt-8" onclick="showRequestDetail(${r.id})">View detail</button>`}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+async function quickApprove(rid, action, status) {
+  const note = document.getElementById(`note-${rid}`)?.value || '';
+  const actEl = document.getElementById(`act-${rid}`);
+  const actual_cost = actEl ? parseFloat(actEl.value) : undefined;
+  try {
+    await api('POST', `/requests/${rid}/approve`, {action, note, actual_cost});
+    toast(action === 'approve' ? 'Approved!' : 'Denied.', action === 'approve' ? 'success' : 'info');
+    refreshBadges();
+    renderApprovals();
+  } catch(e) {
+    toast(e.message, 'error');
+  }
+}
+
+// ── All Requests ──────────────────────────────────────────────────────────────
+async function renderAllRequests() {
+  try {
+    const reqs = await api('GET', '/requests');
+    const statusFilter = document.getElementById('all-req-filter')?.value || '';
+    const filtered = statusFilter ? reqs.filter(r => r.status === statusFilter) : reqs;
+
+    document.getElementById('content').innerHTML = `
+      <div class="flex flex-center gap-12 mb-16">
+        <select id="all-req-filter" class="form-select" style="width:200px" onchange="renderAllRequests()">
+          <option value="">All statuses</option>
+          <option value="pending_treasurer">Awaiting treasurer</option>
+          <option value="pending_president">Awaiting president</option>
+          <option value="approved">Approved</option>
+          <option value="denied">Denied</option>
+          <option value="reimbursed">Reimbursed</option>
+        </select>
+        <span class="text-sm text-muted">${filtered.length} request${filtered.length!==1?'s':''}</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Submitted by</th><th>Amount</th><th>Budget</th><th>Type</th><th>Date</th><th>Status</th><th></th></tr></thead>
+          <tbody>${filtered.length === 0 ? `<tr><td colspan="8" style="text-align:center;color:var(--ink3);padding:32px">No requests found</td></tr>` :
+            filtered.map(r => `
+              <tr>
+                <td><div class="fw-600">${r.title}</div><div class="text-xs text-muted">${r.vendor||''}</div></td>
+                <td class="td-muted">${r.submitter_name}</td>
+                <td>${fmtMoney(r.estimated_cost)}</td>
+                <td class="td-muted">${r.budget_name||'—'}</td>
+                <td>${r.is_emergency ? '<span class="badge badge-emergency">Emergency</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
+                <td class="td-muted">${fmtDate(r.submitted_at)}</td>
+                <td>${statusBadge(r.status, false)}</td>
+                <td><button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">View</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    if (statusFilter) document.getElementById('all-req-filter').value = statusFilter;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+// ── Reimbursements ──────────────────────────────────────────────────────────
+async function renderReimbursements() {
+  const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
+  try {
+    const reimbs = await api('GET', '/reimbursements');
+    const pending = reimbs.filter(r => r.status === 'pending');
+    const paid    = reimbs.filter(r => r.status === 'paid');
+    const totalOwed = pending.reduce((s,r) => s + r.amount, 0);
+
+    document.getElementById('content').innerHTML = `
+      ${isAdmin ? `
+        <div class="stat-grid mb-20">
+          <div class="stat-card amber"><div class="stat-label">Pending reimbursements</div><div class="stat-value">${pending.length}</div></div>
+          <div class="stat-card red"><div class="stat-label">Total owed to volunteers</div><div class="stat-value">${fmtMoney(totalOwed)}</div></div>
+          <div class="stat-card green"><div class="stat-label">Paid out</div><div class="stat-value">${paid.length}</div></div>
+        </div>` : ''}
+      ${pending.length > 0 ? `
+        <div class="fw-600 mb-12" style="font-size:15px">Pending payment</div>
+        <div class="table-wrap mb-24">
+          <table>
+            <thead><tr><th>Volunteer</th><th>Item</th><th>Amount</th><th>Approved</th>${isAdmin ? '<th>Action</th>' : ''}</tr></thead>
+            <tbody>${pending.map(r => `
+              <tr>
+                <td><div class="fw-600">${r.user_name}</div><div class="text-xs text-muted">${r.user_email}</div></td>
+                <td>${r.title}${r.is_emergency ? ' <span class="badge badge-emergency" style="font-size:10px">Emergency</span>':''}</td>
+                <td class="fw-600">${fmtMoney(r.amount)}</td>
+                <td class="td-muted">${fmtDate(r.created_at)}</td>
+                ${isAdmin ? `<td><button class="btn btn-approve btn-sm" onclick="showPayModal(${r.id}, '${r.user_name}', ${r.amount})">Mark paid</button></td>` : ''}
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>` : `<div class="empty"><div class="empty-icon">✓</div><h3>No pending reimbursements</h3><p>${isAdmin ? 'All volunteers have been paid.' : 'You have no pending reimbursements.'}</p></div>`}
+      ${paid.length > 0 ? `
+        <div class="fw-600 mb-12" style="font-size:15px;color:var(--ink3)">Payment history</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Volunteer</th><th>Item</th><th>Amount</th><th>Method</th><th>Paid on</th></tr></thead>
+            <tbody>${paid.map(r => `
+              <tr>
+                <td>${r.user_name}</td>
+                <td class="td-muted">${r.title}</td>
+                <td>${fmtMoney(r.amount)}</td>
+                <td class="td-muted">${r.method||'—'}</td>
+                <td class="td-muted">${fmtDate(r.paid_at)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>` : ''}`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+function showPayModal(rid, name, amount) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Mark reimbursement paid</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm mb-16">Confirm payment of <strong>${fmtMoney(amount)}</strong> to <strong>${name}</strong></p>
+      <div class="form-group">
+        <label class="form-label">Payment method</label>
+        <input type="text" id="pay-method" class="form-input" placeholder="e.g. Check #1042, Venmo, Zelle, Cash">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Notes (optional)</label>
+        <textarea id="pay-notes" class="form-textarea" style="min-height:60px"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmPay(${rid})">Confirm payment</button>
+    </div>`;
+  showModal(html);
+}
+
+async function confirmPay(rid) {
+  const method = document.getElementById('pay-method').value;
+  const notes  = document.getElementById('pay-notes').value;
+  try {
+    await api('POST', `/reimbursements/${rid}/pay`, {method, notes});
+    toast('Payment recorded!', 'success');
+    closeModal();
+    refreshBadges();
+    renderReimbursements();
+  } catch(e) {
+    toast(e.message, 'error');
+  }
+}
+
+// ── Budgets ───────────────────────────────────────────────────────────────────
+async function renderBudgets() {
+  const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
+  if (isAdmin) {
+    document.getElementById('tb-actions').innerHTML = `<button class="btn btn-primary btn-sm" onclick="showBudgetModal()">+ New budget</button>`;
+  }
+  try {
+    const budgets = await api('GET', '/budgets');
+    const active = budgets.filter(b => b.is_active);
+    const inactive = budgets.filter(b => !b.is_active);
+
+    const budgetCard = (b) => {
+      const pct = b.total_amount > 0 ? Math.min(100, (b.spent/b.total_amount)*100) : 0;
+      const remaining = b.total_amount - b.spent;
+      const cls = pct>90?'danger':pct>70?'warn':'';
+      return `<div class="card mb-12">
+        <div class="card-body">
+          <div class="flex flex-center mb-4">
+            <div>
+              <div class="fw-600">${b.name}</div>
+              <div class="text-xs text-muted">${b.area} · ${b.season}</div>
+            </div>
+            <div style="margin-left:auto;text-align:right">
+              <div class="fw-600" style="font-size:18px;color:${remaining<0?'var(--red)':'var(--ink)'}">${fmtMoney(remaining)}</div>
+              <div class="text-xs text-muted">remaining</div>
+            </div>
+          </div>
+          <div class="flex flex-center gap-8 text-xs text-muted mb-4">
+            <span>Spent: ${fmtMoney(b.spent)}</span>
+            <span>·</span>
+            <span>Total: ${fmtMoney(b.total_amount)}</span>
+            <span style="margin-left:auto">${Math.round(pct)}%</span>
+          </div>
+          <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div></div>
+          ${isAdmin ? `<div class="mt-12 flex gap-8"><button class="btn btn-outline btn-sm" onclick="showBudgetModal(${b.id},'${b.name}','${b.area}','${b.season}',${b.total_amount})">Edit</button>${b.is_active ? `<button class="btn btn-outline btn-sm" onclick="archiveBudget(${b.id})">Archive</button>` : `<button class="btn btn-outline btn-sm" onclick="restoreBudget(${b.id})">Restore</button>`}</div>` : ''}
+        </div>
+      </div>`;
+    };
+
+    document.getElementById('content').innerHTML = `
+      <div class="section-sub">Track spend across shows and org areas</div>
+      ${active.length === 0 ? `<div class="empty"><div class="empty-icon">💰</div><h3>No active budgets</h3>${isAdmin?'<button class="btn btn-primary mt-16" onclick="showBudgetModal()">Create first budget</button>':''}</div>` : active.map(budgetCard).join('')}
+      ${inactive.length > 0 ? `<div class="fw-600 mt-24 mb-12 text-muted text-sm">Archived</div>${inactive.map(budgetCard).join('')}` : ''}`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+function showBudgetModal(id,name='',area='',season='',total=0) {
+  const isEdit = !!id;
+  const html = `
+    <div class="modal-header"><span class="modal-title">${isEdit?'Edit':'New'} budget</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Budget name <span class="req">*</span></label><input type="text" id="b-name" class="form-input" value="${name}" placeholder="e.g. Spring Musical 2025"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Area / department</label><input type="text" id="b-area" class="form-input" value="${area}" placeholder="e.g. Production, Marketing"></div>
+        <div class="form-group"><label class="form-label">Season</label><input type="text" id="b-season" class="form-input" value="${season}" placeholder="e.g. 2024-2025"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Total budget amount <span class="req">*</span></label><input type="number" id="b-total" class="form-input" value="${total||''}" placeholder="0.00" step="0.01"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveBudget(${id||0})">${isEdit?'Save changes':'Create budget'}</button>
+    </div>`;
+  showModal(html);
+}
+
+async function saveBudget(id) {
+  const data = {
+    name: document.getElementById('b-name').value.trim(),
+    area: document.getElementById('b-area').value.trim(),
+    season: document.getElementById('b-season').value.trim(),
+    total_amount: parseFloat(document.getElementById('b-total').value)
+  };
+  if (!data.name || !data.total_amount) { toast('Name and amount are required', 'error'); return; }
+  try {
+    if (id) await api('PATCH', `/budgets/${id}`, data);
+    else await api('POST', '/budgets', data);
+    toast(id ? 'Budget updated!' : 'Budget created!', 'success');
+    closeModal();
+    await loadBudgets();
+    renderBudgets();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function archiveBudget(id) {
+  await api('PATCH', `/budgets/${id}`, {is_active: 0});
+  await loadBudgets(); renderBudgets(); toast('Budget archived.', 'info');
+}
+async function restoreBudget(id) {
+  await api('PATCH', `/budgets/${id}`, {is_active: 1});
+  await loadBudgets(); renderBudgets(); toast('Budget restored!', 'success');
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+async function renderUsers() {
+  try {
+    const users = await api('GET', '/users');
+    document.getElementById('content').innerHTML = `
+      <div class="section-sub">${users.length} registered volunteers</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Training</th><th>Joined</th><th>Actions</th></tr></thead>
+          <tbody>${users.map(u => `
+            <tr>
+              <td><div class="fw-600">${u.name}</div></td>
+              <td class="td-muted">${u.email}</td>
+              <td>
+                ${currentUser.role === 'admin' ? `
+                  <select class="form-select" style="font-size:12px;padding:4px 8px" onchange="updateUserRole(${u.id}, this.value)">
+                    <option ${u.role==='volunteer'?'selected':''}>volunteer</option>
+                    <option ${u.role==='treasurer'?'selected':''}>treasurer</option>
+                    <option ${u.role==='president'?'selected':''}>president</option>
+                    <option ${u.role==='admin'?'selected':''}>admin</option>
+                  </select>` : `<span class="text-sm" style="text-transform:capitalize">${u.role}</span>`}
+              </td>
+              <td>
+                ${u.training_complete
+                  ? '<span class="badge badge-approved">✓ Complete</span>'
+                  : `<span class="badge badge-denied">Incomplete</span>${currentUser.role==='admin'?`<button class="btn btn-outline btn-sm ml-4" onclick="markTrained(${u.id})">Mark complete</button>`:''}`}
+              </td>
+              <td class="td-muted">${fmtDate(u.created_at)}</td>
+              <td>—</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+async function updateUserRole(uid, role) {
+  try {
+    await api('PATCH', `/users/${uid}`, {role});
+    toast('Role updated!', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function markTrained(uid) {
+  try {
+    await api('PATCH', `/users/${uid}`, {training_complete: 1});
+    toast('Marked as training complete.', 'success');
+    renderUsers();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Training ──────────────────────────────────────────────────────────────────
+let trainingModule = null;
+let currentSlide = 0;
+let quizAnswers = {};
+let quizSubmitted = false;
+
+async function renderTraining() {
+  try {
+    const status = await api('GET', '/training/status');
+    const d = await api('GET', '/training');
+    trainingModule = d.module;
+    quizAnswers = {};
+    quizSubmitted = false;
+
+    if (!trainingModule) {
+      document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-icon">📋</div><h3>No training available</h3><p>An admin needs to set up the training module.</p></div>`;
+      return;
+    }
+
+    if (status.completed) {
+      document.getElementById('content').innerHTML = `
+        <div class="panel" style="max-width:560px;text-align:center;padding:40px 32px">
+          <div style="font-size:48px;margin-bottom:16px">🎓</div>
+          <h2 style="font-size:22px;font-weight:700;margin-bottom:8px">Training complete!</h2>
+          <p class="text-muted text-sm">You passed with a score of <strong>${status.score}%</strong>. You are authorized to submit purchase requests.</p>
+          <button class="btn btn-primary mt-24" onclick="nav('new-request')">Submit a purchase request →</button>
+        </div>`;
+      return;
+    }
+
+    currentSlide = 0;
+    renderTrainingView();
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+function renderTrainingView() {
+  const m = trainingModule;
+  const hasSlides = m.slides && m.slides.length > 0;
+  const showQuiz = !hasSlides || currentSlide >= m.slides.length;
+
+  let slideHtml = '';
+  if (hasSlides && !showQuiz) {
+    const slide = m.slides[currentSlide];
+    slideHtml = `
+      <div class="slide-viewer">
+        <img src="${slide}" alt="Slide ${currentSlide+1}" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+        <div class="slide-placeholder" style="display:none"><svg width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="opacity:.4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg><p>Slide ${currentSlide+1}</p></div>
+      </div>
+      <div class="slide-nav">
+        <button class="btn btn-outline btn-sm" onclick="prevSlide()" ${currentSlide===0?'disabled':''}>← Prev</button>
+        <div class="slide-dots">${m.slides.map((_,i) => `<button class="slide-dot ${i===currentSlide?'active':''}" onclick="goSlide(${i})"></button>`).join('')}</div>
+        <button class="btn btn-primary btn-sm" onclick="nextSlide()">
+          ${currentSlide === m.slides.length-1 ? 'Take quiz →' : 'Next →'}
+        </button>
+      </div>
+      <div class="text-xs text-muted" style="text-align:center">Slide ${currentSlide+1} of ${m.slides.length}</div>`;
+  }
+
+  let quizHtml = '';
+  if (showQuiz && m.questions && m.questions.length > 0) {
+    quizHtml = `
+      <div class="panel mb-16" style="background:var(--teal3);border-color:var(--teal)">
+        <div class="fw-600">${m.title} — Knowledge Check</div>
+        <div class="text-sm text-muted mt-4">Answer all questions. You need ${m.pass_mark}% to pass.</div>
+      </div>
+      ${m.questions.map((q, qi) => `
+        <div class="quiz-card" id="quiz-card-${qi}">
+          <div class="quiz-q">Q${qi+1}. ${q.question}</div>
+          ${q.options.map((opt, oi) => `
+            <div class="quiz-option" id="qo-${qi}-${oi}" onclick="selectAnswer(${qi},${oi})">
+              <span style="width:20px;height:20px;border-radius:50%;border:2px solid var(--border2);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0" id="qr-${qi}-${oi}"></span>
+              ${opt}
+            </div>`).join('')}
+          <div id="quiz-exp-${qi}" class="quiz-explanation hidden"></div>
+        </div>`).join('')}
+      <div id="quiz-result" class="hidden"></div>
+      <button class="btn btn-primary btn-lg mt-8" id="quiz-submit" onclick="submitQuiz()" disabled>Submit answers</button>`;
+  }
+
+  document.getElementById('content').innerHTML = `
+    <div style="max-width:680px">
+      <div class="mb-16">
+        <div class="section-title">${m.title}</div>
+        <div class="section-sub">${m.description||''}</div>
+      </div>
+      ${slideHtml}
+      ${quizHtml}
+    </div>`;
+}
+
+function prevSlide() { if (currentSlide > 0) { currentSlide--; renderTrainingView(); } }
+function nextSlide() { currentSlide++; renderTrainingView(); }
+function goSlide(i)   { currentSlide = i; renderTrainingView(); }
+
+function selectAnswer(qi, oi) {
+  if (quizSubmitted) return;
+  quizAnswers[qi] = oi;
+  trainingModule.questions[qi].options.forEach((_, i) => {
+    const el = document.getElementById(`qo-${qi}-${i}`);
+    el.classList.toggle('selected', i === oi);
+    document.getElementById(`qr-${qi}-${i}`).textContent = i === oi ? '●' : '';
+  });
+  const allAnswered = trainingModule.questions.every((_,i) => quizAnswers[i] !== undefined);
+  document.getElementById('quiz-submit').disabled = !allAnswered;
+}
+
+async function submitQuiz() {
+  quizSubmitted = true;
+  let correct = 0;
+  trainingModule.questions.forEach((q, qi) => {
+    const selected = quizAnswers[qi];
+    const isCorrect = selected === q.correct;
+    if (isCorrect) correct++;
+    trainingModule.questions[qi].options.forEach((_, oi) => {
+      const el = document.getElementById(`qo-${qi}-${oi}`);
+      el.classList.add('disabled');
+      if (oi === q.correct) el.classList.add('correct');
+      else if (oi === selected && !isCorrect) el.classList.add('wrong');
+    });
+    const expEl = document.getElementById(`quiz-exp-${qi}`);
+    expEl.textContent = q.explanation || '';
+    expEl.classList.remove('hidden');
+  });
+
+  const score = Math.round((correct / trainingModule.questions.length) * 100);
+  document.getElementById('quiz-submit').style.display = 'none';
+
+  try {
+    const d = await api('POST', '/training/complete', {score});
+    const passed = d.passed;
+    const resultEl = document.getElementById('quiz-result');
+    resultEl.classList.remove('hidden');
+    resultEl.innerHTML = passed
+      ? `<div class="panel mt-16" style="background:var(--green-bg);border-color:#a8d8b9;text-align:center;padding:28px">
+           <div style="font-size:36px;margin-bottom:8px">🎓</div>
+           <div class="fw-600" style="font-size:18px;color:var(--green)">You passed!</div>
+           <div class="text-sm text-muted mt-4">Score: ${score}% (${correct}/${trainingModule.questions.length} correct)</div>
+           <button class="btn btn-primary mt-16" onclick="nav('new-request')">Start submitting purchase requests →</button>
+         </div>`
+      : `<div class="panel mt-16" style="background:var(--red-bg);border-color:#e8b4b4;text-align:center;padding:28px">
+           <div style="font-size:36px;margin-bottom:8px">📖</div>
+           <div class="fw-600" style="font-size:18px;color:var(--red)">Not quite — ${score}%</div>
+           <div class="text-sm text-muted mt-4">You need ${d.pass_mark}% to pass. Review the material and try again.</div>
+           <button class="btn btn-outline mt-16" onclick="renderTraining()">Try again</button>
+         </div>`;
+
+    if (passed) {
+      currentUser.training_complete = 1;
+      document.getElementById('sb-training-badge').style.display = 'none';
+    }
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Training Admin ─────────────────────────────────────────────────────────────
+async function renderTrainingAdmin() {
+  try {
+    const d = await api('GET', '/training');
+    const m = d.module || {title:'', description:'', questions:[], pass_mark:80, slides:[]};
+
+    document.getElementById('content').innerHTML = `
+      <div style="max-width:680px">
+        <div class="card mb-20">
+          <div class="card-header"><span class="card-title">Training module settings</span></div>
+          <div class="card-body">
+            <div class="form-group"><label class="form-label">Title</label><input id="tm-title" class="form-input" value="${m.title}"></div>
+            <div class="form-group"><label class="form-label">Description</label><textarea id="tm-desc" class="form-textarea">${m.description||''}</textarea></div>
+            <div class="form-group"><label class="form-label">Pass mark (%)</label><input type="number" id="tm-pass" class="form-input" value="${m.pass_mark}" style="width:120px" min="1" max="100"></div>
+          </div>
+        </div>
+
+        <div class="card mb-20">
+          <div class="card-header">
+            <span class="card-title">Slides</span>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('slide-upload-input').click()">+ Upload slide</button>
+            <input type="file" id="slide-upload-input" accept="image/*" class="hidden" onchange="uploadSlide(this)">
+          </div>
+          <div class="card-body">
+            <p class="text-sm text-muted mb-12">Upload each slide as an image (PNG/JPG). Export your PowerPoint as images: File → Export → PNG.</p>
+            <div id="slides-list">
+              ${m.slides && m.slides.length > 0
+                ? m.slides.map((s,i) => `<div class="flex flex-center gap-8 mb-8 p-8" style="border:1px solid var(--border);border-radius:var(--r-sm)">
+                    <img src="${s}" style="width:80px;height:52px;object-fit:cover;border-radius:4px">
+                    <span class="text-sm">Slide ${i+1}</span>
+                    <button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="removeSlide(${i})">Remove</button>
+                  </div>`).join('')
+                : '<p class="text-sm text-muted">No slides uploaded yet.</p>'}
+            </div>
+          </div>
+        </div>
+
+        <div class="card mb-20">
+          <div class="card-header">
+            <span class="card-title">Quiz questions</span>
+            <button class="btn btn-outline btn-sm" onclick="addQuestion()">+ Add question</button>
+          </div>
+          <div class="card-body">
+            <div id="questions-list">
+              ${m.questions.map((q,qi) => buildQuestionEditor(q,qi)).join('')}
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-lg" onclick="saveTraining()">Save training module</button>
+      </div>`;
+
+    window._trainingSlides = m.slides ? [...m.slides] : [];
+    window._trainingQuestions = m.questions ? JSON.parse(JSON.stringify(m.questions)) : [];
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+function buildQuestionEditor(q, qi) {
+  return `<div class="quiz-card" id="qedit-${qi}">
+    <div class="flex flex-center gap-8 mb-8">
+      <span class="fw-600 text-sm">Question ${qi+1}</span>
+      <button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="removeQuestion(${qi})">Remove</button>
+    </div>
+    <div class="form-group"><input class="form-input" placeholder="Question text" value="${q.question||''}" oninput="window._trainingQuestions[${qi}].question=this.value"></div>
+    ${(q.options||['','','','']).map((opt,oi) => `
+      <div class="flex flex-center gap-8 mb-8">
+        <input type="radio" name="correct-${qi}" ${q.correct===oi?'checked':''} onchange="window._trainingQuestions[${qi}].correct=${oi}">
+        <input class="form-input" placeholder="Option ${oi+1}" value="${opt}" oninput="window._trainingQuestions[${qi}].options[${oi}]=this.value">
+      </div>`).join('')}
+    <div class="form-group mt-8"><input class="form-input" placeholder="Explanation (shown after answering)" value="${q.explanation||''}" oninput="window._trainingQuestions[${qi}].explanation=this.value"></div>
+  </div>`;
+}
+
+function addQuestion() {
+  const q = {question:'', options:['','','',''], correct:0, explanation:''};
+  window._trainingQuestions.push(q);
+  const qi = window._trainingQuestions.length - 1;
+  const list = document.getElementById('questions-list');
+  const div = document.createElement('div');
+  div.innerHTML = buildQuestionEditor(q, qi);
+  list.appendChild(div.firstElementChild);
+}
+
+function removeQuestion(qi) {
+  window._trainingQuestions.splice(qi, 1);
+  renderTrainingAdmin();
+}
+
+async function uploadSlide(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const d = await api('POST', '/training/slides', fd, true);
+    window._trainingSlides.push(d.url);
+    await api('POST', '/training/slides/update', {slides: window._trainingSlides});
+    toast('Slide uploaded!', 'success');
+    renderTrainingAdmin();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeSlide(idx) {
+  window._trainingSlides.splice(idx, 1);
+  await api('POST', '/training/slides/update', {slides: window._trainingSlides});
+  toast('Slide removed.', 'info');
+  renderTrainingAdmin();
+}
+
+async function saveTraining() {
+  const data = {
+    title: document.getElementById('tm-title').value.trim(),
+    description: document.getElementById('tm-desc').value.trim(),
+    pass_mark: parseInt(document.getElementById('tm-pass').value)||80,
+    questions: window._trainingQuestions
+  };
+  try {
+    await api('PUT', '/training', data);
+    toast('Training module saved!', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Modal helpers ─────────────────────────────────────────────────────────────
+function showModal(html, size='') {
+  let bd = document.getElementById('modal-bd');
+  if (!bd) {
+    bd = document.createElement('div');
+    bd.id = 'modal-bd';
+    bd.className = 'modal-backdrop';
+    bd.onclick = (e) => { if (e.target === bd) closeModal(); };
+    document.body.appendChild(bd);
+  }
+  bd.innerHTML = `<div class="modal" style="${size==='large'?'max-width:620px':''}">${html}</div>`;
+  bd.classList.remove('hidden');
+}
+
+function closeModal() {
+  const bd = document.getElementById('modal-bd');
+  if (bd) bd.classList.add('hidden');
+}
+
+function openLightbox(url) {
+  document.getElementById('lightbox-img').src = url;
+  document.getElementById('lightbox').classList.remove('hidden');
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type='info') {
+  const wrap = document.getElementById('toast-wrap');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  const icons = {success:'✓', error:'!', info:'i'};
+  t.innerHTML = `<span style="width:18px;height:18px;border-radius:50%;background:currentColor;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${icons[type]||'i'}</span>${msg}`;
+  wrap.appendChild(t);
+  setTimeout(() => t.remove(), 3800);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
