@@ -363,16 +363,40 @@ def list_users():
     conn.close()
     return jsonify([dict(u) for u in users])
 
-@app.route('/api/users/<int:uid>', methods=['PATCH'])
-def update_user(uid):
+@app.route('/api/users/create', methods=['POST'])
+def create_user():
+    err = require_auth(['admin'])
+    if err: return err
+    data = request.json
+    name     = data.get('name', '').strip()
+    email    = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+    role     = data.get('role', 'volunteer')
+    training = int(data.get('training_complete', 0))
+    if not name or not email or not password:
+        return jsonify({'error': 'Name, email and password are required'}), 400
+    conn = get_db()
+    try:
+        conn.execute('INSERT INTO bb_users (name,email,password,role,training_complete) VALUES (%s,%s,%s,%s,%s)',
+                     (name, email, hash_pw(password), role, training))
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True})
+    except psycopg2.IntegrityError:
+        conn.close()
+        return jsonify({'error': 'An account with that email already exists'}), 409
+
+
     err = require_auth(['admin'])
     if err: return err
     data = request.json
     conn = get_db()
     if 'role' in data:
-        conn.execute('UPDATE bb_users SET role=%s WHERE id=?', (data['role'], uid))
+        conn.execute('UPDATE bb_users SET role=%s WHERE id=%s', (data['role'], uid))
     if 'training_complete' in data:
-        conn.execute('UPDATE bb_users SET training_complete=%s WHERE id=?', (data['training_complete'], uid))
+        conn.execute('UPDATE bb_users SET training_complete=%s WHERE id=%s', (data['training_complete'], uid))
+    if 'password' in data and data['password']:
+        conn.execute('UPDATE bb_users SET password=%s WHERE id=%s', (hash_pw(data['password']), uid))
     conn.commit()
     conn.close()
     return jsonify({'ok': True})
