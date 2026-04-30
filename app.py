@@ -127,9 +127,9 @@ def init_db():
         ("bb_purchase_requests", "producer_acted_at", "TEXT"),
     ]
     for table, column, col_type in migrations:
-        c.execute("""SELECT COUNT(*) FROM information_schema.columns
+        c.execute("""SELECT COUNT(*) AS n FROM information_schema.columns
                      WHERE table_name=%s AND column_name=%s""", (table, column))
-        if c.fetchone()[0] == 0:
+        if c.fetchone()['n'] == 0:
             c.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}')
 
     def hp(pw): return hashlib.sha256(pw.encode()).hexdigest()
@@ -141,17 +141,17 @@ def init_db():
     ]:
         c.execute('INSERT INTO bb_users (name,email,password,role,training_complete) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING', u)
 
-    c.execute('SELECT COUNT(*) FROM bb_productions')
-    if c.fetchone()[0] == 0:
+    c.execute('SELECT COUNT(*) AS n FROM bb_productions')
+    if c.fetchone()['n'] == 0:
         c.execute("INSERT INTO bb_productions (name,season,description,total_budget) VALUES (%s,%s,%s,%s)",
                   ('Spring Musical 2025','2024-2025','Main stage spring production',38000))
         c.execute('SELECT id FROM bb_productions ORDER BY id DESC LIMIT 1')
-        pid = c.fetchone()[0]
+        pid = c.fetchone()['id']
         c.execute('SELECT id FROM bb_users WHERE email=%s',('admin@horizonwest.org',))
         admin = c.fetchone()
         if admin:
             c.execute('INSERT INTO bb_production_members (production_id,user_id,member_role) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING',
-                      (pid, admin[0], 'producer'))
+                      (pid, admin['id'], 'producer'))
         for dept in [
             ('Scenery & Props','Props','2024-2025',6000,pid),
             ('Costumes','Costumes','2024-2025',2105,pid),
@@ -161,13 +161,13 @@ def init_db():
         ]:
             c.execute('INSERT INTO bb_budgets (name,area,season,total_amount,production_id) VALUES (%s,%s,%s,%s,%s)', dept)
 
-    c.execute('SELECT COUNT(*) FROM bb_budgets WHERE production_id IS NULL')
-    if c.fetchone()[0] == 0:
+    c.execute('SELECT COUNT(*) AS n FROM bb_budgets WHERE production_id IS NULL')
+    if c.fetchone()['n'] == 0:
         for b in [('Marketing & Outreach','Marketing','2024-2025',800),('General Operations','Operations','2024-2025',1200)]:
             c.execute('INSERT INTO bb_budgets (name,area,season,total_amount) VALUES (%s,%s,%s,%s)', b)
 
-    c.execute('SELECT COUNT(*) FROM bb_training_modules')
-    if c.fetchone()[0] == 0:
+    c.execute('SELECT COUNT(*) AS n FROM bb_training_modules')
+    if c.fetchone()['n'] == 0:
         qs = json.dumps([
             {"question":"Before purchasing for a show, who do you check with first?","options":["The Treasurer","The President","The production Producer","Any board member"],"correct":2,"explanation":"Show purchases go to the Producer first — they manage the production budget and must approve before it goes to Treasurer and President."},
             {"question":"What should you check before buying props or costumes?","options":["Check Amazon for best price","Check HWTC storage and ask the producer what we already have","Ask other volunteers","Post in the group chat"],"correct":1,"explanation":"HWTC has storage full of usable items. Always check storage first and ask the producer — it saves money and storage space."},
