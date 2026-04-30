@@ -326,7 +326,7 @@ def list_users():
 
 @app.route('/api/users/create', methods=['POST'])
 def create_user():
-    err = require_auth(['admin'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     data = request.json
     name,email,pw = data.get('name','').strip(), data.get('email','').strip().lower(), data.get('password','')
@@ -341,7 +341,7 @@ def create_user():
 
 @app.route('/api/users/<int:uid>', methods=['PATCH'])
 def update_user(uid):
-    err = require_auth(['admin'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     data = request.json
     conn = get_db()
@@ -371,7 +371,7 @@ def list_productions():
     result = []
     for p in prods:
         prod = dict(p)
-        members = conn.execute('''SELECT u.id,u.name,u.email,u.role,m.member_role
+        members = conn.execute('''SELECT u.id AS user_id, u.name, u.email, u.role, m.member_role
                                   FROM bb_production_members m JOIN bb_users u ON m.user_id=u.id
                                   WHERE m.production_id=%s ORDER BY m.member_role,u.name''',(prod['id'],)).fetchall()
         prod['members'] = [dict(m) for m in members]
