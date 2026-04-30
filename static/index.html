@@ -390,6 +390,10 @@ tr:hover td{background:var(--cream)}
       </div>
       <div class="sb-section" id="sb-admin-section">
         <div class="sb-section-label">Admin</div>
+        <button class="sb-item" data-page="productions" onclick="nav('productions')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clip-rule="evenodd"/></svg>
+          Productions
+        </button>
         <button class="sb-item" data-page="approvals" onclick="nav('approvals')">
           <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
           Approval Queue
@@ -462,7 +466,7 @@ let pendingCounts = {treasurer: 0, president: 0, reimb: 0};
 // ── API ───────────────────────────────────────────────────────────────────────
 async function api(method, path, body, isFile) {
   const opts = {method, credentials:'include'};
-  if (body && !isFile) {
+  if (body && !isFile && method !== 'DELETE') {
     opts.headers = {'Content-Type':'application/json'};
     opts.body = JSON.stringify(body);
   } else if (isFile) {
@@ -538,11 +542,9 @@ function showAuthTab(tab) {
 function showApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').classList.remove('hidden');
-  // sidebar user info
   document.getElementById('sb-av').textContent = currentUser.name.charAt(0).toUpperCase();
   document.getElementById('sb-name').textContent = currentUser.name;
   document.getElementById('sb-role').textContent = currentUser.role;
-  // show/hide admin section
   const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
   document.getElementById('sb-admin-section').style.display = isAdmin ? '' : 'none';
   document.getElementById('sb-training-admin').style.display = currentUser.role === 'admin' ? '' : 'none';
@@ -560,7 +562,7 @@ function nav(page) {
     dashboard: 'Dashboard', 'my-requests': 'My Requests', 'new-request': 'New Purchase Request',
     reimbursements: 'Reimbursements', approvals: 'Approval Queue', 'all-requests': 'All Requests',
     budgets: 'Budget Tracker', users: 'Volunteers', training: 'Purchasing Training',
-    'training-admin': 'Manage Training'
+    'training-admin': 'Manage Training', productions: 'Productions'
   };
   document.getElementById('tb-title').textContent = titles[page] || page;
   document.getElementById('tb-actions').innerHTML = '';
@@ -571,7 +573,8 @@ function nav(page) {
     'new-request': renderNewRequest, 'reimbursements': renderReimbursements,
     'approvals': renderApprovals, 'all-requests': renderAllRequests,
     'budgets': renderBudgets, 'users': renderUsers,
-    'training': renderTraining, 'training-admin': renderTrainingAdmin
+    'training': renderTraining, 'training-admin': renderTrainingAdmin,
+    'productions': renderProductions
   };
   if (pages[page]) pages[page]();
 }
@@ -591,13 +594,17 @@ async function refreshBadges() {
     const s = await api('GET', '/stats');
     const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
     if (isAdmin) {
-      const total = (s.pending_treasurer||0) + (s.pending_president||0);
+      const total = (s.pending_producer||0) + (s.pending_treasurer||0) + (s.pending_president||0);
       const apBadge = document.getElementById('sb-approval-badge');
       apBadge.textContent = total;
       apBadge.style.display = total > 0 ? '' : 'none';
       const reBadge = document.getElementById('sb-reimb-badge');
       reBadge.textContent = s.pending_reimburse || 0;
       reBadge.style.display = (s.pending_reimburse||0) > 0 ? '' : 'none';
+    }
+    if (s.is_producer && (s.pending_my_productions||0) > 0) {
+      const apBadge = document.getElementById('sb-approval-badge');
+      if (apBadge) { apBadge.textContent = s.pending_my_productions; apBadge.style.display = ''; }
     }
     if (!currentUser.training_complete) {
       document.getElementById('sb-training-badge').style.display = '';
@@ -614,7 +621,8 @@ async function loadBudgets() {
 // ── Status helpers ──────────────────────────────────────────────────────────
 function statusBadge(status, isEmergency) {
   const map = {
-    pending_treasurer: ['badge-pending', 'Awaiting treasurer'],
+    pending_producer:  ['badge-pending', 'Awaiting producer'],
+    pending_treasurer: ['badge-treasurer', 'Awaiting treasurer'],
     pending_president: ['badge-president', 'Awaiting president'],
     approved:          ['badge-approved', 'Approved'],
     denied:            ['badge-denied', 'Denied'],
@@ -646,12 +654,12 @@ async function renderDashboard() {
     if (isAdmin) {
       statsHtml = `
         <div class="stat-grid">
-          <div class="stat-card amber"><div class="stat-label">Awaiting treasurer</div><div class="stat-value">${stats.pending_treasurer}</div></div>
-          <div class="stat-card"><div class="stat-label">Awaiting president</div><div class="stat-value">${stats.pending_president}</div></div>
-          <div class="stat-card teal"><div class="stat-label">Pending reimbursement</div><div class="stat-value">${stats.pending_reimburse}</div></div>
-          <div class="stat-card"><div class="stat-label">Total requests</div><div class="stat-value">${stats.total_requests}</div></div>
-          <div class="stat-card green"><div class="stat-label">Total approved spend</div><div class="stat-value">${fmtMoney(stats.total_spent)}</div></div>
-          <div class="stat-card"><div class="stat-label">Emergency purchases</div><div class="stat-value">${stats.emergency_count}</div></div>
+          <div class="stat-card amber"><div class="stat-label">Awaiting producer</div><div class="stat-value">${stats.pending_producer||0}</div></div>
+          <div class="stat-card"><div class="stat-label">Awaiting treasurer</div><div class="stat-value">${stats.pending_treasurer||0}</div></div>
+          <div class="stat-card"><div class="stat-label">Awaiting president</div><div class="stat-value">${stats.pending_president||0}</div></div>
+          <div class="stat-card teal"><div class="stat-label">Pending reimbursement</div><div class="stat-value">${stats.pending_reimburse||0}</div></div>
+          <div class="stat-card green"><div class="stat-label">Total approved spend</div><div class="stat-value">${fmtMoney(stats.total_spent||0)}</div></div>
+          <div class="stat-card"><div class="stat-label">Emergency purchases</div><div class="stat-value">${stats.emergency_count||0}</div></div>
         </div>`;
     } else {
       statsHtml = `
@@ -767,15 +775,23 @@ async function renderNewRequest() {
     document.getElementById('content').innerHTML = `
       <div class="training-gate">
         <div class="training-gate-icon">📋</div>
-        <div>
-          <h3>Training required before submitting requests</h3>
-          <p>Please complete the HWTC purchasing training first.</p>
-        </div>
+        <div><h3>Training required before submitting requests</h3>
+        <p>Please complete the HWTC purchasing training first.</p></div>
       </div>
       <button class="btn btn-primary" onclick="nav('training')">Go to training →</button>`;
     return;
   }
-  const budgetOpts = allBudgets.filter(b=>b.is_active).map(b =>
+
+  // Load productions user belongs to
+  let myProductions = [];
+  try { myProductions = await api('GET', '/productions'); } catch(e) {}
+
+  const prodOpts = myProductions.length > 0
+    ? myProductions.map(p => `<option value="${p.id}">${p.name} — ${p.season}</option>`).join('')
+    : '';
+
+  const orgBudgets = allBudgets.filter(b => !b.production_id && b.is_active);
+  const orgBudgetOpts = orgBudgets.map(b =>
     `<option value="${b.id}">${b.name} — ${b.area} (${fmtMoney(b.total_amount - b.spent)} remaining)</option>`).join('');
 
   document.getElementById('content').innerHTML = `
@@ -819,10 +835,26 @@ async function renderNewRequest() {
               <input type="text" id="req-vendor" class="form-input" placeholder="e.g. Home Depot, Amazon">
             </div>
           </div>
+
+          ${myProductions.length > 0 ? `
           <div class="form-group">
-            <label class="form-label">Budget area <span class="req">*</span></label>
-            <select id="req-budget" class="form-select"><option value="">Select a budget...</option>${budgetOpts}</select>
+            <label class="form-label">Is this for a production?</label>
+            <select id="req-production" class="form-select" onchange="onProductionChange(this.value)">
+              <option value="">No — this is an org-level purchase</option>
+              ${prodOpts}
+            </select>
+            <div class="form-hint" id="prod-approval-hint"></div>
+          </div>` : ''}
+
+          <div class="form-group">
+            <label class="form-label">Budget / department <span class="req">*</span></label>
+            <select id="req-budget" class="form-select">
+              <option value="">Select a budget...</option>
+              ${myProductions.length > 0 ? '' : orgBudgetOpts}
+            </select>
+            <div class="form-hint" id="budget-remaining-hint"></div>
           </div>
+
           <div class="form-group">
             <label class="form-label">Description / notes</label>
             <textarea id="req-desc" class="form-textarea" placeholder="Why is this needed? Any additional context..."></textarea>
@@ -833,7 +865,7 @@ async function renderNewRequest() {
           </div>
           <div id="emergency-upload" class="hidden">
             <label class="form-label">Receipt (required for emergency purchases)</label>
-            <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()" id="upload-drop">
+            <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()">
               <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto;opacity:.5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
               <p>Click to upload receipt photo or PDF</p>
             </div>
@@ -848,6 +880,48 @@ async function renderNewRequest() {
         </div>
       </div>
     </div>`;
+
+  // If only org budgets, populate immediately
+  if (myProductions.length === 0) {
+    populateBudgetDropdown(null);
+  }
+}
+
+function onProductionChange(prodId) {
+  populateBudgetDropdown(prodId ? parseInt(prodId) : null);
+  const hint = document.getElementById('prod-approval-hint');
+  if (!hint) return;
+  if (prodId) {
+    hint.textContent = 'Show purchases go to the producer for approval first, then treasurer, then president.';
+    hint.style.color = 'var(--teal)';
+  } else {
+    hint.textContent = '';
+  }
+}
+
+function populateBudgetDropdown(prodId) {
+  const sel = document.getElementById('req-budget');
+  if (!sel) return;
+  let opts = '<option value="">Select a budget / department...</option>';
+  if (prodId) {
+    const prodBudgets = allBudgets.filter(b => b.production_id === prodId && b.is_active !== 0);
+    if (prodBudgets.length === 0) {
+      opts += '<option value="" disabled>No departments set up for this production yet</option>';
+    } else {
+      opts += prodBudgets.map(b => {
+        const rem = b.total_amount - b.spent;
+        return `<option value="${b.id}">${b.name} — ${b.area} (${fmtMoney(rem)} remaining)</option>`;
+      }).join('');
+    }
+  } else {
+    const orgBudgets = allBudgets.filter(b => !b.production_id);
+    opts += orgBudgets.map(b => {
+      const rem = b.total_amount - b.spent;
+      return `<option value="${b.id}">${b.name} — ${b.area} (${fmtMoney(rem)} remaining)</option>`;
+    }).join('');
+  }
+  sel.innerHTML = opts;
+}
 }
 
 let newReceiptFile = null;
@@ -874,20 +948,26 @@ async function submitRequest() {
   const desc  = document.getElementById('req-desc').value.trim();
   const vendor = document.getElementById('req-vendor').value.trim();
   const isEmergency = document.querySelector('input[name="req-type"]:checked').value === 'emergency';
-  const emergencyReason = document.getElementById('req-emergency-reason').value.trim();
+  const emergencyReason = document.getElementById('req-emergency-reason')?.value.trim() || '';
+  const prodEl = document.getElementById('req-production');
+  const prodId = prodEl ? prodEl.value : null;
   const errEl = document.getElementById('req-error');
   errEl.classList.add('hidden');
-
   if (!title || !cost || !budget) {
     errEl.textContent = 'Please fill in all required fields.'; errEl.classList.remove('hidden'); return;
   }
   if (isEmergency && !emergencyReason) {
     errEl.textContent = 'Please explain why this was an emergency purchase.'; errEl.classList.remove('hidden'); return;
   }
-
   try {
-    const d = await api('POST', '/requests', {title, description:desc, vendor, estimated_cost:parseFloat(cost), budget_id:parseInt(budget), is_emergency:isEmergency, emergency_reason:emergencyReason});
-    // upload receipt if emergency
+    const d = await api('POST', '/requests', {
+      title, description:desc, vendor,
+      estimated_cost:parseFloat(cost),
+      budget_id:parseInt(budget),
+      production_id: prodId ? parseInt(prodId) : null,
+      is_emergency:isEmergency,
+      emergency_reason:emergencyReason
+    });
     if (isEmergency && newReceiptFile) {
       const fd = new FormData();
       fd.append('file', newReceiptFile);
@@ -1008,11 +1088,13 @@ async function doApprove(rid, action) {
 async function renderApprovals() {
   try {
     const all = await api('GET', '/requests');
-    const queue = all.filter(r => r.status === 'pending_treasurer' || r.status === 'pending_president');
+    const queue = all.filter(r => ['pending_producer','pending_treasurer','pending_president'].includes(r.status));
     const myQueue = queue.filter(r => {
       if (currentUser.role === 'treasurer') return r.status === 'pending_treasurer';
       if (currentUser.role === 'president') return r.status === 'pending_president';
-      return true; // admin sees all
+      if (currentUser.role === 'admin') return true;
+      // producer — handled by server filtering already
+      return true;
     });
 
     if (myQueue.length === 0) {
@@ -1024,19 +1106,23 @@ async function renderApprovals() {
       <div class="section-sub">${myQueue.length} request${myQueue.length!==1?'s':''} awaiting action</div>
       <div style="display:flex;flex-direction:column;gap:12px">
         ${myQueue.map(r => {
-          const canAct = (currentUser.role==='treasurer'||currentUser.role==='admin') && r.status==='pending_treasurer'
-            || (currentUser.role==='president'||currentUser.role==='admin') && r.status==='pending_president';
+          const canAct =
+            (currentUser.role==='admin') ||
+            (r.status==='pending_treasurer' && currentUser.role==='treasurer') ||
+            (r.status==='pending_president' && currentUser.role==='president') ||
+            (r.status==='pending_producer');
           const budget_pct = r.budget_total > 0 ? Math.min(100, ((r.budget_spent + r.estimated_cost)/r.budget_total)*100) : 0;
           return `<div class="card">
             <div class="card-body">
               <div class="flex flex-center gap-8 mb-12">
                 ${statusBadge(r.status, r.is_emergency)}
+                ${r.production_name ? `<span class="badge badge-treasurer">${r.production_name}</span>` : '<span class="text-xs text-muted">Org-level</span>'}
                 <span class="text-xs text-muted" style="margin-left:auto">${fmtDate(r.submitted_at)}</span>
               </div>
               <div class="flex flex-center gap-12 mb-8">
                 <div>
                   <div class="fw-600">${r.title}</div>
-                  <div class="text-xs text-muted">${r.submitter_name} · ${r.vendor||'No vendor specified'}</div>
+                  <div class="text-xs text-muted">${r.submitter_name} · ${r.vendor||'No vendor'}</div>
                 </div>
                 <div style="margin-left:auto;text-align:right">
                   <div class="fw-600" style="font-size:18px">${fmtMoney(r.estimated_cost)}</div>
@@ -1045,21 +1131,22 @@ async function renderApprovals() {
               </div>
               ${r.description ? `<div class="text-sm text-muted mb-8">${r.description}</div>` : ''}
               ${r.emergency_reason ? `<div class="text-sm mb-8" style="color:var(--amber);background:var(--amber-bg);padding:8px 10px;border-radius:var(--r-sm)">Emergency: ${r.emergency_reason}</div>` : ''}
-              <div class="mb-8">
+              ${r.producer_note ? `<div class="text-xs text-muted mb-4">Producer note: ${r.producer_note}</div>` : ''}
+              ${r.budget_name ? `<div class="mb-8">
                 <div class="flex flex-center gap-8">
-                  <span class="text-xs text-muted">Budget usage after approval</span>
+                  <span class="text-xs text-muted">Budget after approval</span>
                   <span class="text-xs text-muted" style="margin-left:auto">${fmtMoney(r.budget_spent+r.estimated_cost)} / ${fmtMoney(r.budget_total)}</span>
                 </div>
                 <div class="budget-bar-wrap mt-4"><div class="budget-bar-fill ${budget_pct>90?'danger':budget_pct>70?'warn':''}" style="width:${budget_pct}%"></div></div>
-              </div>
+              </div>` : ''}
               ${r.receipts && r.receipts.length > 0 ? `<div class="receipt-grid mb-8">${r.receipts.map(rc=>`<div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" loading="lazy"></div>`).join('')}</div>` : ''}
               ${canAct ? `
                 <div class="approve-panel mt-8">
                   ${r.status==='pending_president' ? `<div class="form-group"><label class="form-label">Confirm actual cost</label><input type="number" id="act-${r.id}" class="form-input" value="${r.actual_cost||r.estimated_cost}" step="0.01"></div>` : ''}
                   <div class="form-group"><label class="form-label">Note for volunteer (optional)</label><textarea id="note-${r.id}" class="form-textarea" style="min-height:56px"></textarea></div>
                   <div class="flex gap-8">
-                    <button class="btn btn-approve" onclick="quickApprove(${r.id},'approve','${r.status}')">✓ Approve</button>
-                    <button class="btn btn-danger" onclick="quickApprove(${r.id},'deny','${r.status}')">✕ Deny</button>
+                    <button class="btn btn-approve" onclick="quickApprove(${r.id},'approve')">✓ Approve</button>
+                    <button class="btn btn-danger" onclick="quickApprove(${r.id},'deny')">✕ Deny</button>
                     <button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">Full detail</button>
                   </div>
                 </div>` : `<button class="btn btn-outline btn-sm mt-8" onclick="showRequestDetail(${r.id})">View detail</button>`}
@@ -1072,7 +1159,7 @@ async function renderApprovals() {
   }
 }
 
-async function quickApprove(rid, action, status) {
+async function quickApprove(rid, action) {
   const note = document.getElementById(`note-${rid}`)?.value || '';
   const actEl = document.getElementById(`act-${rid}`);
   const actual_cost = actEl ? parseFloat(actEl.value) : undefined;
@@ -1222,75 +1309,114 @@ async function confirmPay(rid) {
 async function renderBudgets() {
   const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
   if (isAdmin) {
-    document.getElementById('tb-actions').innerHTML = `<button class="btn btn-primary btn-sm" onclick="showBudgetModal()">+ New budget</button>`;
+    document.getElementById('tb-actions').innerHTML = `<button class="btn btn-primary btn-sm" onclick="showBudgetModal()">+ New org budget</button>`;
   }
   try {
     const budgets = await api('GET', '/budgets');
-    const active = budgets.filter(b => b.is_active);
-    const inactive = budgets.filter(b => !b.is_active);
 
-    const budgetCard = (b) => {
+    const budgetCard = (b, canEdit) => {
       const pct = b.total_amount > 0 ? Math.min(100, (b.spent/b.total_amount)*100) : 0;
       const remaining = b.total_amount - b.spent;
       const cls = pct>90?'danger':pct>70?'warn':'';
-      return `<div class="card mb-12">
-        <div class="card-body">
+      return `<div class="card mb-8">
+        <div class="card-body" style="padding:14px 16px">
           <div class="flex flex-center mb-4">
-            <div>
-              <div class="fw-600">${b.name}</div>
-              <div class="text-xs text-muted">${b.area} · ${b.season}</div>
-            </div>
+            <div><div class="fw-600 text-sm">${b.name}</div><div class="text-xs text-muted">${b.area}</div></div>
             <div style="margin-left:auto;text-align:right">
-              <div class="fw-600" style="font-size:18px;color:${remaining<0?'var(--red)':'var(--ink)'}">${fmtMoney(remaining)}</div>
-              <div class="text-xs text-muted">remaining</div>
+              <div class="fw-600" style="color:${remaining<0?'var(--red)':'var(--ink)'}">${fmtMoney(remaining)}</div>
+              <div class="text-xs text-muted">of ${fmtMoney(b.total_amount)}</div>
             </div>
-          </div>
-          <div class="flex flex-center gap-8 text-xs text-muted mb-4">
-            <span>Spent: ${fmtMoney(b.spent)}</span>
-            <span>·</span>
-            <span>Total: ${fmtMoney(b.total_amount)}</span>
-            <span style="margin-left:auto">${Math.round(pct)}%</span>
           </div>
           <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div></div>
-          ${isAdmin ? `<div class="mt-12 flex gap-8"><button class="btn btn-outline btn-sm" onclick="showBudgetModal(${b.id},'${b.name}','${b.area}','${b.season}',${b.total_amount})">Edit</button>${b.is_active ? `<button class="btn btn-outline btn-sm" onclick="archiveBudget(${b.id})">Archive</button>` : `<button class="btn btn-outline btn-sm" onclick="restoreBudget(${b.id})">Restore</button>`}</div>` : ''}
+          <div class="flex flex-center gap-8 mt-6">
+            <span class="text-xs text-muted">Spent: ${fmtMoney(b.spent)} · ${Math.round(pct)}%</span>
+            ${canEdit ? `<button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:11px;padding:3px 8px" onclick="showBudgetModal(${b.id},'${b.name.replace(/'/g,"\\'")}','${b.area}','${b.season}',${b.total_amount})">Edit</button>` : ''}
+          </div>
         </div>
       </div>`;
     };
 
-    document.getElementById('content').innerHTML = `
-      <div class="section-sub">Track spend across shows and org areas</div>
-      ${active.length === 0 ? `<div class="empty"><div class="empty-icon">💰</div><h3>No active budgets</h3>${isAdmin?'<button class="btn btn-primary mt-16" onclick="showBudgetModal()">Create first budget</button>':''}</div>` : active.map(budgetCard).join('')}
-      ${inactive.length > 0 ? `<div class="fw-600 mt-24 mb-12 text-muted text-sm">Archived</div>${inactive.map(budgetCard).join('')}` : ''}`;
+    // Group by production
+    const byProd = {};
+    const orgBudgets = [];
+    for (const b of budgets) {
+      if (b.production_id) {
+        if (!byProd[b.production_id]) byProd[b.production_id] = {name: b.production_name, budgets: []};
+        byProd[b.production_id].budgets.push(b);
+      } else {
+        orgBudgets.push(b);
+      }
+    }
+
+    let html = '';
+
+    // Production budgets
+    for (const [pid, group] of Object.entries(byProd)) {
+      const totalBudget = group.budgets.reduce((s,b) => s+b.total_amount, 0);
+      const totalSpent  = group.budgets.reduce((s,b) => s+b.spent, 0);
+      const pct = totalBudget > 0 ? Math.min(100, (totalSpent/totalBudget)*100) : 0;
+      html += `
+        <div class="card mb-16">
+          <div class="card-header">
+            <div>
+              <span class="card-title">${group.name}</span>
+              <div class="text-xs text-muted mt-4">
+                Total: ${fmtMoney(totalBudget)} · Spent: ${fmtMoney(totalSpent)} · Remaining: ${fmtMoney(totalBudget-totalSpent)}
+              </div>
+            </div>
+            ${isAdmin ? `<button class="btn btn-outline btn-sm" onclick="showBudgetModal(0,'','','',0,${pid})">+ Add dept</button>` : ''}
+          </div>
+          <div class="card-body">
+            <div class="budget-bar-wrap mb-16"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
+            ${group.budgets.filter(b=>b.is_active).map(b => budgetCard(b, isAdmin)).join('')}
+            ${group.budgets.filter(b=>!b.is_active).length > 0 ? `
+              <div class="text-xs text-muted mt-8 mb-8">Archived departments</div>
+              ${group.budgets.filter(b=>!b.is_active).map(b => budgetCard(b, isAdmin)).join('')}` : ''}
+          </div>
+        </div>`;
+    }
+
+    // Org-level budgets
+    if (orgBudgets.length > 0) {
+      html += `
+        <div class="fw-600 mb-12" style="font-size:15px">Org-level budgets</div>
+        ${orgBudgets.filter(b=>b.is_active).map(b => budgetCard(b, isAdmin)).join('')}
+        ${orgBudgets.filter(b=>!b.is_active).length > 0 ? `<div class="text-xs text-muted mt-12 mb-8">Archived</div>${orgBudgets.filter(b=>!b.is_active).map(b=>budgetCard(b,isAdmin)).join('')}` : ''}`;
+    }
+
+    if (!html) html = `<div class="empty"><div class="empty-icon">💰</div><h3>No budgets yet</h3>${isAdmin?'<button class="btn btn-primary mt-16" onclick="showBudgetModal()">Create first budget</button>':''}</div>`;
+    document.getElementById('content').innerHTML = `<div class="section-sub">Track spend across productions and org areas</div>${html}`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
   }
 }
 
-function showBudgetModal(id,name='',area='',season='',total=0) {
+function showBudgetModal(id=0, name='', area='', season='', total=0, production_id=null) {
   const isEdit = !!id;
   const html = `
-    <div class="modal-header"><span class="modal-title">${isEdit?'Edit':'New'} budget</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-header"><span class="modal-title">${isEdit?'Edit':'New'} ${production_id?'department budget':'org budget'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <div class="form-group"><label class="form-label">Budget name <span class="req">*</span></label><input type="text" id="b-name" class="form-input" value="${name}" placeholder="e.g. Spring Musical 2025"></div>
+      <div class="form-group"><label class="form-label">Name <span class="req">*</span></label><input type="text" id="b-name" class="form-input" value="${name}" placeholder="e.g. Scenery & Props"></div>
       <div class="form-row">
-        <div class="form-group"><label class="form-label">Area / department</label><input type="text" id="b-area" class="form-input" value="${area}" placeholder="e.g. Production, Marketing"></div>
+        <div class="form-group"><label class="form-label">Area / type</label><input type="text" id="b-area" class="form-input" value="${area}" placeholder="e.g. Props, Costumes, Technical"></div>
         <div class="form-group"><label class="form-label">Season</label><input type="text" id="b-season" class="form-input" value="${season}" placeholder="e.g. 2024-2025"></div>
       </div>
-      <div class="form-group"><label class="form-label">Total budget amount <span class="req">*</span></label><input type="number" id="b-total" class="form-input" value="${total||''}" placeholder="0.00" step="0.01"></div>
+      <div class="form-group"><label class="form-label">Total amount <span class="req">*</span></label><input type="number" id="b-total" class="form-input" value="${total||''}" placeholder="0.00" step="0.01"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveBudget(${id||0})">${isEdit?'Save changes':'Create budget'}</button>
+      <button class="btn btn-primary" onclick="saveBudget(${id},${production_id||'null'})">${isEdit?'Save changes':'Create'}</button>
     </div>`;
   showModal(html);
 }
 
-async function saveBudget(id) {
+async function saveBudget(id, production_id) {
   const data = {
     name: document.getElementById('b-name').value.trim(),
     area: document.getElementById('b-area').value.trim(),
     season: document.getElementById('b-season').value.trim(),
-    total_amount: parseFloat(document.getElementById('b-total').value)
+    total_amount: parseFloat(document.getElementById('b-total').value),
+    production_id: production_id || null
   };
   if (!data.name || !data.total_amount) { toast('Name and amount are required', 'error'); return; }
   try {
@@ -1312,7 +1438,161 @@ async function restoreBudget(id) {
   await loadBudgets(); renderBudgets(); toast('Budget restored!', 'success');
 }
 
-// ── Users ─────────────────────────────────────────────────────────────────────
+// ── Productions ───────────────────────────────────────────────────────────────
+async function renderProductions() {
+  document.getElementById('tb-actions').innerHTML = currentUser.role === 'admin'
+    ? `<button class="btn btn-primary btn-sm" onclick="showProductionModal()">+ New production</button>` : '';
+  try {
+    const prods = await api('GET', '/productions');
+    const allUsers = currentUser.role === 'admin' ? await api('GET', '/users') : [];
+
+    if (prods.length === 0) {
+      document.getElementById('content').innerHTML = `
+        <div class="empty"><div class="empty-icon">🎭</div><h3>No productions yet</h3>
+        ${currentUser.role==='admin'?'<button class="btn btn-primary mt-16" onclick="showProductionModal()">Create first production</button>':''}
+        </div>`;
+      return;
+    }
+
+    document.getElementById('content').innerHTML = prods.map(p => {
+      const totalBudget = p.budgets.reduce((s,b)=>s+b.total_amount,0);
+      const totalSpent  = p.total_spent||0;
+      const pct = totalBudget>0 ? Math.min(100,(totalSpent/totalBudget)*100) : 0;
+      const producers = p.members.filter(m=>m.member_role==='producer');
+      const members   = p.members.filter(m=>m.member_role==='member');
+      const canManage = currentUser.role==='admin' || p.i_am_producer;
+
+      return `<div class="card mb-16">
+        <div class="card-header">
+          <div>
+            <span class="card-title">${p.name}</span>
+            <div class="flex gap-8 mt-4 flex-wrap">
+              <span class="badge ${p.status==='active'?'badge-approved':'badge-denied'}">${p.status}</span>
+              <span class="text-xs text-muted">${p.season}</span>
+            </div>
+          </div>
+          ${canManage ? `<button class="btn btn-outline btn-sm" onclick="showProductionDetail(${p.id})">Manage</button>` : ''}
+        </div>
+        <div class="card-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+            <div>
+              <div class="text-xs text-muted mb-8">Budget</div>
+              <div class="fw-600" style="font-size:18px">${fmtMoney(totalBudget)}</div>
+              <div class="text-xs text-muted">Spent: ${fmtMoney(totalSpent)} · Remaining: ${fmtMoney(totalBudget-totalSpent)}</div>
+              <div class="budget-bar-wrap mt-8"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
+              ${p.budgets.length > 0 ? `
+                <div class="mt-12">
+                  ${p.budgets.map(b => {
+                    const bp = b.total_amount>0?Math.min(100,(b.spent/b.total_amount)*100):0;
+                    return `<div class="flex flex-center gap-8 mb-6 text-xs">
+                      <span style="width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.name}</span>
+                      <div class="budget-bar-wrap" style="flex:1;height:4px"><div class="budget-bar-fill" style="width:${bp}%;height:4px"></div></div>
+                      <span class="text-muted">${fmtMoney(b.total_amount-b.spent)}</span>
+                    </div>`;
+                  }).join('')}
+                </div>` : '<div class="text-xs text-muted mt-8">No department budgets set up</div>'}
+            </div>
+            <div>
+              <div class="text-xs text-muted mb-8">Team</div>
+              ${producers.map(m=>`<div class="flex flex-center gap-8 mb-8">
+                <div style="width:28px;height:28px;border-radius:50%;background:var(--teal3);color:var(--teal);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
+                <div><div class="text-sm fw-600">${m.name}</div><div class="text-xs text-muted">Producer</div></div>
+                ${canManage&&currentUser.role==='admin'?`<button class="btn btn-danger btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" onclick="removeMember(${p.id},${m.id})">×</button>`:''}
+              </div>`).join('')}
+              ${members.map(m=>`<div class="flex flex-center gap-8 mb-6">
+                <div style="width:24px;height:24px;border-radius:50%;background:var(--cream2);color:var(--ink3);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
+                <div class="text-sm">${m.name}</div>
+                ${canManage?`<button class="btn btn-danger btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" onclick="removeMember(${p.id},${m.id})">×</button>`:''}
+              </div>`).join('')}
+              ${canManage ? `<button class="btn btn-outline btn-sm mt-8" onclick="showAddMemberModal(${p.id},${JSON.stringify(allUsers).replace(/"/g,'&quot;')})">+ Add member</button>` : ''}
+            </div>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+function showProductionModal() {
+  const html = `
+    <div class="modal-header"><span class="modal-title">New production</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Production name <span class="req">*</span></label><input type="text" id="p-name" class="form-input" placeholder="e.g. Rock of Ages"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Season <span class="req">*</span></label><input type="text" id="p-season" class="form-input" placeholder="e.g. 2024-2025"></div>
+        <div class="form-group"><label class="form-label">Total budget</label><input type="number" id="p-budget" class="form-input" placeholder="0.00" step="0.01"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Description</label><textarea id="p-desc" class="form-textarea" placeholder="Brief description of this production"></textarea></div>
+      <div id="p-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createProduction()">Create production</button>
+    </div>`;
+  showModal(html);
+}
+
+async function createProduction() {
+  const name   = document.getElementById('p-name').value.trim();
+  const season = document.getElementById('p-season').value.trim();
+  const budget = parseFloat(document.getElementById('p-budget').value||0);
+  const desc   = document.getElementById('p-desc').value.trim();
+  const errEl  = document.getElementById('p-error');
+  errEl.classList.add('hidden');
+  if (!name || !season) { errEl.textContent='Name and season required'; errEl.classList.remove('hidden'); return; }
+  try {
+    await api('POST', '/productions', {name, season, description:desc, total_budget:budget});
+    toast('Production created!', 'success');
+    closeModal();
+    await loadBudgets();
+    renderProductions();
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+function showAddMemberModal(pid, users) {
+  const opts = users.map(u=>`<option value="${u.id}">${u.name} (${u.email})</option>`).join('');
+  const html = `
+    <div class="modal-header"><span class="modal-title">Add team member</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Volunteer</label><select id="add-member-user" class="form-select">${opts}</select></div>
+      <div class="form-group"><label class="form-label">Role</label>
+        <select id="add-member-role" class="form-select">
+          <option value="member">Member</option>
+          <option value="producer">Producer</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doAddMember(${pid})">Add to production</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doAddMember(pid) {
+  const user_id     = parseInt(document.getElementById('add-member-user').value);
+  const member_role = document.getElementById('add-member-role').value;
+  try {
+    await api('POST', `/productions/${pid}/members`, {user_id, member_role});
+    toast('Member added!', 'success');
+    closeModal();
+    renderProductions();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeMember(pid, uid) {
+  try {
+    await api('DELETE', `/productions/${pid}/members/${uid}`);
+    toast('Member removed.', 'info');
+    renderProductions();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function showProductionDetail(pid) {
+  nav('productions');
+}
 async function renderUsers() {
   document.getElementById('tb-actions').innerHTML = currentUser.role === 'admin'
     ? `<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add volunteer</button>` : '';
