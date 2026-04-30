@@ -115,7 +115,7 @@ img{max-width:100%}
 .badge-approved{background:var(--green-bg);color:var(--green)}
 .badge-denied{background:var(--red-bg);color:var(--red)}
 .badge-reimbursed{background:var(--teal3);color:var(--teal)}
-.badge-emergency{background:#fff0e0;color:#a05c10;border:1px solid #f5cc90}
+.badge-sap{background:#fff0e0;color:#a05c10;border:1px solid #f5cc90}
 .badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
 
 /* ── Tables ─────────────────────────────────────────────────────────── */
@@ -567,7 +567,8 @@ function showApp() {
   document.getElementById('sb-name').textContent = currentUser.name;
   document.getElementById('sb-role').textContent = currentUser.role;
   const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
-  document.getElementById('sb-admin-section').style.display = isAdmin ? '' : 'none';
+  const isProducer = currentUser.role === 'producer' || isAdmin;
+  document.getElementById('sb-admin-section').style.display = isProducer ? '' : 'none';
   document.getElementById('sb-training-admin').style.display = currentUser.role === 'admin' ? '' : 'none';
   loadBudgets();
   refreshBadges();
@@ -640,7 +641,7 @@ async function loadBudgets() {
 }
 
 // ── Status helpers ──────────────────────────────────────────────────────────
-function statusBadge(status, isEmergency) {
+function statusBadge(status, isSAP) {
   const map = {
     pending_producer:  ['badge-pending', 'Awaiting producer'],
     pending_treasurer: ['badge-treasurer', 'Awaiting treasurer'],
@@ -650,7 +651,7 @@ function statusBadge(status, isEmergency) {
     reimbursed:        ['badge-reimbursed', 'Reimbursed']
   };
   const [cls, label] = map[status] || ['badge-pending', status];
-  const emerg = isEmergency ? '<span class="badge badge-emergency ml-4">Emergency</span>' : '';
+  const emerg = isSAP ? '<span class="badge badge-sap ml-4">SAP</span>' : '';
   return `<span class="badge ${cls}"><span class="badge-dot"></span>${label}</span>${emerg}`;
 }
 
@@ -680,7 +681,7 @@ async function renderDashboard() {
           <div class="stat-card"><div class="stat-label">Awaiting president</div><div class="stat-value">${stats.pending_president||0}</div></div>
           <div class="stat-card teal"><div class="stat-label">Pending reimbursement</div><div class="stat-value">${stats.pending_reimburse||0}</div></div>
           <div class="stat-card green"><div class="stat-label">Total approved spend</div><div class="stat-value">${fmtMoney(stats.total_spent||0)}</div></div>
-          <div class="stat-card"><div class="stat-label">Emergency purchases</div><div class="stat-value">${stats.emergency_count||0}</div></div>
+          <div class="stat-card"><div class="stat-label">Self-Authorized Purchase (SAP)s</div><div class="stat-value">${stats.emergency_count||0}</div></div>
         </div>`;
     } else {
       statsHtml = `
@@ -712,7 +713,7 @@ async function renderDashboard() {
             <td>${fmtMoney(r.estimated_cost)}</td>
             <td class="td-muted">${r.budget_name||'—'}</td>
             <td class="td-muted">${fmtDate(r.submitted_at)}</td>
-            <td>${statusBadge(r.status, r.is_emergency)}</td>
+            <td>${statusBadge(r.status, r.is_sap)}</td>
           </tr>`).join('')}
         </tbody></table></div>`;
 
@@ -777,7 +778,7 @@ async function renderMyRequests() {
               <td><div class="fw-600">${r.title}</div><div class="text-xs text-muted">${r.vendor||''}</div></td>
               <td>${fmtMoney(r.estimated_cost)}</td>
               <td class="td-muted">${r.budget_name||'—'}</td>
-              <td>${r.is_emergency ? '<span class="badge badge-emergency">Emergency</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
+              <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
               <td class="td-muted">${fmtDate(r.submitted_at)}</td>
               <td>${statusBadge(r.status, false)}</td>
               <td><button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">View</button></td>
@@ -822,17 +823,17 @@ async function renderNewRequest() {
         <div class="card-body">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             <label style="display:block;cursor:pointer">
-              <input type="radio" name="req-type" value="pre" checked onchange="toggleEmergency(false)" style="display:none">
+              <input type="radio" name="req-type" value="pre" checked onchange="toggleSAP(false)" style="display:none">
               <div id="type-pre" style="border:2px solid var(--teal);border-radius:var(--r);padding:14px;background:var(--teal3)">
                 <div class="fw-600 text-sm">Pre-approval request</div>
                 <div class="text-xs text-muted mt-4">Submit before buying. Wait for approval.</div>
               </div>
             </label>
             <label style="display:block;cursor:pointer">
-              <input type="radio" name="req-type" value="emergency" onchange="toggleEmergency(true)" style="display:none">
-              <div id="type-emerg" style="border:2px solid var(--border);border-radius:var(--r);padding:14px">
-                <div class="fw-600 text-sm">Emergency purchase</div>
-                <div class="text-xs text-muted mt-4">Already bought — thrift store, time-sensitive.</div>
+              <input type="radio" name="req-type" value="emergency" onchange="toggleSAP(true)" style="display:none">
+              <div id="type-sap" style="border:2px solid var(--border);border-radius:var(--r);padding:14px">
+                <div class="fw-600 text-sm">SAP — Self-Authorized Purchase</div>
+                <div class="text-xs text-muted mt-4">Already bought without prior approval.</div>
               </div>
             </label>
           </div>
@@ -852,8 +853,34 @@ async function renderNewRequest() {
               <input type="number" id="req-cost" class="form-input" placeholder="0.00" min="0" step="0.01">
             </div>
             <div class="form-group">
-              <label class="form-label">Vendor / store</label>
-              <input type="text" id="req-vendor" class="form-input" placeholder="e.g. Home Depot, Amazon">
+          <div class="form-group">
+            <label class="form-label">Purchase method <span class="req">*</span></label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
+              <label style="display:block;cursor:pointer">
+                <input type="radio" name="purchase-method" value="in_store" checked onchange="togglePurchaseMethod('in_store')" style="display:none">
+                <div id="method-store" style="border:2px solid var(--teal);border-radius:var(--r);padding:10px 12px;background:var(--teal3)">
+                  <div class="fw-600 text-sm">🏪 In-store / in-person</div>
+                  <div class="text-xs text-muted mt-2">At a physical store or vendor</div>
+                </div>
+              </label>
+              <label style="display:block;cursor:pointer">
+                <input type="radio" name="purchase-method" value="online" onchange="togglePurchaseMethod('online')" style="display:none">
+                <div id="method-online" style="border:2px solid var(--border);border-radius:var(--r);padding:10px 12px">
+                  <div class="fw-600 text-sm">🌐 Online purchase</div>
+                  <div class="text-xs text-muted mt-2">Ordering from a website</div>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div id="vendor-field" class="form-group">
+            <label class="form-label">Store / vendor name</label>
+            <input type="text" id="req-vendor" class="form-input" placeholder="e.g. Home Depot, Joann Fabrics">
+          </div>
+          <div id="url-field" class="form-group hidden">
+            <label class="form-label">Link to item <span class="req">*</span></label>
+            <input type="url" id="req-item-url" class="form-input" placeholder="https://www.amazon.com/...">
+            <div class="form-hint">Paste the direct product URL so approvers can review the item</div>
+          </div>
             </div>
           </div>
 
@@ -880,12 +907,12 @@ async function renderNewRequest() {
             <label class="form-label">Description / notes</label>
             <textarea id="req-desc" class="form-textarea" placeholder="Why is this needed? Any additional context..."></textarea>
           </div>
-          <div id="emergency-field" class="form-group hidden">
-            <label class="form-label">Why was this an emergency purchase? <span class="req">*</span></label>
-            <textarea id="req-emergency-reason" class="form-textarea" placeholder="Explain why this could not wait for pre-approval..."></textarea>
+          <div id="sap-field" class="form-group hidden">
+            <label class="form-label">Why was this an self-authorized purchase (SAP)? <span class="req">*</span></label>
+            <textarea id="req-sap-reason" class="form-textarea" placeholder="Explain why this could not wait for pre-approval..."></textarea>
           </div>
-          <div id="emergency-upload" class="hidden">
-            <label class="form-label">Receipt (required for emergency purchases)</label>
+          <div id="sap-upload" class="hidden">
+            <label class="form-label">Receipt (required for self-authorized purchase (SAP)s)</label>
             <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()">
               <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto;opacity:.5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
               <p>Click to upload receipt photo or PDF</p>
@@ -952,43 +979,61 @@ function handleNewFileSelect(input) {
   prev.innerHTML = `<div class="flex flex-center gap-8 mt-8"><span class="badge badge-approved">✓ ${newReceiptFile.name}</span></div>`;
 }
 
-function toggleEmergency(isEmergency) {
-  document.getElementById('emergency-field').classList.toggle('hidden', !isEmergency);
-  document.getElementById('emergency-upload').classList.toggle('hidden', !isEmergency);
-  document.getElementById('type-pre').style.border = isEmergency ? '2px solid var(--border)' : '2px solid var(--teal)';
-  document.getElementById('type-pre').style.background = isEmergency ? '' : 'var(--teal3)';
-  document.getElementById('type-emerg').style.border = isEmergency ? '2px solid var(--amber)' : '2px solid var(--border)';
-  document.getElementById('type-emerg').style.background = isEmergency ? 'var(--amber-bg)' : '';
+function toggleSAP(isSAP) {
+  document.getElementById('sap-field').classList.toggle('hidden', !isSAP);
+  document.getElementById('sap-upload').classList.toggle('hidden', !isSAP);
+  document.getElementById('type-pre').style.border = isSAP ? '2px solid var(--border)' : '2px solid var(--teal)';
+  document.getElementById('type-pre').style.background = isSAP ? '' : 'var(--teal3)';
+  document.getElementById('type-sap').style.border = isSAP ? '2px solid var(--amber)' : '2px solid var(--border)';
+  document.getElementById('type-sap').style.background = isSAP ? 'var(--amber-bg)' : '';
+}
+
+function togglePurchaseMethod(method) {
+  const isOnline = method === 'online';
+  document.getElementById('vendor-field').classList.toggle('hidden', isOnline);
+  document.getElementById('url-field').classList.toggle('hidden', !isOnline);
+  document.getElementById('method-store').style.border = isOnline ? '2px solid var(--border)' : '2px solid var(--teal)';
+  document.getElementById('method-store').style.background = isOnline ? '' : 'var(--teal3)';
+  document.getElementById('method-online').style.border = isOnline ? '2px solid var(--teal)' : '2px solid var(--border)';
+  document.getElementById('method-online').style.background = isOnline ? 'var(--teal3)' : '';
 }
 
 async function submitRequest() {
-  const title = document.getElementById('req-title').value.trim();
-  const cost  = document.getElementById('req-cost').value;
+  const title  = document.getElementById('req-title').value.trim();
+  const cost   = document.getElementById('req-cost').value;
   const budget = document.getElementById('req-budget').value;
-  const desc  = document.getElementById('req-desc').value.trim();
-  const vendor = document.getElementById('req-vendor').value.trim();
-  const isEmergency = document.querySelector('input[name="req-type"]:checked').value === 'emergency';
-  const emergencyReason = document.getElementById('req-emergency-reason')?.value.trim() || '';
-  const prodEl = document.getElementById('req-production');
-  const prodId = prodEl ? prodEl.value : null;
-  const errEl = document.getElementById('req-error');
+  const desc   = document.getElementById('req-desc').value.trim();
+  const isSAP  = document.querySelector('input[name="req-type"]:checked').value === 'sap';
+  const sapReason = document.getElementById('req-sap-reason')?.value.trim() || '';
+  const method = document.querySelector('input[name="purchase-method"]:checked')?.value || 'in_store';
+  const vendor  = method === 'in_store' ? (document.getElementById('req-vendor')?.value.trim() || '') : '';
+  const itemUrl = method === 'online'   ? (document.getElementById('req-item-url')?.value.trim() || '') : '';
+  const prodEl  = document.getElementById('req-production');
+  const prodId  = prodEl ? prodEl.value : null;
+  const errEl   = document.getElementById('req-error');
   errEl.classList.add('hidden');
+
   if (!title || !cost || !budget) {
     errEl.textContent = 'Please fill in all required fields.'; errEl.classList.remove('hidden'); return;
   }
-  if (isEmergency && !emergencyReason) {
-    errEl.textContent = 'Please explain why this was an emergency purchase.'; errEl.classList.remove('hidden'); return;
+  if (isSAP && !sapReason) {
+    errEl.textContent = 'Please explain why prior approval was not possible.'; errEl.classList.remove('hidden'); return;
+  }
+  if (method === 'online' && !itemUrl) {
+    errEl.textContent = 'Please provide a link to the item for online purchases.'; errEl.classList.remove('hidden'); return;
   }
   try {
     const d = await api('POST', '/requests', {
       title, description:desc, vendor,
-      estimated_cost:parseFloat(cost),
-      budget_id:parseInt(budget),
+      estimated_cost: parseFloat(cost),
+      budget_id: parseInt(budget),
       production_id: prodId ? parseInt(prodId) : null,
-      is_emergency:isEmergency,
-      emergency_reason:emergencyReason
+      is_sap: isSAP,
+      sap_reason: sapReason,
+      purchase_method: method,
+      item_url: itemUrl
     });
-    if (isEmergency && newReceiptFile) {
+    if (isSAP && newReceiptFile) {
       const fd = new FormData();
       fd.append('file', newReceiptFile);
       await api('POST', `/requests/${d.id}/receipts`, fd, true);
@@ -1050,17 +1095,18 @@ async function showRequestDetail(rid) {
       <button class="modal-close" onclick="closeModal()">×</button>
     </div>
     <div class="modal-body">
-      <div class="flex gap-8 mb-16 flex-wrap">${statusBadge(r.status, r.is_emergency)}</div>
+      <div class="flex gap-8 mb-16 flex-wrap">${statusBadge(r.status, r.is_sap)}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
         <div><div class="text-xs text-muted">Submitted by</div><div class="fw-600 text-sm mt-4">${r.submitter_name}</div></div>
         <div><div class="text-xs text-muted">Date</div><div class="fw-600 text-sm mt-4">${fmtDate(r.submitted_at)}</div></div>
         <div><div class="text-xs text-muted">Estimated cost</div><div class="fw-600 text-sm mt-4">${fmtMoney(r.estimated_cost)}</div></div>
-        <div><div class="text-xs text-muted">Vendor</div><div class="fw-600 text-sm mt-4">${r.vendor||'—'}</div></div>
+        <div><div class="text-xs text-muted">Purchase method</div><div class="fw-600 text-sm mt-4">${r.purchase_method==='online'?'🌐 Online':'🏪 In-store'}${r.vendor?' — '+r.vendor:''}</div></div>
         <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div></div>
-        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.is_emergency ? 'Emergency' : 'Pre-approval'}</div></div>
+        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.is_sap ? 'SAP — Self-Authorized' : 'Pre-approval'}</div></div>
       </div>
+      ${r.item_url ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Item link</div><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:13px;color:var(--teal);word-break:break-all">${r.item_url}</a></div>` : ''}
       ${r.description ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Description</div><div class="text-sm">${r.description}</div></div>` : ''}
-      ${r.emergency_reason ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Emergency reason</div><div class="text-sm" style="color:var(--amber)">${r.emergency_reason}</div></div>` : ''}
+      ${r.sap_reason ? `<div class="mb-16"><div class="text-xs text-muted mb-4">SAP reason</div><div class="text-sm" style="color:var(--amber)">${r.sap_reason}</div></div>` : ''}
       ${r.treasurer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Treasurer note</div><div class="text-sm">${r.treasurer_note}</div></div>` : ''}
       ${r.president_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">President note</div><div class="text-sm">${r.president_note}</div></div>` : ''}
       <hr class="divider">
@@ -1135,7 +1181,7 @@ async function renderApprovals() {
           return `<div class="card">
             <div class="card-body">
               <div class="flex flex-center gap-8 mb-12">
-                ${statusBadge(r.status, r.is_emergency)}
+                ${statusBadge(r.status, r.is_sap)}
                 ${r.production_name ? `<span class="badge badge-treasurer">${r.production_name}</span>` : '<span class="text-xs text-muted">Org-level</span>'}
                 <span class="text-xs text-muted" style="margin-left:auto">${fmtDate(r.submitted_at)}</span>
               </div>
@@ -1150,7 +1196,8 @@ async function renderApprovals() {
                 </div>
               </div>
               ${r.description ? `<div class="text-sm text-muted mb-8">${r.description}</div>` : ''}
-              ${r.emergency_reason ? `<div class="text-sm mb-8" style="color:var(--amber);background:var(--amber-bg);padding:8px 10px;border-radius:var(--r-sm)">Emergency: ${r.emergency_reason}</div>` : ''}
+              ${r.item_url ? `<div class="mb-8"><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:12px;color:var(--teal)">🌐 View item →</a></div>` : ''}
+              ${r.sap_reason ? `<div class="text-sm mb-8" style="color:var(--amber);background:var(--amber-bg);padding:8px 10px;border-radius:var(--r-sm)">SAP reason: ${r.sap_reason}</div>` : ''}
               ${r.producer_note ? `<div class="text-xs text-muted mb-4">Producer note: ${r.producer_note}</div>` : ''}
               ${r.budget_name ? `<div class="mb-8">
                 <div class="flex flex-center gap-8">
@@ -1222,7 +1269,7 @@ async function renderAllRequests() {
                 <td class="td-muted">${r.submitter_name}</td>
                 <td>${fmtMoney(r.estimated_cost)}</td>
                 <td class="td-muted">${r.budget_name||'—'}</td>
-                <td>${r.is_emergency ? '<span class="badge badge-emergency">Emergency</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
+                <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
                 <td class="td-muted">${fmtDate(r.submitted_at)}</td>
                 <td>${statusBadge(r.status, false)}</td>
                 <td><button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">View</button></td>
@@ -1261,7 +1308,7 @@ async function renderReimbursements() {
             <tbody>${pending.map(r => `
               <tr>
                 <td><div class="fw-600">${r.user_name}</div><div class="text-xs text-muted">${r.user_email}</div></td>
-                <td>${r.title}${r.is_emergency ? ' <span class="badge badge-emergency" style="font-size:10px">Emergency</span>':''}</td>
+                <td>${r.title}${r.is_sap ? ' <span class="badge badge-sap" style="font-size:10px">SAP</span>':''}</td>
                 <td class="fw-600">${fmtMoney(r.amount)}</td>
                 <td class="td-muted">${fmtDate(r.created_at)}</td>
                 ${isAdmin ? `<td><button class="btn btn-approve btn-sm" onclick="showPayModal(${r.id}, '${r.user_name}', ${r.amount})">Mark paid</button></td>` : ''}
@@ -2066,6 +2113,7 @@ function showAddUserModal() {
         <div class="form-group"><label class="form-label">Role</label>
           <select id="new-role" class="form-select">
             <option value="volunteer">Volunteer</option>
+            <option value="producer">Producer</option>
             <option value="treasurer">Treasurer</option>
             <option value="president">President</option>
             <option value="admin">Admin</option>
