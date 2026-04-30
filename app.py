@@ -6,8 +6,8 @@ import hashlib
 import os
 import json
 from datetime import datetime
+import secrets
 import cloudinary
-import cloudinary.uploader
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -142,6 +142,7 @@ def init_db():
         ("bb_users",             "is_active",         "INTEGER DEFAULT 1"),
         ("bb_purchase_requests", "purchase_method",   "TEXT DEFAULT 'in_store'"),
         ("bb_purchase_requests", "item_url",          "TEXT"),
+        ("bb_users",             "receipt_token",     "TEXT"),
     ]
     for table, column, col_type in migrations:
         c.execute("""SELECT COUNT(*) AS n FROM information_schema.columns
@@ -481,7 +482,7 @@ def list_productions():
 
 @app.route('/api/productions', methods=['POST'])
 def create_production():
-    err = require_auth(['admin'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     data = request.json
     name,season = data.get('name','').strip(), data.get('season','').strip()
@@ -537,7 +538,7 @@ def remove_production_member(pid, uid):
 
 @app.route('/api/productions/<int:pid>/members/<int:uid>/role', methods=['PATCH'])
 def update_member_role(pid, uid):
-    err = require_auth(['admin'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     data = request.json
     conn = get_db()
@@ -737,7 +738,7 @@ def approve_request(rid):
     new_status = req['status']
 
     if req['status'] == 'pending_producer':
-        if u['role'] not in ('admin',) and not is_producer_of(u['id'], req['production_id']):
+        if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], req['production_id']):
             conn.close(); return jsonify({'error':'Only the production producer can act here'}),403
         if action == 'approve':
             new_status = 'pending_treasurer'
@@ -920,7 +921,7 @@ def complete_training():
 
 @app.route('/api/training/slides/update', methods=['POST'])
 def update_slides():
-    err = require_auth(['admin'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     conn = get_db()
     conn.execute('UPDATE bb_training_modules SET slides=%s WHERE is_active=1',(json.dumps(request.json.get('slides',[])),))
@@ -928,7 +929,7 @@ def update_slides():
 
 @app.route('/api/training/slides', methods=['POST'])
 def upload_slide():
-    err = require_auth(['admin'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     if 'file' not in request.files: return jsonify({'error':'No file'}),400
     if not cloudinary.config().cloud_name: return jsonify({'error':'Cloudinary not configured'}),500
@@ -940,7 +941,7 @@ def upload_slide():
 
 @app.route('/api/training', methods=['PUT'])
 def update_training():
-    err = require_auth(['admin'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     data = request.json
     conn = get_db()
@@ -997,6 +998,125 @@ def audit_log():
                            ORDER BY a.created_at DESC LIMIT 100''').fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
+
+# ─── Receipt token / mobile receipt link ─────────────────────────────────────
+def ensure_receipt_token(user_id):
+    """Generate a receipt token for user if they don't have one yet."""
+    conn = get_db()
+    u = conn.execute('SELECT receipt_token FROM bb_users WHERE id=%s',(user_id,)).fetchone()
+    if not u or not u['receipt_token']:
+        token = secrets.token_urlsafe(24)
+        conn.execute('UPDATE bb_users SET receipt_token=%s WHERE id=%s',(token, user_id))
+        conn.commit()
+        conn.close()
+        return token
+    conn.close()
+    return u['receipt_token']
+
+@app.route('/api/users/<int:uid>/receipt-token', methods=['GET'])
+def get_receipt_token(uid):
+    err = require_auth(['admin','treasurer','president'])
+    if err: return err
+    token = ensure_receipt_token(uid)
+    link = f"{APP_URL}/receipt/{token}"
+    return jsonify({'token': token, 'link': link})
+
+@app.route('/api/users/<int:uid>/receipt-token/regenerate', methods=['POST'])
+def regenerate_receipt_token(uid):
+    err = require_auth(['admin','treasurer','president'])
+    if err: return err
+    token = secrets.token_urlsafe(24)
+    conn = get_db()
+    conn.execute('UPDATE bb_users SET receipt_token=%s WHERE id=%s',(token, uid))
+    conn.commit(); conn.close()
+    link = f"{APP_URL}/receipt/{token}"
+    return jsonify({'token': token, 'link': link})
+
+@app.route('/api/receipt/<token>', methods=['GET'])
+def get_receipt_page_data(token):
+    """Public endpoint — returns user info and open requests for the receipt submission page."""
+    conn = get_db()
+    u = conn.execute('SELECT id,name,email FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    if not u:
+        conn.close()
+        return jsonify({'error': 'Invalid or expired link'}), 404
+    u = dict(u)
+    # Open requests: pending or approved but not yet reimbursed
+    requests = conn.execute('''SELECT id,title,estimated_cost,actual_cost,status,type,vendor,submitted_at
+                                FROM bb_purchase_requests
+                                WHERE submitted_by=%s
+                                AND status NOT IN ('denied','reimbursed')
+                                ORDER BY submitted_at DESC''', (u['id'],)).fetchall()
+    conn.close()
+    return jsonify({'user': u, 'requests': [dict(r) for r in requests]})
+
+@app.route('/api/receipt/<token>/submit', methods=['POST'])
+def submit_receipt_mobile(token):
+    """Public endpoint — upload a receipt photo from the mobile receipt page."""
+    conn = get_db()
+    u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    if not u:
+        conn.close()
+        return jsonify({'error': 'Invalid or expired link'}), 404
+    u = dict(u)
+
+    request_id = request.form.get('request_id')
+    note       = request.form.get('note', '')
+    actual     = request.form.get('actual_cost', '')
+
+    if not request_id:
+        return jsonify({'error': 'No request selected'}), 400
+
+    # Verify request belongs to this user
+    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s AND submitted_by=%s',
+                       (request_id, u['id'])).fetchone()
+    if not req:
+        conn.close()
+        return jsonify({'error': 'Request not found'}), 404
+
+    # Upload receipt if provided
+    image_url = None
+    if 'file' in request.files and request.files['file'].filename:
+        if not cloudinary.config().cloud_name:
+            conn.close()
+            return jsonify({'error': 'File upload not configured'}), 500
+        try:
+            result = cloudinary.uploader.upload(
+                request.files['file'],
+                folder='bloombooks/receipts',
+                resource_type='auto'
+            )
+            image_url = result['secure_url']
+            conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
+                         (request_id, image_url, result['public_id']))
+        except Exception as e:
+            conn.close()
+            return jsonify({'error': f'Upload failed: {str(e)}'}), 500
+
+    # Update actual cost if provided
+    if actual:
+        try:
+            conn.execute('UPDATE bb_purchase_requests SET actual_cost=%s WHERE id=%s',
+                         (float(actual), request_id))
+        except Exception:
+            pass
+
+    # Add note to description if provided
+    if note:
+        existing = req['description'] or ''
+        new_desc = f"{existing}\n\n[Receipt note]: {note}".strip()
+        conn.execute('UPDATE bb_purchase_requests SET description=%s WHERE id=%s',
+                     (new_desc, request_id))
+
+    conn.commit()
+    log_action(u['id'], 'mobile_receipt_upload', 'request', int(request_id), f'via mobile link')
+    conn.close()
+    return jsonify({'ok': True, 'image_url': image_url})
+
+@app.route('/receipt/<token>')
+def mobile_receipt_page(token):
+    """Serve the mobile receipt submission page."""
+    return send_from_directory(app.static_folder, 'receipt.html')
 
 # ─── Error handlers & boot ────────────────────────────────────────────────────
 @app.errorhandler(404)
