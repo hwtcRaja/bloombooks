@@ -877,8 +877,13 @@ _db_ready = False
 def ensure_db():
     global _db_ready
     if not _db_ready:
-        init_db()
-        _db_ready = True
+        try:
+            init_db()
+            _db_ready = True
+        except Exception as e:
+            print(f"[INIT_DB ERROR] {e}")
+            # Don't set _db_ready=True so it retries next request
+            # But do let the request proceed so the error is visible
 
 @app.route('/', defaults={'path':''})
 @app.route('/<path:path>')
