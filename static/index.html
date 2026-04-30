@@ -1395,13 +1395,23 @@ async function renderBudgets() {
             </div>
           </div>
           <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div></div>
-          <div class="flex flex-center gap-8 mt-6">
+          <div class="flex flex-center gap-8 mt-8">
             <span class="text-xs text-muted">Spent: ${fmtMoney(b.spent)} · ${Math.round(pct)}%</span>
-            ${canEdit ? `<button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:11px;padding:3px 8px" onclick="showBudgetModal(${b.id},'${b.name.replace(/'/g,"\\'")}','${b.area}','${b.season}',${b.total_amount})">Edit</button>` : ''}
+            ${canEdit ? `
+              <div class="flex gap-6" style="margin-left:auto">
+                <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px"
+                  onclick="showBudgetModal(${b.id},'${b.name.replace(/'/g,"\\'")}','${b.area}','${b.season}',${b.total_amount})">Edit</button>
+                ${b.is_active
+                  ? `<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="archiveBudget(${b.id})">Archive</button>`
+                  : `<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="restoreBudget(${b.id})">Restore</button>`}
+                <button class="btn btn-danger btn-sm" style="font-size:11px;padding:3px 8px" onclick="confirmDeleteBudget(${b.id},'${b.name.replace(/'/g,"\\'")}')">Delete</button>
+              </div>` : ''}
           </div>
         </div>
       </div>`;
     };
+
+    const canEdit = ['admin','treasurer','president'].includes(currentUser.role);
 
     // Group by production
     const byProd = {};
@@ -1435,10 +1445,10 @@ async function renderBudgets() {
           </div>
           <div class="card-body">
             <div class="budget-bar-wrap mb-16"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
-            ${group.budgets.filter(b=>b.is_active).map(b => budgetCard(b, isAdmin)).join('')}
+            ${group.budgets.filter(b=>b.is_active).map(b => budgetCard(b, canEdit)).join('')}
             ${group.budgets.filter(b=>!b.is_active).length > 0 ? `
               <div class="text-xs text-muted mt-8 mb-8">Archived departments</div>
-              ${group.budgets.filter(b=>!b.is_active).map(b => budgetCard(b, isAdmin)).join('')}` : ''}
+              ${group.budgets.filter(b=>!b.is_active).map(b => budgetCard(b, canEdit)).join('')}` : ''}
           </div>
         </div>`;
     }
@@ -1447,7 +1457,7 @@ async function renderBudgets() {
     if (orgBudgets.length > 0) {
       html += `
         <div class="fw-600 mb-12" style="font-size:15px">Org-level budgets</div>
-        ${orgBudgets.filter(b=>b.is_active).map(b => budgetCard(b, isAdmin)).join('')}
+        ${orgBudgets.filter(b=>b.is_active).map(b => budgetCard(b, canEdit)).join('')}
         ${orgBudgets.filter(b=>!b.is_active).length > 0 ? `<div class="text-xs text-muted mt-12 mb-8">Archived</div>${orgBudgets.filter(b=>!b.is_active).map(b=>budgetCard(b,isAdmin)).join('')}` : ''}`;
     }
 
@@ -1503,6 +1513,30 @@ async function archiveBudget(id) {
 async function restoreBudget(id) {
   await api('PATCH', `/budgets/${id}`, {is_active: 1});
   await loadBudgets(); renderBudgets(); toast('Budget restored!', 'success');
+}
+
+function confirmDeleteBudget(id, name) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Delete budget</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm">Are you sure you want to permanently delete <strong>${name}</strong>?</p>
+      <p class="text-sm mt-8" style="color:var(--red)">This cannot be undone. Any purchase requests linked to this budget will lose their budget reference.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="doDeleteBudget(${id})">Delete permanently</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doDeleteBudget(id) {
+  try {
+    await api('DELETE', `/budgets/${id}`);
+    toast('Budget deleted.', 'info');
+    closeModal();
+    await loadBudgets();
+    renderBudgets();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ── Productions ───────────────────────────────────────────────────────────────
