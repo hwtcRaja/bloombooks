@@ -494,12 +494,33 @@ async function doLogin() {
   const password = document.getElementById('login-password').value;
   const errEl = document.getElementById('login-error');
   errEl.classList.add('hidden');
+  if (!email || !password) {
+    errEl.textContent = 'Please enter your email and password.';
+    errEl.classList.remove('hidden');
+    return;
+  }
   try {
-    const d = await api('POST', '/auth/login', {email, password});
-    currentUser = d.user;
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email, password})
+    });
+    let data;
+    try { data = await r.json(); } catch(e) {
+      errEl.textContent = 'Server error — please try again in a moment.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    if (!r.ok) {
+      errEl.textContent = data.error || 'Invalid email or password.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    currentUser = data.user;
     showApp();
   } catch(e) {
-    errEl.textContent = e.message;
+    errEl.textContent = 'Could not reach the server. Please try again.';
     errEl.classList.remove('hidden');
   }
 }
