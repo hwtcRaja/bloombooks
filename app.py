@@ -118,6 +118,22 @@ def init_db():
         action TEXT NOT NULL, entity_type TEXT, entity_id INTEGER, detail TEXT,
         created_at TEXT DEFAULT (to_char(now(),'YYYY-MM-DD HH24:MI:SS')))''')
 
+    # ── Migrations — safely add columns that may not exist on older deployments ──
+    migrations = [
+        ("bb_budgets",           "production_id",       "INTEGER REFERENCES bb_productions(id)"),
+        ("bb_purchase_requests", "production_id",       "INTEGER REFERENCES bb_productions(id)"),
+        ("bb_purchase_requests", "producer_note",       "TEXT"),
+        ("bb_purchase_requests", "producer_acted_by",   "INTEGER REFERENCES bb_users(id)"),
+        ("bb_purchase_requests", "producer_acted_at",   "TEXT"),
+    ]
+    for table, column, col_def in migrations:
+        c.execute("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name=%s AND column_name=%s
+        """, (table, column))
+        if not c.fetchone():
+            c.execute(f'ALTER TABLE {table} ADD COLUMN {column} {col_def}')
+
     def hp(pw): return hashlib.sha256(pw.encode()).hexdigest()
     for u in [
         ('Admin User','admin@horizonwest.org',hp('admin123'),'admin',1),
