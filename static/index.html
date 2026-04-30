@@ -1614,7 +1614,8 @@ async function showProductionDetail(pid) {
   nav('productions');
 }
 async function renderUsers() {
-  document.getElementById('tb-actions').innerHTML = currentUser.role === 'admin'
+  const canManage = ['admin','treasurer','president'].includes(currentUser.role);
+  document.getElementById('tb-actions').innerHTML = canManage
     ? `<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add volunteer</button>` : '';
   try {
     const users = await api('GET', '/users');
@@ -1628,7 +1629,7 @@ async function renderUsers() {
               <td><div class="fw-600">${u.name}</div></td>
               <td class="td-muted">${u.email}</td>
               <td>
-                ${currentUser.role === 'admin' ? `
+                ${canManage ? `
                   <select class="form-select" style="font-size:12px;padding:4px 8px" onchange="updateUserRole(${u.id}, this.value)">
                     <option ${u.role==='volunteer'?'selected':''} value="volunteer">Volunteer</option>
                     <option ${u.role==='treasurer'?'selected':''} value="treasurer">Treasurer</option>
@@ -1639,14 +1640,12 @@ async function renderUsers() {
               <td>
                 ${u.training_complete
                   ? '<span class="badge badge-approved">✓ Complete</span>'
-                  : `<span class="badge badge-denied">Incomplete</span>${currentUser.role==='admin'?` <button class="btn btn-outline btn-sm" style="margin-left:6px" onclick="markTrained(${u.id})">Mark complete</button>`:''}`}
+                  : `<span class="badge badge-denied">Incomplete</span>${canManage ? ` <button class="btn btn-outline btn-sm" style="margin-left:6px" onclick="markTrained(${u.id})">Mark complete</button>` : ''}`}
               </td>
               <td class="td-muted">${fmtDate(u.created_at)}</td>
               <td>
-                ${currentUser.role === 'admin' ? `
-                  <div class="flex gap-8">
-                    <button class="btn btn-outline btn-sm" onclick="showResetPasswordModal(${u.id}, '${u.name.replace(/'/g,"\\'")}')">Reset password</button>
-                  </div>` : '—'}
+                ${canManage ? `
+                  <button class="btn btn-outline btn-sm" onclick="showResetPasswordModal(${u.id}, '${u.name.replace(/'/g,"\\'")}')">Reset password</button>` : '—'}
               </td>
             </tr>`).join('')}
           </tbody>
