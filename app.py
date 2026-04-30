@@ -140,6 +140,8 @@ def init_db():
         ("bb_purchase_requests", "producer_acted_by", "INTEGER"),
         ("bb_purchase_requests", "producer_acted_at", "TEXT"),
         ("bb_users",             "is_active",         "INTEGER DEFAULT 1"),
+        ("bb_purchase_requests", "purchase_method",   "TEXT DEFAULT 'in_store'"),
+        ("bb_purchase_requests", "item_url",          "TEXT"),
     ]
     for table, column, col_type in migrations:
         c.execute("""SELECT COUNT(*) AS n FROM information_schema.columns
@@ -214,10 +216,15 @@ def require_auth(roles=None):
     if roles and u['role'] not in roles: return jsonify({'error':'Insufficient permissions'}),403
     return None
 
+# Roles that have org-wide admin access
+ADMIN_ROLES = ('admin','treasurer','president')
+
 def is_producer_of(user_id, production_id):
+    """True if user is a producer of this production (either via global role+membership OR member_role=producer)."""
     conn = get_db()
-    r = conn.execute('SELECT id FROM bb_production_members WHERE user_id=%s AND production_id=%s AND member_role=%s',
-                     (user_id,production_id,'producer')).fetchone()
+    r = conn.execute('''SELECT id FROM bb_production_members
+                        WHERE user_id=%s AND production_id=%s
+                        AND (member_role='producer')''',(user_id, production_id)).fetchone()
     conn.close()
     return r is not None
 
@@ -405,7 +412,7 @@ def add_budget_member(bid):
     b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
     if not b: conn.close(); return jsonify({'error':'Budget not found'}),404
     b = dict(b)
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','producer'):
         if not b['production_id'] or not is_producer_of(u['id'],b['production_id']):
             conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     data = request.json
@@ -424,7 +431,7 @@ def remove_budget_member(bid, uid):
     b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
     if not b: conn.close(); return jsonify({'error':'Budget not found'}),404
     b = dict(b)
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','producer'):
         if not b['production_id'] or not is_producer_of(u['id'],b['production_id']):
             conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     conn.execute('DELETE FROM bb_budget_members WHERE budget_id=%s AND user_id=%s',(bid,uid))
@@ -438,10 +445,12 @@ def list_productions():
     u = current_user()
     conn = get_db()
     is_admin = u['role'] in ('admin','treasurer','president')
+    is_producer_role = u['role'] == 'producer'
 
     if is_admin:
         prods = conn.execute('SELECT * FROM bb_productions ORDER BY status,name').fetchall()
     else:
+        # volunteers, producers, and department owners all see only their assigned productions
         my_ids = user_production_ids(u['id'])
         if not my_ids:
             conn.close(); return jsonify([])
@@ -570,7 +579,7 @@ def create_budget():
     if not u: return jsonify({'error':'Not authenticated'}),401
     data = request.json
     prod_id = data.get('production_id')
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','producer'):
         if not prod_id or not is_producer_of(u['id'],int(prod_id)):
             return jsonify({'error':'Insufficient permissions'}),403
     conn = get_db()
@@ -586,7 +595,7 @@ def update_budget(bid):
     b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
     if not b: conn.close(); return jsonify({'error':'Not found'}),404
     b = dict(b)
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','producer'):
         if not b['production_id'] or not is_producer_of(u['id'],b['production_id']):
             conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     data = request.json
@@ -669,7 +678,10 @@ def create_request():
     if not u['training_complete'] and u['role'] == 'volunteer':
         return jsonify({'error':'Complete purchasing training first.'}),403
     data = request.json
-    is_emergency = 1 if data.get('is_emergency') else 0
+    is_sap = 1 if data.get('is_sap') else 0
+    req_type = 'sap' if is_sap else 'pre_approval'
+    purchase_method = data.get('purchase_method', 'in_store')  # 'online' or 'in_store'
+    item_url = data.get('item_url', '')
     prod_id = data.get('production_id')
     if prod_id and get_production_producers(int(prod_id)):
         status = 'pending_producer'
@@ -678,29 +690,36 @@ def create_request():
     conn = get_db()
     conn.execute('''INSERT INTO bb_purchase_requests
                     (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
-                     submitted_by,is_emergency,emergency_reason)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-                 ('emergency' if is_emergency else 'pre_approval', status,
+                     submitted_by,is_emergency,emergency_reason,purchase_method,item_url)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                 (req_type, status,
                   data['title'], data.get('description',''), data.get('vendor',''),
                   float(data['estimated_cost']), data.get('budget_id') or None,
-                  prod_id or None, u['id'], is_emergency, data.get('emergency_reason','')))
+                  prod_id or None, u['id'], is_sap, data.get('sap_reason',''),
+                  purchase_method, item_url))
     row = conn.execute('SELECT lastval() AS id').fetchone()
     req_id = row['id']
     conn.commit(); conn.close()
     log_action(u['id'],'submitted_request','request',req_id,data['title'])
+    type_label = 'SAP (Self-Authorized Purchase)' if is_sap else 'Pre-approval request'
+    method_label = f'Online — {item_url}' if purchase_method == 'online' and item_url else purchase_method.replace('_',' ').title()
     if status == 'pending_producer' and prod_id:
         for p in get_production_producers(int(prod_id)):
             send_email(p['email'],f"Purchase request needs your approval: {data['title']}",
                 email_html('Producer Approval Needed',
-                    f'<p><b>{u["name"]}</b> submitted a request for your production.</p>'
-                    f'<p><b>Item:</b> {data["title"]}<br><b>Amount:</b> ${float(data["estimated_cost"]):.2f}</p>',
+                    f'<p><b>{u["name"]}</b> submitted a {type_label.lower()} for your production.</p>'
+                    f'<p><b>Item:</b> {data["title"]}<br><b>Amount:</b> ${float(data["estimated_cost"]):.2f}<br>'
+                    f'<b>Method:</b> {method_label}</p>'
+                    + (f'<p><a href="{item_url}">{item_url}</a></p>' if item_url else ''),
                     'Review in BloomBooks',APP_URL))
     else:
         for t in get_role_emails('treasurer'):
             send_email(t['email'],f"New purchase request: {data['title']}",
                 email_html('New Purchase Request',
-                    f'<p><b>{u["name"]}</b> submitted a request.<br>'
-                    f'<b>Item:</b> {data["title"]}<br><b>Amount:</b> ${float(data["estimated_cost"]):.2f}</p>',
+                    f'<p><b>{u["name"]}</b> submitted a {type_label.lower()}.<br>'
+                    f'<b>Item:</b> {data["title"]}<br><b>Amount:</b> ${float(data["estimated_cost"]):.2f}<br>'
+                    f'<b>Method:</b> {method_label}</p>'
+                    + (f'<p><a href="{item_url}">{item_url}</a></p>' if item_url else ''),
                     'Review in BloomBooks',APP_URL))
     return jsonify({'ok':True,'id':req_id})
 
@@ -718,7 +737,7 @@ def approve_request(rid):
     new_status = req['status']
 
     if req['status'] == 'pending_producer':
-        if u['role'] != 'admin' and not is_producer_of(u['id'],req['production_id']):
+        if u['role'] not in ('admin',) and not is_producer_of(u['id'], req['production_id']):
             conn.close(); return jsonify({'error':'Only the production producer can act here'}),403
         if action == 'approve':
             new_status = 'pending_treasurer'
@@ -946,7 +965,7 @@ def stats():
             ('pending_president',"SELECT COUNT(*) as n FROM bb_purchase_requests WHERE status='pending_president'"),
             ('pending_reimburse',"SELECT COUNT(*) as n FROM bb_reimbursements WHERE status='pending'"),
             ('total_requests',"SELECT COUNT(*) as n FROM bb_purchase_requests"),
-            ('emergency_count',"SELECT COUNT(*) as n FROM bb_purchase_requests WHERE is_emergency=1"),
+            ('sap_count',"SELECT COUNT(*) as n FROM bb_purchase_requests WHERE type='sap'"),
         ]:
             r[key] = conn.execute(sql).fetchone()['n']
         r['total_spent'] = round(conn.execute("SELECT COALESCE(SUM(actual_cost),0) as n FROM bb_purchase_requests WHERE status IN ('approved','reimbursed')").fetchone()['n'],2)
@@ -955,11 +974,15 @@ def stats():
         r['my_approved'] = conn.execute("SELECT COUNT(*) as n FROM bb_purchase_requests WHERE submitted_by=%s AND status IN ('approved','reimbursed')",(u['id'],)).fetchone()['n']
         r['my_pending']  = conn.execute("SELECT COUNT(*) as n FROM bb_purchase_requests WHERE submitted_by=%s AND status LIKE 'pending%%'",(u['id'],)).fetchone()['n']
         r['my_owed']     = round(conn.execute("SELECT COALESCE(SUM(amount),0) as n FROM bb_reimbursements WHERE user_id=%s AND status='pending'",(u['id'],)).fetchone()['n'],2)
-        if prod_ids:
-            ph = ','.join(['%s']*len(prod_ids))
+        # Producers see their production queue count
+        all_prod_ids = prod_ids if prod_ids else []
+        if u['role'] == 'producer' and not all_prod_ids:
+            all_prod_ids = user_production_ids(u['id'])
+        if all_prod_ids:
+            ph = ','.join(['%s']*len(all_prod_ids))
             r['pending_my_productions'] = conn.execute(
                 f"SELECT COUNT(*) as n FROM bb_purchase_requests WHERE status='pending_producer' AND production_id IN ({ph})",
-                prod_ids).fetchone()['n']
+                all_prod_ids).fetchone()['n']
             r['is_producer'] = True
     conn.close()
     return jsonify(r)
