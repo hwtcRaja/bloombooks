@@ -16,6 +16,9 @@ app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'bloombooks-dev-key')
 CORS(app, supports_credentials=True)
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
+# Railway sometimes provides postgres:// — psycopg2 requires postgresql://
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
 
 cloudinary.config(
     cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME', ''),
@@ -42,6 +45,8 @@ class DBWrapper:
     def cursor(self):  return self._conn.cursor()
 
 def get_db():
+    if not DATABASE_URL:
+        raise RuntimeError('DATABASE_URL environment variable is not set.')
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     return DBWrapper(conn)
 
@@ -266,14 +271,18 @@ def email_html(title, body, cta_text=None, cta_url=None):
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    data = request.json
-    conn = get_db()
-    u = conn.execute('SELECT * FROM bb_users WHERE email=%s AND password=%s',
-                     (data['email'].strip().lower(), hash_pw(data['password']))).fetchone()
-    conn.close()
-    if not u: return jsonify({'error':'Invalid email or password'}),401
-    session['user_id'] = u['id']
-    return jsonify({'user':dict(u)})
+    try:
+        data = request.json
+        conn = get_db()
+        u = conn.execute('SELECT * FROM bb_users WHERE email=%s AND password=%s',
+                         (data['email'].strip().lower(), hash_pw(data['password']))).fetchone()
+        conn.close()
+        if not u: return jsonify({'error':'Invalid email or password'}),401
+        session['user_id'] = u['id']
+        return jsonify({'user':dict(u)})
+    except Exception as e:
+        print(f"[LOGIN ERROR] {e}")
+        return jsonify({'error': f'Server error — {str(e)}'}), 500
 
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
@@ -281,8 +290,11 @@ def logout():
 
 @app.route('/api/auth/me', methods=['GET'])
 def me():
-    u = current_user()
-    return jsonify({'user': dict(u) if u else None})
+    try:
+        u = current_user()
+        return jsonify({'user': dict(u) if u else None})
+    except Exception:
+        return jsonify({'user': None})
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
