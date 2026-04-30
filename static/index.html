@@ -1459,17 +1459,23 @@ async function restoreBudget(id) {
 }
 
 // ── Productions ───────────────────────────────────────────────────────────────
+let _prodAllUsers = [];
+
 async function renderProductions() {
-  document.getElementById('tb-actions').innerHTML = currentUser.role === 'admin'
+  const canCreate = ['admin','treasurer','president'].includes(currentUser.role);
+  document.getElementById('tb-actions').innerHTML = canCreate
     ? `<button class="btn btn-primary btn-sm" onclick="showProductionModal()">+ New production</button>` : '';
   try {
-    const prods = await api('GET', '/productions');
-    const allUsers = currentUser.role === 'admin' ? await api('GET', '/users') : [];
+    const [prods, allUsers] = await Promise.all([
+      api('GET', '/productions'),
+      canCreate ? api('GET', '/users') : Promise.resolve([])
+    ]);
+    _prodAllUsers = allUsers;
 
     if (prods.length === 0) {
       document.getElementById('content').innerHTML = `
         <div class="empty"><div class="empty-icon">🎭</div><h3>No productions yet</h3>
-        ${currentUser.role==='admin'?'<button class="btn btn-primary mt-16" onclick="showProductionModal()">Create first production</button>':''}
+        ${canCreate?'<button class="btn btn-primary mt-16" onclick="showProductionModal()">Create first production</button>':''}
         </div>`;
       return;
     }
@@ -1480,7 +1486,7 @@ async function renderProductions() {
       const pct = totalBudget>0 ? Math.min(100,(totalSpent/totalBudget)*100) : 0;
       const producers = p.members.filter(m=>m.member_role==='producer');
       const members   = p.members.filter(m=>m.member_role==='member');
-      const canManage = currentUser.role==='admin' || p.i_am_producer;
+      const canManage = ['admin','treasurer','president'].includes(currentUser.role) || p.i_am_producer;
 
       return `<div class="card mb-16">
         <div class="card-header">
@@ -1489,42 +1495,44 @@ async function renderProductions() {
             <div class="flex gap-8 mt-4 flex-wrap">
               <span class="badge ${p.status==='active'?'badge-approved':'badge-denied'}">${p.status}</span>
               <span class="text-xs text-muted">${p.season}</span>
+              ${p.description ? `<span class="text-xs text-muted">· ${p.description}</span>` : ''}
             </div>
           </div>
-          ${canManage ? `<button class="btn btn-outline btn-sm" onclick="showProductionDetail(${p.id})">Manage</button>` : ''}
+          ${canManage ? `<button class="btn btn-primary btn-sm" onclick="openProductionDetail(${p.id})">Manage →</button>` : ''}
         </div>
         <div class="card-body">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
             <div>
-              <div class="text-xs text-muted mb-8">Budget</div>
-              <div class="fw-600" style="font-size:18px">${fmtMoney(totalBudget)}</div>
-              <div class="text-xs text-muted">Spent: ${fmtMoney(totalSpent)} · Remaining: ${fmtMoney(totalBudget-totalSpent)}</div>
-              <div class="budget-bar-wrap mt-8"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
-              ${p.budgets.length > 0 ? `
-                <div class="mt-12">
-                  ${p.budgets.map(b => {
-                    const bp = b.total_amount>0?Math.min(100,(b.spent/b.total_amount)*100):0;
-                    return `<div class="flex flex-center gap-8 mb-6 text-xs">
-                      <span style="width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.name}</span>
-                      <div class="budget-bar-wrap" style="flex:1;height:4px"><div class="budget-bar-fill" style="width:${bp}%;height:4px"></div></div>
-                      <span class="text-muted">${fmtMoney(b.total_amount-b.spent)}</span>
-                    </div>`;
-                  }).join('')}
-                </div>` : '<div class="text-xs text-muted mt-8">No department budgets set up</div>'}
+              <div class="text-xs text-muted fw-600 mb-8">BUDGET OVERVIEW</div>
+              <div class="fw-600" style="font-size:20px">${fmtMoney(totalBudget)}</div>
+              <div class="text-xs text-muted mb-8">Spent ${fmtMoney(totalSpent)} · Remaining ${fmtMoney(totalBudget-totalSpent)}</div>
+              <div class="budget-bar-wrap mb-12"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
+              ${p.budgets.map(b=>{
+                const bp=b.total_amount>0?Math.min(100,(b.spent/b.total_amount)*100):0;
+                const ownerNames = b.owners && b.owners.length > 0 ? b.owners.map(o=>o.name).join(', ') : null;
+                return `<div class="mb-8">
+                  <div class="flex flex-center gap-8">
+                    <span class="text-xs fw-600" style="width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.name}</span>
+                    ${ownerNames ? `<span class="text-xs text-muted" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ownerNames}</span>` : '<span style="flex:1"></span>'}
+                    <span class="text-xs text-muted">${fmtMoney(b.total_amount-b.spent)}</span>
+                  </div>
+                  <div class="budget-bar-wrap mt-4" style="height:4px"><div class="budget-bar-fill" style="width:${bp}%;height:4px"></div></div>
+                </div>`;
+              }).join('')}
+              ${p.budgets.length===0?'<div class="text-xs text-muted">No departments set up yet</div>':''}
             </div>
             <div>
-              <div class="text-xs text-muted mb-8">Team</div>
+              <div class="text-xs text-muted fw-600 mb-8">TEAM</div>
               ${producers.map(m=>`<div class="flex flex-center gap-8 mb-8">
                 <div style="width:28px;height:28px;border-radius:50%;background:var(--teal3);color:var(--teal);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
                 <div><div class="text-sm fw-600">${m.name}</div><div class="text-xs text-muted">Producer</div></div>
-                ${canManage&&currentUser.role==='admin'?`<button class="btn btn-danger btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" onclick="removeMember(${p.id},${m.id})">×</button>`:''}
               </div>`).join('')}
-              ${members.map(m=>`<div class="flex flex-center gap-8 mb-6">
-                <div style="width:24px;height:24px;border-radius:50%;background:var(--cream2);color:var(--ink3);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
-                <div class="text-sm">${m.name}</div>
-                ${canManage?`<button class="btn btn-danger btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" onclick="removeMember(${p.id},${m.id})">×</button>`:''}
+              ${members.slice(0,4).map(m=>`<div class="flex flex-center gap-8 mb-6">
+                <div style="width:22px;height:22px;border-radius:50%;background:var(--cream2);color:var(--ink2);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
+                <div class="text-xs">${m.name}</div>
               </div>`).join('')}
-              ${canManage ? `<button class="btn btn-outline btn-sm mt-8" onclick="showAddMemberModal(${p.id},${JSON.stringify(allUsers).replace(/"/g,'&quot;')})">+ Add member</button>` : ''}
+              ${members.length>4?`<div class="text-xs text-muted">+${members.length-4} more</div>`:''}
+              ${members.length===0&&producers.length===0?'<div class="text-xs text-muted">No team members yet</div>':''}
             </div>
           </div>
         </div>
@@ -1539,17 +1547,21 @@ function showProductionModal() {
   const html = `
     <div class="modal-header"><span class="modal-title">New production</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <div class="form-group"><label class="form-label">Production name <span class="req">*</span></label><input type="text" id="p-name" class="form-input" placeholder="e.g. Rock of Ages"></div>
+      <div class="form-group"><label class="form-label">Production name <span class="req">*</span></label>
+        <input type="text" id="p-name" class="form-input" placeholder="e.g. Rock of Ages"></div>
       <div class="form-row">
-        <div class="form-group"><label class="form-label">Season <span class="req">*</span></label><input type="text" id="p-season" class="form-input" placeholder="e.g. 2024-2025"></div>
-        <div class="form-group"><label class="form-label">Total budget</label><input type="number" id="p-budget" class="form-input" placeholder="0.00" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Season <span class="req">*</span></label>
+          <input type="text" id="p-season" class="form-input" placeholder="e.g. 2024-2025"></div>
+        <div class="form-group"><label class="form-label">Total budget envelope</label>
+          <input type="number" id="p-budget" class="form-input" placeholder="0.00" step="0.01"></div>
       </div>
-      <div class="form-group"><label class="form-label">Description</label><textarea id="p-desc" class="form-textarea" placeholder="Brief description of this production"></textarea></div>
+      <div class="form-group"><label class="form-label">Description</label>
+        <textarea id="p-desc" class="form-textarea" placeholder="Brief description"></textarea></div>
       <div id="p-error" class="form-error hidden"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="createProduction()">Create production</button>
+      <button class="btn btn-primary" onclick="createProduction()">Create &amp; set up</button>
     </div>`;
   showModal(html);
 }
@@ -1561,75 +1573,390 @@ async function createProduction() {
   const desc   = document.getElementById('p-desc').value.trim();
   const errEl  = document.getElementById('p-error');
   errEl.classList.add('hidden');
-  if (!name || !season) { errEl.textContent='Name and season required'; errEl.classList.remove('hidden'); return; }
+  if (!name || !season) { errEl.textContent='Name and season are required'; errEl.classList.remove('hidden'); return; }
   try {
-    await api('POST', '/productions', {name, season, description:desc, total_budget:budget});
+    const d = await api('POST', '/productions', {name, season, description:desc, total_budget:budget});
     toast('Production created!', 'success');
     closeModal();
     await loadBudgets();
-    renderProductions();
+    await renderProductions();
+    openProductionDetail(d.id);
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
 }
 
-function showAddMemberModal(pid, users) {
-  const opts = users.map(u=>`<option value="${u.id}">${u.name} (${u.email})</option>`).join('');
-  const html = `
-    <div class="modal-header"><span class="modal-title">Add team member</span><button class="modal-close" onclick="closeModal()">×</button></div>
-    <div class="modal-body">
-      <div class="form-group"><label class="form-label">Volunteer</label><select id="add-member-user" class="form-select">${opts}</select></div>
-      <div class="form-group"><label class="form-label">Role</label>
-        <select id="add-member-role" class="form-select">
-          <option value="member">Member</option>
-          <option value="producer">Producer</option>
-        </select>
+// ── Production detail (tabbed) ────────────────────────────────────────────────
+let _currentProd = null;
+let _prodTab = 'departments';
+
+async function openProductionDetail(pid) {
+  try {
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===pid);
+    if (!_currentProd) { toast('Production not found','error'); return; }
+    _prodTab = 'departments';
+    renderProductionDetail();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function renderProductionDetail() {
+  const p = _currentProd;
+  const totalBudget = p.budgets.reduce((s,b)=>s+b.total_amount,0);
+  const totalSpent  = p.total_spent||0;
+  const pct = totalBudget>0?Math.min(100,(totalSpent/totalBudget)*100):0;
+  const tabs = ['departments','team','settings'];
+  const tabLabels = {departments:'Departments', team:'Team', settings:'Settings'};
+  document.getElementById('tb-title').textContent = p.name;
+  document.getElementById('tb-actions').innerHTML = `<button class="btn btn-outline btn-sm" onclick="nav('productions')">← All productions</button>`;
+  document.getElementById('content').innerHTML = `
+    <div style="max-width:800px">
+      <div class="flex flex-center gap-12 mb-12">
+        <div>
+          <span class="badge ${p.status==='active'?'badge-approved':'badge-denied'}">${p.status}</span>
+          <span class="text-xs text-muted ml-8">${p.season}</span>
+        </div>
+        <div style="margin-left:auto;text-align:right">
+          <div class="fw-600">${fmtMoney(totalBudget)} total</div>
+          <div class="text-xs text-muted">${fmtMoney(totalSpent)} spent · ${fmtMoney(totalBudget-totalSpent)} remaining</div>
+        </div>
       </div>
+      <div class="budget-bar-wrap mb-20"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
+      <div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:24px">
+        ${tabs.map(t=>`<button id="tab-btn-${t}" onclick="switchProdTab('${t}')" style="padding:10px 18px;border:none;background:none;cursor:pointer;font-size:14px;font-weight:${_prodTab===t?'600':'400'};color:${_prodTab===t?'var(--teal)':'var(--ink3)'};border-bottom:2px solid ${_prodTab===t?'var(--teal)':'transparent'};margin-bottom:-1px">${tabLabels[t]}</button>`).join('')}
+      </div>
+      <div id="prod-tab-content"></div>
+    </div>`;
+  renderProdTab();
+}
+
+function switchProdTab(tab) {
+  _prodTab = tab;
+  const labels = {departments:'Departments', team:'Team', settings:'Settings'};
+  ['departments','team','settings'].forEach(t => {
+    const btn = document.getElementById(`tab-btn-${t}`);
+    if (!btn) return;
+    btn.style.fontWeight = t===tab?'600':'400';
+    btn.style.color = t===tab?'var(--teal)':'var(--ink3)';
+    btn.style.borderBottom = t===tab?'2px solid var(--teal)':'2px solid transparent';
+  });
+  renderProdTab();
+}
+
+function renderProdTab() {
+  const p = _currentProd;
+  const canManage = ['admin','treasurer','president'].includes(currentUser.role) || p.i_am_producer;
+  const tc = document.getElementById('prod-tab-content');
+
+  if (_prodTab === 'departments') {
+    tc.innerHTML = `
+      ${canManage ? `<div class="flex mb-16"><button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="showAddDeptModal()">+ Add department</button></div>` : ''}
+      ${p.budgets.length === 0
+        ? `<div class="empty"><div class="empty-icon">💰</div><h3>No departments yet</h3><p>Add departments like Props, Costumes, Lighting — each with their own budget cap.</p></div>`
+        : p.budgets.map(b => {
+            const pct = b.total_amount>0?Math.min(100,(b.spent/b.total_amount)*100):0;
+            const remaining = b.total_amount - b.spent;
+            return `<div class="card mb-12">
+              <div class="card-body">
+                <div class="flex flex-center mb-8">
+                  <div>
+                    <div class="fw-600">${b.name}</div>
+                    <div class="text-xs text-muted">${b.area}</div>
+                  </div>
+                  <div style="margin-left:auto;text-align:right">
+                    <div class="fw-600" style="color:${remaining<0?'var(--red)':'var(--ink)'}">${fmtMoney(remaining)}</div>
+                    <div class="text-xs text-muted">of ${fmtMoney(b.total_amount)}</div>
+                  </div>
+                </div>
+                <div class="budget-bar-wrap mb-8"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
+                <div class="flex flex-center gap-8">
+                  <div>
+                    <span class="text-xs text-muted">Owners: </span>
+                    ${b.owners && b.owners.length > 0
+                      ? b.owners.map(o=>`<span class="badge badge-treasurer" style="margin-right:4px">${o.name}</span>`).join('')
+                      : '<span class="text-xs text-muted">None assigned</span>'}
+                  </div>
+                  ${canManage ? `<div class="flex gap-8" style="margin-left:auto">
+                    <button class="btn btn-outline btn-sm" onclick="showEditDeptModal(${b.id},'${b.name.replace(/'/g,"\\'")}','${b.area}',${b.total_amount})">Edit</button>
+                    <button class="btn btn-outline btn-sm" onclick="showManageDeptOwnersModal(${b.id},'${b.name.replace(/'/g,"\\'")}',${JSON.stringify(b.owners||[]).replace(/"/g,'&quot;')})">Owners</button>
+                  </div>` : ''}
+                </div>
+              </div>
+            </div>`;
+          }).join('')}`;
+
+  } else if (_prodTab === 'team') {
+    const producers = p.members.filter(m=>m.member_role==='producer');
+    const members   = p.members.filter(m=>m.member_role==='member');
+    tc.innerHTML = `
+      ${canManage ? `<div class="flex mb-16"><button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="showAddProdMemberModal()">+ Add team member</button></div>` : ''}
+      ${producers.length > 0 ? `
+        <div class="text-xs text-muted fw-600 mb-8">PRODUCERS</div>
+        ${producers.map(m=>`<div class="card mb-8"><div class="card-body" style="padding:12px 16px">
+          <div class="flex flex-center gap-12">
+            <div style="width:34px;height:34px;border-radius:50%;background:var(--teal3);color:var(--teal);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
+            <div><div class="fw-600">${m.name}</div><div class="text-xs text-muted">${m.email}</div></div>
+            <span class="badge badge-approved" style="margin-left:auto">Producer</span>
+            ${canManage?`<button class="btn btn-danger btn-sm" onclick="removeProdMember(${p.id},${m.user_id})">Remove</button>`:''}
+          </div>
+        </div></div>`).join('')}
+        <div class="divider"></div>` : ''}
+      ${members.length > 0 ? `
+        <div class="text-xs text-muted fw-600 mb-8">TEAM MEMBERS</div>
+        ${members.map(m=>`<div class="card mb-8"><div class="card-body" style="padding:12px 16px">
+          <div class="flex flex-center gap-12">
+            <div style="width:34px;height:34px;border-radius:50%;background:var(--cream2);color:var(--ink2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
+            <div><div class="fw-600">${m.name}</div><div class="text-xs text-muted">${m.email}</div></div>
+            ${canManage?`<button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="removeProdMember(${p.id},${m.user_id})">Remove</button>`:''}
+          </div>
+        </div></div>`).join('')}` : ''}
+      ${producers.length===0&&members.length===0?'<div class="empty"><h3>No team members yet</h3><p>Add team members to give them access to this production.</p></div>':''}`;
+
+  } else {
+    tc.innerHTML = `
+      <div class="card"><div class="card-header"><span class="card-title">Production settings</span></div>
+        <div class="card-body">
+          <div class="form-group"><label class="form-label">Name</label>
+            <input type="text" id="ps-name" class="form-input" value="${p.name}"></div>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">Season</label>
+              <input type="text" id="ps-season" class="form-input" value="${p.season}"></div>
+            <div class="form-group"><label class="form-label">Total budget</label>
+              <input type="number" id="ps-budget" class="form-input" value="${p.total_budget||0}" step="0.01"></div>
+          </div>
+          <div class="form-group"><label class="form-label">Description</label>
+            <textarea id="ps-desc" class="form-textarea">${p.description||''}</textarea></div>
+          <div class="form-group"><label class="form-label">Status</label>
+            <select id="ps-status" class="form-select">
+              <option ${p.status==='active'?'selected':''} value="active">Active</option>
+              <option ${p.status==='closed'?'selected':''} value="closed">Closed</option>
+              <option ${p.status==='archived'?'selected':''} value="archived">Archived</option>
+            </select></div>
+          <button class="btn btn-primary" onclick="saveProductionSettings(${p.id})">Save changes</button>
+        </div>
+      </div>`;
+  }
+}
+
+function showAddDeptModal() {
+  const p = _currentProd;
+  const html = `
+    <div class="modal-header"><span class="modal-title">Add department</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Department name <span class="req">*</span></label>
+        <input type="text" id="d-name" class="form-input" placeholder="e.g. Scenery & Props, Costumes, Lighting"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Type / area</label>
+          <input type="text" id="d-area" class="form-input" placeholder="e.g. Props, Costumes, Technical"></div>
+        <div class="form-group"><label class="form-label">Budget cap <span class="req">*</span></label>
+          <input type="number" id="d-amount" class="form-input" placeholder="0.00" step="0.01"></div>
+      </div>
+      <div id="d-error" class="form-error hidden"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="doAddMember(${pid})">Add to production</button>
+      <button class="btn btn-primary" onclick="addDepartment(${p.id},'${p.season}')">Add department</button>
     </div>`;
   showModal(html);
 }
 
-async function doAddMember(pid) {
-  const user_id     = parseInt(document.getElementById('add-member-user').value);
-  const member_role = document.getElementById('add-member-role').value;
+async function addDepartment(pid, season) {
+  const name   = document.getElementById('d-name').value.trim();
+  const area   = document.getElementById('d-area').value.trim() || 'General';
+  const amount = parseFloat(document.getElementById('d-amount').value||0);
+  const errEl  = document.getElementById('d-error');
+  errEl.classList.add('hidden');
+  if (!name || !amount) { errEl.textContent='Name and budget amount are required'; errEl.classList.remove('hidden'); return; }
+  try {
+    await api('POST', '/budgets', {name, area, season, total_amount:amount, production_id:pid});
+    toast('Department added!','success');
+    closeModal();
+    await loadBudgets();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===pid);
+    renderProductionDetail();
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+function showEditDeptModal(bid, name, area, amount) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Edit department</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Name</label>
+        <input type="text" id="ed-name" class="form-input" value="${name}"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Type / area</label>
+          <input type="text" id="ed-area" class="form-input" value="${area}"></div>
+        <div class="form-group"><label class="form-label">Budget cap</label>
+          <input type="number" id="ed-amount" class="form-input" value="${amount}" step="0.01"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveDept(${bid})">Save changes</button>
+    </div>`;
+  showModal(html);
+}
+
+async function saveDept(bid) {
+  try {
+    await api('PATCH', `/budgets/${bid}`, {
+      name: document.getElementById('ed-name').value.trim(),
+      area: document.getElementById('ed-area').value.trim(),
+      total_amount: parseFloat(document.getElementById('ed-amount').value)
+    });
+    toast('Department updated!','success');
+    closeModal();
+    await loadBudgets();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===_currentProd.id);
+    renderProductionDetail();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function showManageDeptOwnersModal(bid, deptName, currentOwners) {
+  const userOpts = _prodAllUsers.map(u=>`<option value="${u.id}">${u.name} (${u.email})</option>`).join('');
+  const buildOwnerList = (owners) => owners.length > 0
+    ? owners.map(o=>`<div class="flex flex-center gap-8 mb-8 p-8" style="border:1px solid var(--border);border-radius:var(--r-sm)">
+        <span class="text-sm">${o.name}</span>
+        <button class="btn btn-danger btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" onclick="removeDeptOwner(${bid},${o.user_id})">×</button>
+      </div>`).join('')
+    : '<p class="text-xs text-muted mb-12">No owners assigned yet.</p>';
+  const html = `
+    <div class="modal-header"><span class="modal-title">${deptName} — department owners</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="text-xs text-muted fw-600 mb-8">CURRENT OWNERS</div>
+      <div id="owner-list-${bid}">${buildOwnerList(currentOwners)}</div>
+      <hr class="divider">
+      <div class="text-xs text-muted fw-600 mb-8">ADD OWNER</div>
+      <div class="flex gap-8">
+        <select id="new-owner-${bid}" class="form-select">${userOpts}</select>
+        <button class="btn btn-primary btn-sm" onclick="addDeptOwner(${bid})">Add</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeModal()">Done</button>
+    </div>`;
+  showModal(html, 'large');
+}
+
+async function addDeptOwner(bid) {
+  const uid = parseInt(document.getElementById(`new-owner-${bid}`).value);
+  try {
+    await api('POST', `/budgets/${bid}/members`, {user_id:uid, is_owner:1});
+    toast('Owner added!','success');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===_currentProd.id);
+    const b = _currentProd.budgets.find(b=>b.id===bid);
+    const ownerList = document.getElementById(`owner-list-${bid}`);
+    if (ownerList && b) {
+      ownerList.innerHTML = b.owners.map(o=>`<div class="flex flex-center gap-8 mb-8 p-8" style="border:1px solid var(--border);border-radius:var(--r-sm)">
+        <span class="text-sm">${o.name}</span>
+        <button class="btn btn-danger btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" onclick="removeDeptOwner(${bid},${o.user_id})">x</button>
+      </div>`).join('') || '<p class="text-xs text-muted">No owners assigned yet.</p>';
+    }
+    renderProdTab();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function removeDeptOwner(bid, uid) {
+  try {
+    await api('DELETE', `/budgets/${bid}/members/${uid}`);
+    toast('Owner removed.','info');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===_currentProd.id);
+    const b = _currentProd.budgets.find(b=>b.id===bid);
+    const ownerList = document.getElementById(`owner-list-${bid}`);
+    if (ownerList && b) {
+      ownerList.innerHTML = b.owners.map(o=>`<div class="flex flex-center gap-8 mb-8 p-8" style="border:1px solid var(--border);border-radius:var(--r-sm)">
+        <span class="text-sm">${o.name}</span>
+        <button class="btn btn-danger btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" onclick="removeDeptOwner(${bid},${o.user_id})">x</button>
+      </div>`).join('') || '<p class="text-xs text-muted">No owners assigned yet.</p>';
+    }
+    renderProdTab();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function showAddProdMemberModal() {
+  const p = _currentProd;
+  const existingIds = p.members.map(m=>m.user_id);
+  const available = _prodAllUsers.filter(u=>!existingIds.includes(u.id));
+  if (available.length === 0) { toast('All users are already on this production','info'); return; }
+  const opts = available.map(u=>`<option value="${u.id}">${u.name} (${u.email})</option>`).join('');
+  const html = `
+    <div class="modal-header"><span class="modal-title">Add team member</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">User</label>
+        <select id="add-pm-user" class="form-select">${opts}</select></div>
+      <div class="form-group"><label class="form-label">Role on this production</label>
+        <select id="add-pm-role" class="form-select">
+          <option value="member">Team member</option>
+          <option value="producer">Producer</option>
+        </select></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doAddProdMember(${p.id})">Add to production</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doAddProdMember(pid) {
+  const user_id     = parseInt(document.getElementById('add-pm-user').value);
+  const member_role = document.getElementById('add-pm-role').value;
   try {
     await api('POST', `/productions/${pid}/members`, {user_id, member_role});
-    toast('Member added!', 'success');
+    toast('Member added!','success');
     closeModal();
-    renderProductions();
-  } catch(e) { toast(e.message, 'error'); }
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===pid);
+    renderProdTab();
+  } catch(e) { toast(e.message,'error'); }
 }
 
-async function removeMember(pid, uid) {
+async function removeProdMember(pid, uid) {
   try {
     await api('DELETE', `/productions/${pid}/members/${uid}`);
-    toast('Member removed.', 'info');
-    renderProductions();
-  } catch(e) { toast(e.message, 'error'); }
+    toast('Member removed.','info');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===pid);
+    renderProdTab();
+  } catch(e) { toast(e.message,'error'); }
 }
 
-async function showProductionDetail(pid) {
-  nav('productions');
+async function saveProductionSettings(pid) {
+  const data = {
+    name: document.getElementById('ps-name').value.trim(),
+    season: document.getElementById('ps-season').value.trim(),
+    total_budget: parseFloat(document.getElementById('ps-budget').value||0),
+    description: document.getElementById('ps-desc').value.trim(),
+    status: document.getElementById('ps-status').value,
+  };
+  try {
+    await api('PATCH', `/productions/${pid}`, data);
+    toast('Production updated!','success');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===pid);
+    renderProductionDetail();
+  } catch(e) { toast(e.message,'error'); }
 }
+
+// ── Users ─────────────────────────────────────────────────────────────────────
 async function renderUsers() {
   const canManage = ['admin','treasurer','president'].includes(currentUser.role);
+  document.getElementById('tb-title').textContent = 'Users';
   document.getElementById('tb-actions').innerHTML = canManage
-    ? `<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add volunteer</button>` : '';
+    ? `<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add user</button>` : '';
   try {
     const users = await api('GET', '/users');
     document.getElementById('content').innerHTML = `
-      <div class="section-sub">${users.length} registered volunteer${users.length!==1?'s':''}</div>
+      <div class="section-sub">${users.length} registered user${users.length!==1?'s':''}</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Training</th><th>Joined</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Training</th><th>Status</th><th>Joined</th>${canManage?'<th>Actions</th>':''}</tr></thead>
           <tbody>${users.map(u => `
             <tr>
               <td><div class="fw-600">${u.name}</div></td>
               <td class="td-muted">${u.email}</td>
-              <td>
-                ${canManage ? `
+              <td>${canManage ? `
                   <select class="form-select" style="font-size:12px;padding:4px 8px" onchange="updateUserRole(${u.id}, this.value)">
                     <option ${u.role==='volunteer'?'selected':''} value="volunteer">Volunteer</option>
                     <option ${u.role==='treasurer'?'selected':''} value="treasurer">Treasurer</option>
@@ -1637,16 +1964,21 @@ async function renderUsers() {
                     <option ${u.role==='admin'?'selected':''} value="admin">Admin</option>
                   </select>` : `<span class="text-sm" style="text-transform:capitalize">${u.role}</span>`}
               </td>
-              <td>
-                ${u.training_complete
-                  ? '<span class="badge badge-approved">✓ Complete</span>'
-                  : `<span class="badge badge-denied">Incomplete</span>${canManage ? ` <button class="btn btn-outline btn-sm" style="margin-left:6px" onclick="markTrained(${u.id})">Mark complete</button>` : ''}`}
+              <td>${u.training_complete
+                  ? '<span class="badge badge-approved">Complete</span>'
+                  : `<span class="badge badge-denied">Incomplete</span>${canManage?` <button class="btn btn-outline btn-sm" style="margin-left:6px" onclick="markTrained(${u.id})">Mark complete</button>`:''}`}
+              </td>
+              <td>${u.is_active===0
+                  ? `<span class="badge badge-denied">Inactive</span>${canManage?` <button class="btn btn-outline btn-sm" style="margin-left:6px" onclick="setUserActive(${u.id},1)">Reactivate</button>`:''}`
+                  : '<span class="badge badge-approved">Active</span>'}
               </td>
               <td class="td-muted">${fmtDate(u.created_at)}</td>
-              <td>
-                ${canManage ? `
-                  <button class="btn btn-outline btn-sm" onclick="showResetPasswordModal(${u.id}, '${u.name.replace(/'/g,"\\'")}')">Reset password</button>` : '—'}
-              </td>
+              ${canManage ? `<td><div class="flex gap-8">
+                <button class="btn btn-outline btn-sm" onclick="showEditUserModal(${u.id},'${u.name.replace(/'/g,"\\'")}','${u.email}',${u.training_complete})">Edit</button>
+                <button class="btn btn-outline btn-sm" onclick="showResetPasswordModal(${u.id},'${u.name.replace(/'/g,"\\'")}')">Password</button>
+                ${u.is_active!==0?`<button class="btn btn-danger btn-sm" onclick="setUserActive(${u.id},0)">Deactivate</button>`:''}
+                <button class="btn btn-danger btn-sm" onclick="confirmDeleteUser(${u.id},'${u.name.replace(/'/g,"\\'")}')">Delete</button>
+              </div></td>` : ''}
             </tr>`).join('')}
           </tbody>
         </table>
@@ -1656,33 +1988,96 @@ async function renderUsers() {
   }
 }
 
+function showEditUserModal(uid, name, email, training) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Edit user</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Full name <span class="req">*</span></label>
+        <input type="text" id="eu-name" class="form-input" value="${name}"></div>
+      <div class="form-group"><label class="form-label">Email address <span class="req">*</span></label>
+        <input type="email" id="eu-email" class="form-input" value="${email}"></div>
+      <div class="form-group">
+        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400">
+          <input type="checkbox" id="eu-training" ${training?'checked':''}> <span>Training complete</span>
+        </label>
+      </div>
+      <div id="eu-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doEditUser(${uid})">Save changes</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doEditUser(uid) {
+  const name     = document.getElementById('eu-name').value.trim();
+  const email    = document.getElementById('eu-email').value.trim();
+  const training = document.getElementById('eu-training').checked ? 1 : 0;
+  const errEl    = document.getElementById('eu-error');
+  errEl.classList.add('hidden');
+  if (!name || !email) { errEl.textContent='Name and email are required'; errEl.classList.remove('hidden'); return; }
+  try {
+    await api('PATCH', `/users/${uid}`, {name, email, training_complete:training});
+    toast('User updated!','success');
+    closeModal(); renderUsers();
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+async function setUserActive(uid, active) {
+  try {
+    await api('PATCH', `/users/${uid}`, {is_active: active});
+    toast(active ? 'User reactivated!' : 'User deactivated.', active ? 'success' : 'info');
+    renderUsers();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function confirmDeleteUser(uid, name) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Delete user</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm">Are you sure you want to permanently delete <strong>${name}</strong>?</p>
+      <p class="text-sm mt-8" style="color:var(--red)">This cannot be undone. Their purchase history will remain in the system.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="doDeleteUser(${uid})">Delete permanently</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doDeleteUser(uid) {
+  try {
+    await api('DELETE', `/users/${uid}`);
+    toast('User deleted.','info');
+    closeModal(); renderUsers();
+  } catch(e) { toast(e.message,'error'); }
+}
+
 function showAddUserModal() {
   const html = `
-    <div class="modal-header"><span class="modal-title">Add volunteer</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-header"><span class="modal-title">Add user</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <div class="form-group"><label class="form-label">Full name <span class="req">*</span></label><input type="text" id="new-name" class="form-input" placeholder="Jane Smith"></div>
-      <div class="form-group"><label class="form-label">Email address <span class="req">*</span></label><input type="email" id="new-email" class="form-input" placeholder="jane@example.com"></div>
+      <div class="form-group"><label class="form-label">Full name <span class="req">*</span></label>
+        <input type="text" id="new-name" class="form-input" placeholder="Jane Smith"></div>
+      <div class="form-group"><label class="form-label">Email address <span class="req">*</span></label>
+        <input type="email" id="new-email" class="form-input" placeholder="jane@example.com"></div>
       <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Role</label>
+        <div class="form-group"><label class="form-label">Role</label>
           <select id="new-role" class="form-select">
             <option value="volunteer">Volunteer</option>
             <option value="treasurer">Treasurer</option>
             <option value="president">President</option>
             <option value="admin">Admin</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Temporary password <span class="req">*</span></label>
-          <input type="text" id="new-password" class="form-input" placeholder="They can change this later">
-        </div>
+          </select></div>
+        <div class="form-group"><label class="form-label">Temporary password <span class="req">*</span></label>
+          <input type="text" id="new-password" class="form-input" placeholder="They can change this later"></div>
       </div>
       <div class="form-group">
         <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400">
-          <input type="checkbox" id="new-training" checked>
-          <span>Mark training as complete</span>
+          <input type="checkbox" id="new-training" checked> <span>Mark training as complete</span>
         </label>
-        <div class="form-hint">Check this if they've already completed training in person</div>
+        <div class="form-hint">Check if they have already completed training in person</div>
       </div>
       <div id="add-user-error" class="form-error hidden"></div>
     </div>
@@ -1694,34 +2089,28 @@ function showAddUserModal() {
 }
 
 async function doAddUser() {
-  const name = document.getElementById('new-name').value.trim();
-  const email = document.getElementById('new-email').value.trim();
+  const name     = document.getElementById('new-name').value.trim();
+  const email    = document.getElementById('new-email').value.trim();
   const password = document.getElementById('new-password').value.trim();
-  const role = document.getElementById('new-role').value;
+  const role     = document.getElementById('new-role').value;
   const training = document.getElementById('new-training').checked ? 1 : 0;
-  const errEl = document.getElementById('add-user-error');
+  const errEl    = document.getElementById('add-user-error');
   errEl.classList.add('hidden');
-  if (!name || !email || !password) {
-    errEl.textContent = 'Name, email and password are all required.';
-    errEl.classList.remove('hidden'); return;
-  }
+  if (!name || !email || !password) { errEl.textContent='Name, email and password are all required.'; errEl.classList.remove('hidden'); return; }
   try {
-    await api('POST', '/users/create', {name, email, password, role, training_complete: training});
+    await api('POST', '/users/create', {name, email, password, role, training_complete:training});
     toast(`Account created for ${name}!`, 'success');
-    closeModal();
-    renderUsers();
-  } catch(e) {
-    errEl.textContent = e.message;
-    errEl.classList.remove('hidden');
-  }
+    closeModal(); renderUsers();
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
 }
 
 function showResetPasswordModal(uid, name) {
   const html = `
     <div class="modal-header"><span class="modal-title">Reset password</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <p class="text-sm mb-16">Set a new temporary password for <strong>${name}</strong>. Share it with them directly — they can update it after signing in.</p>
-      <div class="form-group"><label class="form-label">New password <span class="req">*</span></label><input type="text" id="reset-pw" class="form-input" placeholder="Temporary password"></div>
+      <p class="text-sm mb-16">Set a new temporary password for <strong>${name}</strong>.</p>
+      <div class="form-group"><label class="form-label">New password <span class="req">*</span></label>
+        <input type="text" id="reset-pw" class="form-input" placeholder="Temporary password"></div>
       <div id="reset-pw-error" class="form-error hidden"></div>
     </div>
     <div class="modal-footer">
@@ -1735,18 +2124,12 @@ async function doResetPassword(uid) {
   const pw = document.getElementById('reset-pw').value.trim();
   const errEl = document.getElementById('reset-pw-error');
   errEl.classList.add('hidden');
-  if (!pw || pw.length < 4) {
-    errEl.textContent = 'Password must be at least 4 characters.';
-    errEl.classList.remove('hidden'); return;
-  }
+  if (!pw || pw.length < 4) { errEl.textContent='Password must be at least 4 characters.'; errEl.classList.remove('hidden'); return; }
   try {
     await api('PATCH', `/users/${uid}`, {password: pw});
     toast('Password updated!', 'success');
     closeModal();
-  } catch(e) {
-    errEl.textContent = e.message;
-    errEl.classList.remove('hidden');
-  }
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
 }
 
 async function updateUserRole(uid, role) {
