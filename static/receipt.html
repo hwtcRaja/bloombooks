@@ -3,295 +3,564 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Submit Receipt — BloomBooks</title>
+<title>BloomBooks Mobile</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --teal:#0f6e56;--teal2:#1a8a6c;--teal3:#e1f5ee;
   --cream:#faf8f3;--ink:#1e1e1b;--ink2:#4a4a45;--ink3:#888880;
-  --border:#dddad0;--red:#b53030;--green:#2d7d4f;--green-bg:#edf7f2;
+  --border:#dddad0;--red:#b53030;--red-bg:#fdf0f0;
+  --green:#2d7d4f;--green-bg:#edf7f2;
   --amber:#c97c10;--amber-bg:#fef3e2;
+  --r:10px;--r-sm:7px;
 }
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;padding-bottom:40px}
-.header{background:var(--ink);padding:16px 20px 14px;position:sticky;top:0;z-index:10}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;padding-bottom:48px}
+
+/* Header */
+.header{background:var(--ink);padding:14px 16px 12px;position:sticky;top:0;z-index:20}
 .header-inner{display:flex;align-items:center;gap:10px}
-.header-logo{display:flex;align-items:center;gap:10px}
-.header-door{flex-shrink:0}
 .header-title{color:#fff;font-size:17px;font-weight:700;letter-spacing:-.2px}
-.header-sub{color:rgba(255,255,255,.45);font-size:11px}
-.content{padding:20px 16px;max-width:480px;margin:0 auto}
-.user-greeting{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:20px;display:flex;align-items:center;gap:12px}
-.user-av{width:38px;height:38px;border-radius:50%;background:var(--teal);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;flex-shrink:0}
+.header-sub{color:rgba(255,255,255,.45);font-size:11px;margin-top:1px}
+
+/* Tab bar */
+.tab-bar{background:#fff;border-bottom:1px solid var(--border);display:flex;position:sticky;top:52px;z-index:19}
+.tab-btn{flex:1;padding:13px 8px;border:none;background:none;font-size:14px;font-weight:500;color:var(--ink3);cursor:pointer;border-bottom:3px solid transparent;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:6px}
+.tab-btn.active{color:var(--teal);border-bottom-color:var(--teal);font-weight:600}
+
+.content{padding:16px;max-width:480px;margin:0 auto}
+
+/* User greeting */
+.user-greeting{background:#fff;border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.user-av{width:36px;height:36px;border-radius:50%;background:var(--teal);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex-shrink:0}
 .user-name{font-weight:600;font-size:15px}
 .user-sub{font-size:12px;color:var(--ink3);margin-top:2px}
-.card{background:#fff;border:1px solid var(--border);border-radius:12px;margin-bottom:16px;overflow:hidden}
-.card-title{font-size:13px;font-weight:700;color:var(--ink2);padding:14px 16px 0;text-transform:uppercase;letter-spacing:.5px}
-.card-body{padding:14px 16px 16px}
-.form-label{display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px}
-.form-input,.form-select,.form-textarea{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:15px;color:var(--ink);background:#fff;outline:none;-webkit-appearance:none;appearance:none}
-.form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--teal)}
-.form-textarea{resize:vertical;min-height:80px;font-family:inherit}
-.form-group{margin-bottom:16px}
+
+/* Cards */
+.card{background:#fff;border:1px solid var(--border);border-radius:var(--r);margin-bottom:14px;overflow:hidden}
+.card-label{font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.6px;padding:12px 14px 0}
+.card-body{padding:12px 14px 14px}
+
+/* Forms */
+.form-group{margin-bottom:14px}
+.form-label{display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:5px}
 .req{color:var(--red)}
+.form-input,.form-select,.form-textarea{width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:var(--r-sm);font-size:15px;color:var(--ink);background:#fff;outline:none;-webkit-appearance:none;appearance:none;font-family:inherit}
+.form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(15,110,86,.1)}
+.form-textarea{resize:vertical;min-height:72px}
+.form-hint{font-size:12px;color:var(--ink3);margin-top:4px}
+.form-error{color:var(--red);font-size:13px;margin-top:4px}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 
-/* Request selector cards */
-.req-option{border:2px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer;transition:all .15s;position:relative}
-.req-option.selected{border-color:var(--teal);background:var(--teal3)}
-.req-option input{position:absolute;opacity:0;width:0;height:0}
-.req-title{font-weight:600;font-size:15px;margin-bottom:3px}
-.req-meta{font-size:12px;color:var(--ink3)}
-.req-badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:99px;margin-left:6px}
-.badge-pending{background:#fef3e2;color:#8a5a10}
-.badge-approved{background:var(--green-bg);color:var(--green)}
+/* Type toggle */
+.type-toggle{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.type-opt{border:2px solid var(--border);border-radius:var(--r-sm);padding:11px 12px;cursor:pointer;transition:all .15s}
+.type-opt.active-pre{border-color:var(--teal);background:var(--teal3)}
+.type-opt.active-sap{border-color:var(--amber);background:var(--amber-bg)}
+.type-opt-title{font-weight:600;font-size:13px;margin-bottom:2px}
+.type-opt-sub{font-size:11px;color:var(--ink3)}
 
-/* Camera upload */
-.upload-zone{border:2.5px dashed var(--border);border-radius:10px;padding:28px 16px;text-align:center;cursor:pointer;transition:all .15s;background:var(--cream)}
-.upload-zone:active,.upload-zone.has-file{border-color:var(--teal);background:var(--teal3)}
-.upload-icon{font-size:36px;margin-bottom:8px}
-.upload-text{font-size:14px;font-weight:500;color:var(--ink2);margin-bottom:4px}
-.upload-hint{font-size:12px;color:var(--ink3)}
-.preview-wrap{margin-top:12px;border-radius:8px;overflow:hidden;max-height:220px;display:flex;align-items:center;justify-content:center;background:#000}
-.preview-wrap img{max-width:100%;max-height:220px;object-fit:contain}
+/* Method toggle */
+.method-toggle{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px}
+.method-opt{border:2px solid var(--border);border-radius:var(--r-sm);padding:10px 12px;cursor:pointer;transition:all .15s}
+.method-opt.active{border-color:var(--teal);background:var(--teal3)}
+
+/* Request cards */
+.req-card{border:2px solid var(--border);border-radius:var(--r-sm);padding:13px 14px;margin-bottom:10px;cursor:pointer;transition:all .15s}
+.req-card.selected{border-color:var(--teal);background:var(--teal3)}
+.req-card-title{font-weight:600;font-size:14px;margin-bottom:3px}
+.req-card-meta{font-size:12px;color:var(--ink3)}
+.status-pill{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:99px;margin-left:6px}
+.sp-pending{background:var(--amber-bg);color:#8a5a10}
+.sp-approved{background:var(--green-bg);color:var(--green)}
+
+/* Upload */
+.upload-zone{border:2.5px dashed var(--border);border-radius:var(--r-sm);padding:24px 14px;text-align:center;cursor:pointer;background:var(--cream);transition:all .15s}
+.upload-zone.has-file{border-color:var(--teal);background:var(--teal3)}
+.upload-icon{font-size:32px;margin-bottom:6px}
+.upload-text{font-size:14px;font-weight:500;color:var(--ink2);margin-bottom:3px}
+.upload-sub{font-size:12px;color:var(--ink3)}
 input[type=file]{display:none}
+.preview-wrap{margin-top:10px;border-radius:8px;overflow:hidden;max-height:200px;display:flex;align-items:center;justify-content:center;background:#000}
+.preview-wrap img{max-width:100%;max-height:200px;object-fit:contain}
 
-/* Submit button */
-.btn-submit{width:100%;padding:16px;background:var(--teal);color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;margin-top:8px;transition:background .15s}
-.btn-submit:active{background:var(--teal2)}
-.btn-submit:disabled{opacity:.5;cursor:not-allowed}
+/* Buttons */
+.btn-primary{width:100%;padding:15px;background:var(--teal);color:#fff;border:none;border-radius:var(--r-sm);font-size:16px;font-weight:700;cursor:pointer;transition:background .15s}
+.btn-primary:active{background:var(--teal2)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
 
 /* States */
-.loading{text-align:center;padding:60px 20px;color:var(--ink3)}
-.loading-spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--teal);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 16px}
+.loading{text-align:center;padding:64px 20px;color:var(--ink3)}
+.spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--teal);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 14px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.error-state{text-align:center;padding:48px 20px}
-.error-state .icon{font-size:40px;margin-bottom:12px}
-.success-state{text-align:center;padding:48px 20px}
-.success-state .icon{font-size:56px;margin-bottom:16px}
-.success-state h2{font-size:22px;font-weight:700;color:var(--green);margin-bottom:8px}
+.error-state,.success-state{text-align:center;padding:52px 20px}
+.big-icon{font-size:48px;margin-bottom:14px}
+.success-state h2{font-size:21px;font-weight:700;color:var(--green);margin-bottom:8px}
 .success-state p{font-size:14px;color:var(--ink3);line-height:1.6}
-.success-state .btn-another{margin-top:24px;display:inline-block;padding:12px 28px;background:var(--teal);color:#fff;border-radius:8px;font-size:14px;font-weight:600;border:none;cursor:pointer}
-.empty-requests{text-align:center;padding:24px;color:var(--ink3);font-size:14px}
-.amount-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.btn-another{margin-top:20px;display:inline-block;padding:12px 28px;background:var(--teal);color:#fff;border-radius:var(--r-sm);font-size:14px;font-weight:600;border:none;cursor:pointer;width:100%}
+.empty-note{text-align:center;padding:20px;color:var(--ink3);font-size:13px;border:1px dashed var(--border);border-radius:var(--r-sm)}
+.training-warn{background:var(--amber-bg);border:1px solid #f0c97a;border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px;font-size:13px;color:#7a4e0a}
+
+/* Divider */
+.divider{border:none;border-top:1px solid var(--border);margin:14px 0}
 </style>
 </head>
 <body>
 
 <div class="header">
   <div class="header-inner">
-    <div class="header-door">
-      <svg width="28" height="36" viewBox="0 0 68 108" xmlns="http://www.w3.org/2000/svg">
-        <rect x="1" y="1" width="66" height="106" rx="3" fill="#2a2520"/>
-        <rect x="0" y="0" width="66" height="106" rx="3" fill="#ece8e0"/>
-        <rect x="6" y="8" width="54" height="90" rx="2" fill="none" stroke="#ccc9be" stroke-width="1"/>
-        <rect x="17" y="13" width="30" height="12" rx="2" fill="#d4c87a" stroke="#b8ac60" stroke-width="0.5"/>
-        <text x="32" y="22" text-anchor="middle" font-family="Georgia,serif" font-size="6.5" font-weight="700" fill="#4a3e18" letter-spacing="1">108</text>
-        <rect x="9" y="30" width="48" height="56" rx="2" fill="#faf8f3" stroke="#d0ccc0" stroke-width="0.8"/>
-        <text x="33" y="52" text-anchor="middle" font-family="Georgia,serif" font-size="7" font-weight="700" fill="#8a7a2a" letter-spacing="1">BLOOM</text>
-        <text x="33" y="62" text-anchor="middle" font-family="Georgia,serif" font-size="7" font-weight="700" fill="#8a7a2a" letter-spacing="1">BOOKS</text>
-        <rect x="19" y="92" width="26" height="5" rx="1.5" fill="#c4c0b8"/>
-        <circle cx="56" cy="70" r="3.5" fill="#ccc8c0"/>
-      </svg>
-    </div>
+    <svg width="26" height="34" viewBox="0 0 68 108" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+      <rect x="0" y="0" width="66" height="106" rx="3" fill="#ece8e0"/>
+      <rect x="6" y="8" width="54" height="90" rx="2" fill="none" stroke="#ccc9be" stroke-width="1"/>
+      <rect x="17" y="13" width="30" height="12" rx="2" fill="#d4c87a"/>
+      <text x="32" y="22" text-anchor="middle" font-family="Georgia,serif" font-size="6.5" font-weight="700" fill="#4a3e18" letter-spacing="1">108</text>
+      <rect x="9" y="30" width="48" height="56" rx="2" fill="#faf8f3" stroke="#d0ccc0" stroke-width="0.8"/>
+      <text x="33" y="50" text-anchor="middle" font-family="Georgia,serif" font-size="7" font-weight="700" fill="#8a7a2a" letter-spacing="1">BLOOM</text>
+      <text x="33" y="60" text-anchor="middle" font-family="Georgia,serif" font-size="7" font-weight="700" fill="#8a7a2a" letter-spacing="1">BOOKS</text>
+      <rect x="19" y="92" width="26" height="5" rx="1.5" fill="#c4c0b8"/>
+    </svg>
     <div>
       <div class="header-title">BloomBooks</div>
-      <div class="header-sub">Receipt Submission</div>
+      <div class="header-sub" id="header-name">Loading...</div>
     </div>
   </div>
 </div>
 
-<div class="content">
-  <div id="app-state"></div>
+<div class="tab-bar" id="tab-bar" style="display:none">
+  <button class="tab-btn active" id="tab-receipt" onclick="switchTab('receipt')">📎 Submit Receipt</button>
+  <button class="tab-btn" id="tab-new" onclick="switchTab('new')">➕ New Request</button>
+</div>
+
+<div class="content" id="main-content">
+  <div class="loading"><div class="spinner"></div>Loading...</div>
 </div>
 
 <script>
-const token = location.pathname.split('/receipt/')[1];
-let userData = null;
-let requests = [];
-let selectedFile = null;
-let selectedRequestId = null;
+const token   = location.pathname.split('/receipt/')[1];
+let pageData  = null;
+let activeTab = 'receipt';
+
+// ── Receipt tab state
+let receiptSelectedFile = null;
+let receiptSelectedId   = null;
+
+// ── New request tab state
+let newMethod  = 'in_store';
+let newType    = 'pre_approval';
+let newFile    = null;
 
 async function init() {
-  showLoading();
   try {
     const r = await fetch(`/api/receipt/${token}`);
-    const data = await r.json();
-    if (!r.ok) { showError(data.error || 'Invalid link'); return; }
-    userData  = data.user;
-    requests  = data.requests;
-    showForm();
+    const d = await r.json();
+    if (!r.ok) { showError(d.error || 'Invalid link'); return; }
+    pageData = d;
+    document.getElementById('header-name').textContent = d.user.name;
+    document.getElementById('tab-bar').style.display = 'flex';
+    renderTab();
   } catch(e) {
-    showError('Could not load. Please check your connection and try again.');
+    showError('Could not load. Check your connection and try again.');
   }
 }
 
-function showLoading() {
-  document.getElementById('app-state').innerHTML = `
-    <div class="loading">
-      <div class="loading-spinner"></div>
-      <div>Loading your receipt page...</div>
-    </div>`;
+function switchTab(tab) {
+  activeTab = tab;
+  document.getElementById('tab-receipt').classList.toggle('active', tab === 'receipt');
+  document.getElementById('tab-new').classList.toggle('active', tab === 'new');
+  renderTab();
 }
 
-function showError(msg) {
-  document.getElementById('app-state').innerHTML = `
-    <div class="error-state">
-      <div class="icon">🚫</div>
-      <h3 style="font-size:18px;font-weight:700;margin-bottom:8px">Link not found</h3>
-      <p style="font-size:14px;color:var(--ink3)">${msg}</p>
-      <p style="font-size:13px;color:var(--ink3);margin-top:12px">Contact your production manager for a new link.</p>
-    </div>`;
+function renderTab() {
+  if (activeTab === 'receipt') renderReceiptTab();
+  else renderNewRequestTab();
 }
 
-function showForm() {
-  const reqOptions = requests.length === 0
-    ? `<div class="empty-requests">No open requests found. Submit a purchase request in BloomBooks first.</div>`
-    : requests.map(r => {
-        const statusClass = ['approved','reimbursed'].includes(r.status) ? 'badge-approved' : 'badge-pending';
-        const statusLabel = r.status === 'approved' ? 'Approved' : r.status === 'pending_producer' ? 'Awaiting producer' : r.status === 'pending_treasurer' ? 'Awaiting treasurer' : r.status === 'pending_president' ? 'Awaiting president' : r.status;
+// ══════════════════════════════════════════════
+// RECEIPT TAB
+// ══════════════════════════════════════════════
+function renderReceiptTab() {
+  const u = pageData.user;
+  const reqs = pageData.requests;
+  const reqCards = reqs.length === 0
+    ? `<div class="empty-note">No open requests found.<br>Submit a new request first using the ➕ tab.</div>`
+    : reqs.map(r => {
+        const approved = ['approved'].includes(r.status);
+        const statusLabel = r.status === 'approved' ? 'Approved' : r.status.replace('pending_','Awaiting ').replace('_',' ');
         const amt = r.actual_cost || r.estimated_cost;
-        return `<label class="req-option" id="req-opt-${r.id}">
-          <input type="radio" name="request" value="${r.id}" onchange="selectRequest(${r.id})">
-          <div class="req-title">${r.title}</div>
-          <div class="req-meta">$${parseFloat(amt).toFixed(2)}${r.vendor ? ' · ' + r.vendor : ''}<span class="req-badge ${statusClass}">${statusLabel}</span></div>
-        </label>`;
+        return `<div class="req-card" id="rcard-${r.id}" onclick="selectReceiptRequest(${r.id}, ${amt})">
+          <div class="req-card-title">${r.title}</div>
+          <div class="req-card-meta">$${parseFloat(amt).toFixed(2)}${r.vendor?' · '+r.vendor:''}
+            <span class="status-pill ${approved?'sp-approved':'sp-pending'}">${statusLabel}</span>
+          </div>
+        </div>`;
       }).join('');
 
-  document.getElementById('app-state').innerHTML = `
+  document.getElementById('main-content').innerHTML = `
     <div class="user-greeting">
-      <div class="user-av">${userData.name.charAt(0).toUpperCase()}</div>
-      <div>
-        <div class="user-name">${userData.name}</div>
-        <div class="user-sub">Tap a request below to attach your receipt</div>
-      </div>
+      <div class="user-av">${u.name.charAt(0).toUpperCase()}</div>
+      <div><div class="user-name">${u.name}</div><div class="user-sub">Select a request to attach a receipt</div></div>
     </div>
 
     <div class="card">
-      <div class="card-title">Select request</div>
-      <div class="card-body" style="padding-top:10px">
-        ${reqOptions}
-      </div>
+      <div class="card-label">Select request</div>
+      <div class="card-body" style="padding-top:8px">${reqCards}</div>
     </div>
 
-    <div id="upload-section" style="display:none">
+    <div id="receipt-form" style="display:none">
       <div class="card">
-        <div class="card-title">Receipt photo</div>
+        <div class="card-label">Receipt photo</div>
         <div class="card-body">
-          <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+          <div class="upload-zone" id="r-upload-zone" onclick="document.getElementById('r-file-input').click()">
             <div class="upload-icon">📷</div>
-            <div class="upload-text">Tap to take photo or choose file</div>
-            <div class="upload-hint">JPG, PNG, or PDF accepted</div>
+            <div class="upload-text">Take photo or choose file</div>
+            <div class="upload-sub">JPG, PNG, or PDF</div>
           </div>
-          <input type="file" id="file-input" accept="image/*,application/pdf" capture="environment" onchange="handleFile(this)">
-          <div id="preview-area"></div>
+          <input type="file" id="r-file-input" accept="image/*,application/pdf" capture="environment" onchange="handleReceiptFile(this)">
+          <div id="r-preview"></div>
         </div>
       </div>
-
       <div class="card">
-        <div class="card-title">Details</div>
+        <div class="card-label">Details</div>
         <div class="card-body">
-          <div class="amount-row">
+          <div class="two-col">
             <div class="form-group">
-              <label class="form-label">Estimated amount</label>
-              <input type="text" id="estimated-amt" class="form-input" readonly style="background:var(--cream);color:var(--ink3)">
+              <label class="form-label">Estimated</label>
+              <input type="text" id="r-estimated" class="form-input" readonly style="background:var(--cream);color:var(--ink3)">
             </div>
             <div class="form-group">
-              <label class="form-label">Actual amount <span class="req">*</span></label>
-              <input type="number" id="actual-amt" class="form-input" placeholder="0.00" step="0.01" min="0">
+              <label class="form-label">Actual <span class="req">*</span></label>
+              <input type="number" id="r-actual" class="form-input" placeholder="0.00" step="0.01" min="0">
             </div>
           </div>
           <div class="form-group">
             <label class="form-label">Note (optional)</label>
-            <textarea id="receipt-note" class="form-textarea" placeholder="Any details about this purchase..."></textarea>
+            <textarea id="r-note" class="form-textarea" placeholder="Any details about this purchase..."></textarea>
           </div>
         </div>
       </div>
-
-      <div id="submit-error" style="color:var(--red);font-size:13px;margin-bottom:12px;display:none"></div>
-      <button class="btn-submit" id="submit-btn" onclick="submitReceipt()">Submit Receipt</button>
+      <div id="r-error" class="form-error" style="margin-bottom:10px;display:none"></div>
+      <button class="btn-primary" id="r-submit-btn" onclick="submitReceipt()">Submit Receipt</button>
     </div>`;
 }
 
-function selectRequest(id) {
-  selectedRequestId = id;
-  requests.forEach(r => {
-    const el = document.getElementById(`req-opt-${r.id}`);
-    if (el) el.classList.toggle('selected', r.id === id);
+function selectReceiptRequest(id, amt) {
+  receiptSelectedId = id;
+  pageData.requests.forEach(r => {
+    document.getElementById(`rcard-${r.id}`)?.classList.toggle('selected', r.id === id);
   });
-  document.getElementById('upload-section').style.display = 'block';
-  // Pre-fill estimated amount
-  const req = requests.find(r => r.id === id);
-  if (req) {
-    const amt = req.actual_cost || req.estimated_cost;
-    document.getElementById('estimated-amt').value = '$' + parseFloat(amt).toFixed(2);
-    document.getElementById('actual-amt').value = parseFloat(amt).toFixed(2);
-  }
-  document.getElementById('upload-section').scrollIntoView({behavior:'smooth', block:'start'});
+  document.getElementById('receipt-form').style.display = 'block';
+  document.getElementById('r-estimated').value = '$' + parseFloat(amt).toFixed(2);
+  document.getElementById('r-actual').value    = parseFloat(amt).toFixed(2);
+  document.getElementById('receipt-form').scrollIntoView({behavior:'smooth', block:'start'});
 }
 
-function handleFile(input) {
+function handleReceiptFile(input) {
   const file = input.files[0];
   if (!file) return;
-  selectedFile = file;
-  const zone = document.getElementById('upload-zone');
-  zone.classList.add('has-file');
-  const preview = document.getElementById('preview-area');
+  receiptSelectedFile = file;
+  document.getElementById('r-upload-zone').classList.add('has-file');
+  const preview = document.getElementById('r-preview');
   if (file.type.startsWith('image/')) {
     const reader = new FileReader();
-    reader.onload = e => {
-      preview.innerHTML = `<div class="preview-wrap"><img src="${e.target.result}" alt="Receipt preview"></div>`;
-    };
+    reader.onload = e => { preview.innerHTML = `<div class="preview-wrap"><img src="${e.target.result}"></div>`; };
     reader.readAsDataURL(file);
   } else {
-    preview.innerHTML = `<div style="margin-top:10px;padding:10px 12px;background:var(--teal3);border-radius:8px;font-size:13px;color:var(--teal)">✓ ${file.name}</div>`;
+    preview.innerHTML = `<div style="margin-top:8px;padding:9px 12px;background:var(--teal3);border-radius:var(--r-sm);font-size:13px;color:var(--teal)">✓ ${file.name}</div>`;
   }
 }
 
 async function submitReceipt() {
-  const actualAmt = document.getElementById('actual-amt').value;
-  const note      = document.getElementById('receipt-note').value.trim();
-  const errEl     = document.getElementById('submit-error');
-  const btn       = document.getElementById('submit-btn');
+  const actual = document.getElementById('r-actual').value;
+  const note   = document.getElementById('r-note').value.trim();
+  const errEl  = document.getElementById('r-error');
+  const btn    = document.getElementById('r-submit-btn');
   errEl.style.display = 'none';
-
-  if (!selectedRequestId) { showErr('Please select a request.'); return; }
-  if (!selectedFile)      { showErr('Please attach a receipt photo.'); return; }
-  if (!actualAmt)         { showErr('Please enter the actual amount spent.'); return; }
-
-  btn.disabled = true;
-  btn.textContent = 'Submitting...';
-
+  if (!receiptSelectedId) { showRErr('Please select a request.'); return; }
+  if (!receiptSelectedFile){ showRErr('Please attach a receipt photo.'); return; }
+  if (!actual)             { showRErr('Please enter the actual amount.'); return; }
+  btn.disabled = true; btn.textContent = 'Submitting...';
   const fd = new FormData();
-  fd.append('request_id', selectedRequestId);
-  fd.append('actual_cost', actualAmt);
+  fd.append('request_id', receiptSelectedId);
+  fd.append('actual_cost', actual);
   fd.append('note', note);
-  fd.append('file', selectedFile);
-
+  fd.append('file', receiptSelectedFile);
   try {
     const r = await fetch(`/api/receipt/${token}/submit`, {method:'POST', body:fd});
-    const data = await r.json();
-    if (!r.ok) { showErr(data.error || 'Submission failed'); btn.disabled=false; btn.textContent='Submit Receipt'; return; }
-    showSuccess();
+    const d = await r.json();
+    if (!r.ok) { showRErr(d.error || 'Submission failed'); btn.disabled=false; btn.textContent='Submit Receipt'; return; }
+    showSuccess('receipt');
   } catch(e) {
-    showErr('Network error — please try again.');
-    btn.disabled = false;
-    btn.textContent = 'Submit Receipt';
+    showRErr('Network error — please try again.');
+    btn.disabled=false; btn.textContent='Submit Receipt';
+  }
+}
+function showRErr(msg) { const e=document.getElementById('r-error'); e.textContent=msg; e.style.display='block'; }
+
+// ══════════════════════════════════════════════
+// NEW REQUEST TAB
+// ══════════════════════════════════════════════
+function renderNewRequestTab() {
+  const u = pageData.user;
+  const budgets = pageData.budgets || [];
+  const trained = u.training_complete;
+
+  // Group budgets by production
+  const byProd = {};
+  const orgBudgets = [];
+  for (const b of budgets) {
+    if (b.production_id) {
+      const key = b.production_id;
+      if (!byProd[key]) byProd[key] = {name: b.production_name, items: []};
+      byProd[key].items.push(b);
+    } else {
+      orgBudgets.push(b);
+    }
+  }
+
+  let budgetOpts = '<option value="">Select department / budget...</option>';
+  for (const [pid, group] of Object.entries(byProd)) {
+    budgetOpts += `<optgroup label="${group.name}">`;
+    group.items.forEach(b => {
+      const rem = b.total_amount - b.spent;
+      budgetOpts += `<option value="${b.id}">${b.name} (${fmtMoney(rem)} left)</option>`;
+    });
+    budgetOpts += '</optgroup>';
+  }
+  if (orgBudgets.length > 0) {
+    budgetOpts += `<optgroup label="Org-level">`;
+    orgBudgets.forEach(b => {
+      const rem = b.total_amount - b.spent;
+      budgetOpts += `<option value="${b.id}">${b.name} (${fmtMoney(rem)} left)</option>`;
+    });
+    budgetOpts += '</optgroup>';
+  }
+
+  const prodOpts = (pageData.productions||[]).map(p=>`<option value="${p.id}">${p.name} — ${p.season}</option>`).join('');
+
+  document.getElementById('main-content').innerHTML = `
+    <div class="user-greeting">
+      <div class="user-av">${u.name.charAt(0).toUpperCase()}</div>
+      <div><div class="user-name">${u.name}</div><div class="user-sub">Submit a new purchase request</div></div>
+    </div>
+
+    ${!trained ? `<div class="training-warn">⚠️ You haven't completed purchasing training yet. You can still submit requests but an admin may need to approve access.</div>` : ''}
+
+    <div class="card">
+      <div class="card-label">Request type</div>
+      <div class="card-body" style="padding-top:8px">
+        <div class="type-toggle">
+          <div class="type-opt active-pre" id="ntype-pre" onclick="setNewType('pre_approval')">
+            <div class="type-opt-title">Pre-approval</div>
+            <div class="type-opt-sub">Submit before buying</div>
+          </div>
+          <div class="type-opt" id="ntype-sap" onclick="setNewType('sap')">
+            <div class="type-opt-title">SAP</div>
+            <div class="type-opt-sub">Already purchased</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Purchase details</div>
+      <div class="card-body">
+        <div class="form-group">
+          <label class="form-label">What are you buying? <span class="req">*</span></label>
+          <input type="text" id="n-title" class="form-input" placeholder="e.g. Paint for set construction">
+        </div>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Estimated cost <span class="req">*</span></label>
+            <input type="number" id="n-cost" class="form-input" placeholder="0.00" step="0.01" min="0" inputmode="decimal">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Budget / dept <span class="req">*</span></label>
+            <select id="n-budget" class="form-select">${budgetOpts}</select>
+          </div>
+        </div>
+        ${prodOpts ? `<div class="form-group">
+          <label class="form-label">Production (if applicable)</label>
+          <select id="n-prod" class="form-select">
+            <option value="">Org-level / not show-specific</option>
+            ${prodOpts}
+          </select>
+        </div>` : ''}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Purchase method</div>
+      <div class="card-body" style="padding-top:8px">
+        <div class="method-toggle">
+          <div class="method-opt active" id="nmethod-store" onclick="setNewMethod('in_store')">
+            <div style="font-size:18px;margin-bottom:3px">🏪</div>
+            <div style="font-size:13px;font-weight:600">In-store</div>
+          </div>
+          <div class="method-opt" id="nmethod-online" onclick="setNewMethod('online')">
+            <div style="font-size:18px;margin-bottom:3px">🌐</div>
+            <div style="font-size:13px;font-weight:600">Online</div>
+          </div>
+        </div>
+        <div id="n-vendor-field" class="form-group" style="margin-top:10px">
+          <label class="form-label">Store / vendor name</label>
+          <input type="text" id="n-vendor" class="form-input" placeholder="e.g. Home Depot, Joann Fabrics">
+        </div>
+        <div id="n-url-field" class="form-group" style="margin-top:10px;display:none">
+          <label class="form-label">Link to item <span class="req">*</span></label>
+          <input type="url" id="n-item-url" class="form-input" placeholder="https://..." inputmode="url">
+        </div>
+      </div>
+    </div>
+
+    <div id="n-sap-section" style="display:none">
+      <div class="card">
+        <div class="card-label">SAP details</div>
+        <div class="card-body">
+          <div class="form-group">
+            <label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
+            <textarea id="n-sap-reason" class="form-textarea" placeholder="Explain the circumstances..."></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-label">Receipt photo</div>
+        <div class="card-body">
+          <div class="upload-zone" id="n-upload-zone" onclick="document.getElementById('n-file-input').click()">
+            <div class="upload-icon">📷</div>
+            <div class="upload-text">Take photo or choose file</div>
+            <div class="upload-sub">JPG, PNG, or PDF</div>
+          </div>
+          <input type="file" id="n-file-input" accept="image/*,application/pdf" capture="environment" onchange="handleNewFile(this)">
+          <div id="n-preview"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Additional notes (optional)</label>
+          <textarea id="n-desc" class="form-textarea" placeholder="Any context that would help approvers..."></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div id="n-error" class="form-error" style="margin-bottom:10px;display:none"></div>
+    <button class="btn-primary" id="n-submit-btn" onclick="submitNewRequest()">Submit Request</button>`;
+}
+
+function fmtMoney(n) {
+  return '$' + (parseFloat(n)||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+}
+
+function setNewType(type) {
+  newType = type;
+  const isSAP = type === 'sap';
+  document.getElementById('ntype-pre').className = 'type-opt' + (!isSAP ? ' active-pre' : '');
+  document.getElementById('ntype-sap').className = 'type-opt' + (isSAP ? ' active-sap' : '');
+  document.getElementById('n-sap-section').style.display = isSAP ? 'block' : 'none';
+}
+
+function setNewMethod(method) {
+  newMethod = method;
+  const isOnline = method === 'online';
+  document.getElementById('nmethod-store').classList.toggle('active', !isOnline);
+  document.getElementById('nmethod-online').classList.toggle('active', isOnline);
+  document.getElementById('n-vendor-field').style.display = isOnline ? 'none' : 'block';
+  document.getElementById('n-url-field').style.display    = isOnline ? 'block' : 'none';
+}
+
+function handleNewFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  newFile = file;
+  document.getElementById('n-upload-zone').classList.add('has-file');
+  const preview = document.getElementById('n-preview');
+  if (file.type.startsWith('image/')) {
+    const reader = new FileReader();
+    reader.onload = e => { preview.innerHTML = `<div class="preview-wrap"><img src="${e.target.result}"></div>`; };
+    reader.readAsDataURL(file);
+  } else {
+    preview.innerHTML = `<div style="margin-top:8px;padding:9px 12px;background:var(--teal3);border-radius:var(--r-sm);font-size:13px;color:var(--teal)">✓ ${file.name}</div>`;
   }
 }
 
-function showErr(msg) {
-  const el = document.getElementById('submit-error');
-  el.textContent = msg;
-  el.style.display = 'block';
+async function submitNewRequest() {
+  const title   = document.getElementById('n-title')?.value.trim() || '';
+  const cost    = document.getElementById('n-cost')?.value || '';
+  const budget  = document.getElementById('n-budget')?.value || '';
+  const prodEl  = document.getElementById('n-prod');
+  const prodId  = prodEl ? prodEl.value : '';
+  const vendor  = newMethod === 'in_store' ? (document.getElementById('n-vendor')?.value.trim() || '') : '';
+  const itemUrl = newMethod === 'online'   ? (document.getElementById('n-item-url')?.value.trim() || '') : '';
+  const desc    = document.getElementById('n-desc')?.value.trim() || '';
+  const sapReason = document.getElementById('n-sap-reason')?.value.trim() || '';
+  const errEl   = document.getElementById('n-error');
+  const btn     = document.getElementById('n-submit-btn');
+  errEl.style.display = 'none';
+
+  if (!title)  { showNErr('Please describe what you\'re buying.'); return; }
+  if (!cost)   { showNErr('Please enter the estimated cost.'); return; }
+  if (!budget) { showNErr('Please select a budget or department.'); return; }
+  if (newMethod === 'online' && !itemUrl) { showNErr('Please provide a link to the item.'); return; }
+  if (newType === 'sap' && !sapReason) { showNErr('Please explain why prior approval was not possible.'); return; }
+
+  btn.disabled = true; btn.textContent = 'Submitting...';
+
+  const fd = new FormData();
+  fd.append('title', title);
+  fd.append('estimated_cost', cost);
+  fd.append('budget_id', budget);
+  fd.append('type', newType);
+  fd.append('purchase_method', newMethod);
+  fd.append('vendor', vendor);
+  fd.append('item_url', itemUrl);
+  fd.append('description', desc);
+  fd.append('sap_reason', sapReason);
+  if (prodId) fd.append('production_id', prodId);
+  if (newType === 'sap' && newFile) fd.append('file', newFile);
+
+  try {
+    const r = await fetch(`/api/receipt/${token}/new-request`, {method:'POST', body:fd});
+    const d = await r.json();
+    if (!r.ok) { showNErr(d.error || 'Submission failed'); btn.disabled=false; btn.textContent='Submit Request'; return; }
+    showSuccess('new');
+  } catch(e) {
+    showNErr('Network error — please try again.');
+    btn.disabled=false; btn.textContent='Submit Request';
+  }
+}
+function showNErr(msg) { const e=document.getElementById('n-error'); e.textContent=msg; e.style.display='block'; }
+
+// ══════════════════════════════════════════════
+// SHARED
+// ══════════════════════════════════════════════
+function showError(msg) {
+  document.getElementById('tab-bar').style.display = 'none';
+  document.getElementById('main-content').innerHTML = `
+    <div class="error-state">
+      <div class="big-icon">🚫</div>
+      <h3 style="font-size:18px;font-weight:700;margin-bottom:8px">Link not found</h3>
+      <p style="font-size:14px;color:var(--ink3)">${msg}</p>
+      <p style="font-size:13px;color:var(--ink3);margin-top:10px">Contact your production manager for a new link.</p>
+    </div>`;
 }
 
-function showSuccess() {
-  document.getElementById('app-state').innerHTML = `
+function showSuccess(type) {
+  const msgs = {
+    receipt: { icon: '✅', title: 'Receipt submitted!',
+      body: 'Your receipt has been attached. The team will review it and process your reimbursement once approved.' },
+    new: { icon: '🎉', title: 'Request submitted!',
+      body: "Your purchase request has been submitted and is now in the approval queue. You'll get an update by email." },
+  };
+  const m = msgs[type];
+  document.getElementById('main-content').innerHTML = `
     <div class="success-state">
-      <div class="icon">✅</div>
-      <h2>Receipt submitted!</h2>
-      <p>Your receipt has been attached to the request.<br>The team will review it and you'll be reimbursed once approved.</p>
-      <button class="btn-another" onclick="location.reload()">Submit another</button>
+      <div class="big-icon">${m.icon}</div>
+      <h2>${m.title}</h2>
+      <p>${m.body}</p>
+      <button class="btn-another" onclick="location.reload()">Back to BloomBooks Mobile</button>
     </div>`;
+  document.getElementById('tab-bar').style.display = 'none';
 }
 
 init();
