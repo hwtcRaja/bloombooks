@@ -123,19 +123,31 @@ def init_db():
         action TEXT NOT NULL, entity_type TEXT, entity_id INTEGER, detail TEXT,
         created_at TEXT DEFAULT (to_char(now(),'YYYY-MM-DD HH24:MI:SS')))''')
 
-    # ── Migrations — safely add columns that may not exist on older deployments ──
+    # Department owners — who manages each budget/department
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_budget_members (
+        id SERIAL PRIMARY KEY,
+        budget_id INTEGER REFERENCES bb_budgets(id) ON DELETE CASCADE,
+        user_id   INTEGER REFERENCES bb_users(id) ON DELETE CASCADE,
+        is_owner  INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT (to_char(now(),'YYYY-MM-DD HH24:MI:SS')),
+        UNIQUE(budget_id, user_id))''')
+
+    # ── Migrations ────────────────────────────────────────────────────────────
     migrations = [
         ("bb_budgets",           "production_id",     "INTEGER"),
         ("bb_purchase_requests", "production_id",     "INTEGER"),
         ("bb_purchase_requests", "producer_note",     "TEXT"),
         ("bb_purchase_requests", "producer_acted_by", "INTEGER"),
         ("bb_purchase_requests", "producer_acted_at", "TEXT"),
+        ("bb_users",             "is_active",         "INTEGER DEFAULT 1"),
     ]
     for table, column, col_type in migrations:
         c.execute("""SELECT COUNT(*) AS n FROM information_schema.columns
                      WHERE table_name=%s AND column_name=%s""", (table, column))
         if c.fetchone()['n'] == 0:
             c.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}')
+        # Backfill is_active=1 for existing users
+    c.execute("UPDATE bb_users SET is_active=1 WHERE is_active IS NULL")
 
     def hp(pw): return hashlib.sha256(pw.encode()).hexdigest()
     for u in [
@@ -278,6 +290,8 @@ def login():
                          (data['email'].strip().lower(), hash_pw(data['password']))).fetchone()
         conn.close()
         if not u: return jsonify({'error':'Invalid email or password'}),401
+        if u.get('is_active') == 0:
+            return jsonify({'error':'This account has been deactivated. Please contact an admin.'}),403
         session['user_id'] = u['id']
         return jsonify({'user':dict(u)})
     except Exception as e:
@@ -320,7 +334,7 @@ def list_users():
     err = require_auth(['admin','treasurer','president'])
     if err: return err
     conn = get_db()
-    users = conn.execute('SELECT id,name,email,role,training_complete,created_at FROM bb_users ORDER BY name').fetchall()
+    users = conn.execute('SELECT id,name,email,role,training_complete,is_active,created_at FROM bb_users ORDER BY name').fetchall()
     conn.close()
     return jsonify([dict(u) for u in users])
 
@@ -333,8 +347,8 @@ def create_user():
     if not name or not email or not pw: return jsonify({'error':'Name, email and password required'}),400
     conn = get_db()
     try:
-        conn.execute('INSERT INTO bb_users (name,email,password,role,training_complete) VALUES (%s,%s,%s,%s,%s)',
-                     (name,email,hash_pw(pw),data.get('role','volunteer'),int(data.get('training_complete',0))))
+        conn.execute('INSERT INTO bb_users (name,email,password,role,training_complete,is_active) VALUES (%s,%s,%s,%s,%s,%s)',
+                     (name,email,hash_pw(pw),data.get('role','volunteer'),int(data.get('training_complete',0)),1))
         conn.commit(); conn.close(); return jsonify({'ok':True})
     except psycopg2.IntegrityError:
         conn.close(); return jsonify({'error':'Email already exists'}),409
@@ -345,9 +359,75 @@ def update_user(uid):
     if err: return err
     data = request.json
     conn = get_db()
-    if 'role' in data: conn.execute('UPDATE bb_users SET role=%s WHERE id=%s',(data['role'],uid))
-    if 'training_complete' in data: conn.execute('UPDATE bb_users SET training_complete=%s WHERE id=%s',(data['training_complete'],uid))
-    if 'password' in data and data['password']: conn.execute('UPDATE bb_users SET password=%s WHERE id=%s',(hash_pw(data['password']),uid))
+    if 'name'             in data: conn.execute('UPDATE bb_users SET name=%s WHERE id=%s',(data['name'],uid))
+    if 'email'            in data: conn.execute('UPDATE bb_users SET email=%s WHERE id=%s',(data['email'].strip().lower(),uid))
+    if 'role'             in data: conn.execute('UPDATE bb_users SET role=%s WHERE id=%s',(data['role'],uid))
+    if 'training_complete'in data: conn.execute('UPDATE bb_users SET training_complete=%s WHERE id=%s',(data['training_complete'],uid))
+    if 'is_active'        in data: conn.execute('UPDATE bb_users SET is_active=%s WHERE id=%s',(data['is_active'],uid))
+    if 'password' in data and data['password']:
+        conn.execute('UPDATE bb_users SET password=%s WHERE id=%s',(hash_pw(data['password']),uid))
+    conn.commit(); conn.close(); return jsonify({'ok':True})
+
+@app.route('/api/users/<int:uid>', methods=['DELETE'])
+def delete_user(uid):
+    err = require_auth(['admin','treasurer','president'])
+    if err: return err
+    u = current_user()
+    if u['id'] == uid:
+        return jsonify({'error':'You cannot delete your own account'}),400
+    conn = get_db()
+    # Remove from production memberships and budget memberships first
+    conn.execute('DELETE FROM bb_production_members WHERE user_id=%s',(uid,))
+    conn.execute('DELETE FROM bb_budget_members WHERE user_id=%s',(uid,))
+    conn.execute('DELETE FROM bb_users WHERE id=%s',(uid,))
+    conn.commit(); conn.close()
+    log_action(u['id'],'deleted_user','user',uid,f'deleted user {uid}')
+    return jsonify({'ok':True})
+
+# ─── Budget members (department owners) ──────────────────────────────────────
+@app.route('/api/budgets/<int:bid>/members', methods=['GET'])
+def list_budget_members(bid):
+    err = require_auth()
+    if err: return err
+    conn = get_db()
+    rows = conn.execute('''SELECT bm.*,u.name,u.email FROM bb_budget_members bm
+                           JOIN bb_users u ON bm.user_id=u.id
+                           WHERE bm.budget_id=%s ORDER BY u.name''',(bid,)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/budgets/<int:bid>/members', methods=['POST'])
+def add_budget_member(bid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    # Allow producer of the production this budget belongs to, or admin/treasurer/president
+    conn = get_db()
+    b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
+    if not b: conn.close(); return jsonify({'error':'Budget not found'}),404
+    b = dict(b)
+    if u['role'] not in ('admin','treasurer','president'):
+        if not b['production_id'] or not is_producer_of(u['id'],b['production_id']):
+            conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    data = request.json
+    try:
+        conn.execute('INSERT INTO bb_budget_members (budget_id,user_id,is_owner) VALUES (%s,%s,%s)',
+                     (bid, data['user_id'], int(data.get('is_owner',1))))
+        conn.commit(); conn.close(); return jsonify({'ok':True})
+    except psycopg2.IntegrityError:
+        conn.close(); return jsonify({'error':'User already assigned to this department'}),409
+
+@app.route('/api/budgets/<int:bid>/members/<int:uid>', methods=['DELETE'])
+def remove_budget_member(bid, uid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    conn = get_db()
+    b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
+    if not b: conn.close(); return jsonify({'error':'Budget not found'}),404
+    b = dict(b)
+    if u['role'] not in ('admin','treasurer','president'):
+        if not b['production_id'] or not is_producer_of(u['id'],b['production_id']):
+            conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    conn.execute('DELETE FROM bb_budget_members WHERE budget_id=%s AND user_id=%s',(bid,uid))
     conn.commit(); conn.close(); return jsonify({'ok':True})
 
 # ─── Productions ──────────────────────────────────────────────────────────────
@@ -376,7 +456,14 @@ def list_productions():
                                   WHERE m.production_id=%s ORDER BY m.member_role,u.name''',(prod['id'],)).fetchall()
         prod['members'] = [dict(m) for m in members]
         budgets = conn.execute('SELECT * FROM bb_budgets WHERE production_id=%s AND is_active=1',(prod['id'],)).fetchall()
-        prod['budgets'] = [dict(b) for b in budgets]
+        prod['budgets'] = []
+        for b in budgets:
+            bd = dict(b)
+            owners = conn.execute('''SELECT bm.user_id,u.name,u.email,bm.is_owner
+                                     FROM bb_budget_members bm JOIN bb_users u ON bm.user_id=u.id
+                                     WHERE bm.budget_id=%s ORDER BY u.name''',(bd['id'],)).fetchall()
+            bd['owners'] = [dict(o) for o in owners]
+            prod['budgets'].append(bd)
         prod['total_spent'] = sum(b['spent'] for b in prod['budgets'])
         prod['i_am_producer'] = any(m['user_id']==u['id'] and m['member_role']=='producer' for m in prod['members'])
         result.append(prod)
@@ -522,6 +609,12 @@ def list_requests():
     is_admin = u['role'] in ('admin','treasurer','president')
     producer_ids = user_production_ids(u['id'],'producer')
 
+    # Budget IDs this user owns as department owner
+    conn2 = get_db()
+    owned_budget_rows = conn2.execute('SELECT budget_id FROM bb_budget_members WHERE user_id=%s',(u['id'],)).fetchall()
+    conn2.close()
+    owned_budget_ids = [r['budget_id'] for r in owned_budget_rows]
+
     base = '''SELECT r.*,sub.name as submitter_name,sub.email as submitter_email,
                 b.name as budget_name,b.area as budget_area,
                 b.total_amount as budget_total,b.spent as budget_spent,
@@ -539,12 +632,18 @@ def list_requests():
     if mine_only:
         conditions.append('r.submitted_by=%s'); params.append(u['id'])
     elif not is_admin:
+        sub_conditions = ['r.submitted_by=%s']
+        sub_params = [u['id']]
         if producer_ids:
             ph = ','.join(['%s']*len(producer_ids))
-            conditions.append(f'(r.submitted_by=%s OR r.production_id IN ({ph}))')
-            params.extend([u['id']]+producer_ids)
-        else:
-            conditions.append('r.submitted_by=%s'); params.append(u['id'])
+            sub_conditions.append(f'r.production_id IN ({ph})')
+            sub_params.extend(producer_ids)
+        if owned_budget_ids:
+            ph = ','.join(['%s']*len(owned_budget_ids))
+            sub_conditions.append(f'r.budget_id IN ({ph})')
+            sub_params.extend(owned_budget_ids)
+        conditions.append(f'({" OR ".join(sub_conditions)})')
+        params.extend(sub_params)
 
     if status_filter: conditions.append('r.status=%s'); params.append(status_filter)
     if prod_filter: conditions.append('r.production_id=%s'); params.append(int(prod_filter))
