@@ -409,7 +409,7 @@ tr:hover td{background:var(--cream)}
         </button>
         <button class="sb-item" data-page="users" onclick="nav('users')">
           <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/></svg>
-          Volunteers
+          Users
         </button>
       </div>
       <div class="sb-section">
@@ -583,7 +583,7 @@ function nav(page) {
   const titles = {
     dashboard: 'Dashboard', 'my-requests': 'My Requests', 'new-request': 'New Purchase Request',
     reimbursements: 'Reimbursements', approvals: 'Approval Queue', 'all-requests': 'All Requests',
-    budgets: 'Budget Tracker', users: 'Volunteers', training: 'Purchasing Training',
+    budgets: 'Budget Tracker', users: 'Users', training: 'Purchasing Training',
     'training-admin': 'Manage Training', productions: 'Productions'
   };
   document.getElementById('tb-title').textContent = titles[page] || page;
@@ -2023,6 +2023,7 @@ async function renderUsers() {
               ${canManage ? `<td><div class="flex gap-8">
                 <button class="btn btn-outline btn-sm" onclick="showEditUserModal(${u.id},'${u.name.replace(/'/g,"\\'")}','${u.email}',${u.training_complete})">Edit</button>
                 <button class="btn btn-outline btn-sm" onclick="showResetPasswordModal(${u.id},'${u.name.replace(/'/g,"\\'")}')">Password</button>
+                <button class="btn btn-outline btn-sm" onclick="showReceiptLink(${u.id},'${u.name.replace(/'/g,"\\'")}')">📱 Receipt link</button>
                 ${u.is_active!==0?`<button class="btn btn-danger btn-sm" onclick="setUserActive(${u.id},0)">Deactivate</button>`:''}
                 <button class="btn btn-danger btn-sm" onclick="confirmDeleteUser(${u.id},'${u.name.replace(/'/g,"\\'")}')">Delete</button>
               </div></td>` : ''}
@@ -2150,6 +2151,51 @@ async function doAddUser() {
     toast(`Account created for ${name}!`, 'success');
     closeModal(); renderUsers();
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+async function showReceiptLink(uid, name) {
+  try {
+    const d = await api('GET', `/users/${uid}/receipt-token`);
+    const html = `
+      <div class="modal-header"><span class="modal-title">📱 Mobile receipt link</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-body">
+        <p class="text-sm mb-16">Share this link with <strong>${name}</strong> so they can submit receipts from their phone — no login required.</p>
+        <div class="form-group">
+          <label class="form-label">Their personal receipt link</label>
+          <div class="flex gap-8">
+            <input type="text" id="receipt-link-val" class="form-input" value="${d.link}" readonly onclick="this.select()" style="font-size:12px">
+            <button class="btn btn-primary btn-sm" onclick="copyReceiptLink()">Copy</button>
+          </div>
+          <div class="form-hint mt-4">Unique to ${name}. Anyone with this link can submit receipts on their behalf.</div>
+        </div>
+        <div class="mt-16" style="background:var(--teal3);border-radius:var(--r);padding:12px 14px">
+          <div class="text-xs fw-600 mb-4" style="color:var(--teal)">HOW IT WORKS</div>
+          <div class="text-sm" style="color:var(--ink2)">They open the link on their phone, pick the request, take a photo, confirm the amount, and tap submit. Receipts appear in BloomBooks immediately.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-danger btn-sm" onclick="regenerateReceiptLink(${uid},'${name.replace(/'/g,"\\'")}')">Regenerate link</button>
+        <button class="btn btn-primary" onclick="closeModal()">Done</button>
+      </div>`;
+    showModal(html);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function copyReceiptLink() {
+  const val = document.getElementById('receipt-link-val');
+  val.select();
+  navigator.clipboard.writeText(val.value)
+    .then(() => toast('Link copied!', 'success'))
+    .catch(() => { document.execCommand('copy'); toast('Link copied!', 'success'); });
+}
+
+async function regenerateReceiptLink(uid, name) {
+  if (!confirm(`Regenerate the receipt link for ${name}? Their old link will stop working.`)) return;
+  try {
+    const d = await api('POST', `/users/${uid}/receipt-token/regenerate`);
+    document.getElementById('receipt-link-val').value = d.link;
+    toast('Link regenerated!', 'success');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 function showResetPasswordModal(uid, name) {

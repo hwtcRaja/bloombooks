@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Submit Receipt — BloomBooks</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --teal:#0f6e56;--teal2:#1a8a6c;--teal3:#e1f5ee;
+  --cream:#faf8f3;--ink:#1e1e1b;--ink2:#4a4a45;--ink3:#888880;
+  --border:#dddad0;--red:#b53030;--green:#2d7d4f;--green-bg:#edf7f2;
+  --amber:#c97c10;--amber-bg:#fef3e2;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;padding-bottom:40px}
+.header{background:var(--ink);padding:16px 20px 14px;position:sticky;top:0;z-index:10}
+.header-inner{display:flex;align-items:center;gap:10px}
+.header-logo{display:flex;align-items:center;gap:10px}
+.header-door{flex-shrink:0}
+.header-title{color:#fff;font-size:17px;font-weight:700;letter-spacing:-.2px}
+.header-sub{color:rgba(255,255,255,.45);font-size:11px}
+.content{padding:20px 16px;max-width:480px;margin:0 auto}
+.user-greeting{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:20px;display:flex;align-items:center;gap:12px}
+.user-av{width:38px;height:38px;border-radius:50%;background:var(--teal);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;flex-shrink:0}
+.user-name{font-weight:600;font-size:15px}
+.user-sub{font-size:12px;color:var(--ink3);margin-top:2px}
+.card{background:#fff;border:1px solid var(--border);border-radius:12px;margin-bottom:16px;overflow:hidden}
+.card-title{font-size:13px;font-weight:700;color:var(--ink2);padding:14px 16px 0;text-transform:uppercase;letter-spacing:.5px}
+.card-body{padding:14px 16px 16px}
+.form-label{display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px}
+.form-input,.form-select,.form-textarea{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:15px;color:var(--ink);background:#fff;outline:none;-webkit-appearance:none;appearance:none}
+.form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--teal)}
+.form-textarea{resize:vertical;min-height:80px;font-family:inherit}
+.form-group{margin-bottom:16px}
+.req{color:var(--red)}
+
+/* Request selector cards */
+.req-option{border:2px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer;transition:all .15s;position:relative}
+.req-option.selected{border-color:var(--teal);background:var(--teal3)}
+.req-option input{position:absolute;opacity:0;width:0;height:0}
+.req-title{font-weight:600;font-size:15px;margin-bottom:3px}
+.req-meta{font-size:12px;color:var(--ink3)}
+.req-badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:99px;margin-left:6px}
+.badge-pending{background:#fef3e2;color:#8a5a10}
+.badge-approved{background:var(--green-bg);color:var(--green)}
+
+/* Camera upload */
+.upload-zone{border:2.5px dashed var(--border);border-radius:10px;padding:28px 16px;text-align:center;cursor:pointer;transition:all .15s;background:var(--cream)}
+.upload-zone:active,.upload-zone.has-file{border-color:var(--teal);background:var(--teal3)}
+.upload-icon{font-size:36px;margin-bottom:8px}
+.upload-text{font-size:14px;font-weight:500;color:var(--ink2);margin-bottom:4px}
+.upload-hint{font-size:12px;color:var(--ink3)}
+.preview-wrap{margin-top:12px;border-radius:8px;overflow:hidden;max-height:220px;display:flex;align-items:center;justify-content:center;background:#000}
+.preview-wrap img{max-width:100%;max-height:220px;object-fit:contain}
+input[type=file]{display:none}
+
+/* Submit button */
+.btn-submit{width:100%;padding:16px;background:var(--teal);color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;margin-top:8px;transition:background .15s}
+.btn-submit:active{background:var(--teal2)}
+.btn-submit:disabled{opacity:.5;cursor:not-allowed}
+
+/* States */
+.loading{text-align:center;padding:60px 20px;color:var(--ink3)}
+.loading-spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--teal);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.error-state{text-align:center;padding:48px 20px}
+.error-state .icon{font-size:40px;margin-bottom:12px}
+.success-state{text-align:center;padding:48px 20px}
+.success-state .icon{font-size:56px;margin-bottom:16px}
+.success-state h2{font-size:22px;font-weight:700;color:var(--green);margin-bottom:8px}
+.success-state p{font-size:14px;color:var(--ink3);line-height:1.6}
+.success-state .btn-another{margin-top:24px;display:inline-block;padding:12px 28px;background:var(--teal);color:#fff;border-radius:8px;font-size:14px;font-weight:600;border:none;cursor:pointer}
+.empty-requests{text-align:center;padding:24px;color:var(--ink3);font-size:14px}
+.amount-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-inner">
+    <div class="header-door">
+      <svg width="28" height="36" viewBox="0 0 68 108" xmlns="http://www.w3.org/2000/svg">
+        <rect x="1" y="1" width="66" height="106" rx="3" fill="#2a2520"/>
+        <rect x="0" y="0" width="66" height="106" rx="3" fill="#ece8e0"/>
+        <rect x="6" y="8" width="54" height="90" rx="2" fill="none" stroke="#ccc9be" stroke-width="1"/>
+        <rect x="17" y="13" width="30" height="12" rx="2" fill="#d4c87a" stroke="#b8ac60" stroke-width="0.5"/>
+        <text x="32" y="22" text-anchor="middle" font-family="Georgia,serif" font-size="6.5" font-weight="700" fill="#4a3e18" letter-spacing="1">108</text>
+        <rect x="9" y="30" width="48" height="56" rx="2" fill="#faf8f3" stroke="#d0ccc0" stroke-width="0.8"/>
+        <text x="33" y="52" text-anchor="middle" font-family="Georgia,serif" font-size="7" font-weight="700" fill="#8a7a2a" letter-spacing="1">BLOOM</text>
+        <text x="33" y="62" text-anchor="middle" font-family="Georgia,serif" font-size="7" font-weight="700" fill="#8a7a2a" letter-spacing="1">BOOKS</text>
+        <rect x="19" y="92" width="26" height="5" rx="1.5" fill="#c4c0b8"/>
+        <circle cx="56" cy="70" r="3.5" fill="#ccc8c0"/>
+      </svg>
+    </div>
+    <div>
+      <div class="header-title">BloomBooks</div>
+      <div class="header-sub">Receipt Submission</div>
+    </div>
+  </div>
+</div>
+
+<div class="content">
+  <div id="app-state"></div>
+</div>
+
+<script>
+const token = location.pathname.split('/receipt/')[1];
+let userData = null;
+let requests = [];
+let selectedFile = null;
+let selectedRequestId = null;
+
+async function init() {
+  showLoading();
+  try {
+    const r = await fetch(`/api/receipt/${token}`);
+    const data = await r.json();
+    if (!r.ok) { showError(data.error || 'Invalid link'); return; }
+    userData  = data.user;
+    requests  = data.requests;
+    showForm();
+  } catch(e) {
+    showError('Could not load. Please check your connection and try again.');
+  }
+}
+
+function showLoading() {
+  document.getElementById('app-state').innerHTML = `
+    <div class="loading">
+      <div class="loading-spinner"></div>
+      <div>Loading your receipt page...</div>
+    </div>`;
+}
+
+function showError(msg) {
+  document.getElementById('app-state').innerHTML = `
+    <div class="error-state">
+      <div class="icon">🚫</div>
+      <h3 style="font-size:18px;font-weight:700;margin-bottom:8px">Link not found</h3>
+      <p style="font-size:14px;color:var(--ink3)">${msg}</p>
+      <p style="font-size:13px;color:var(--ink3);margin-top:12px">Contact your production manager for a new link.</p>
+    </div>`;
+}
+
+function showForm() {
+  const reqOptions = requests.length === 0
+    ? `<div class="empty-requests">No open requests found. Submit a purchase request in BloomBooks first.</div>`
+    : requests.map(r => {
+        const statusClass = ['approved','reimbursed'].includes(r.status) ? 'badge-approved' : 'badge-pending';
+        const statusLabel = r.status === 'approved' ? 'Approved' : r.status === 'pending_producer' ? 'Awaiting producer' : r.status === 'pending_treasurer' ? 'Awaiting treasurer' : r.status === 'pending_president' ? 'Awaiting president' : r.status;
+        const amt = r.actual_cost || r.estimated_cost;
+        return `<label class="req-option" id="req-opt-${r.id}">
+          <input type="radio" name="request" value="${r.id}" onchange="selectRequest(${r.id})">
+          <div class="req-title">${r.title}</div>
+          <div class="req-meta">$${parseFloat(amt).toFixed(2)}${r.vendor ? ' · ' + r.vendor : ''}<span class="req-badge ${statusClass}">${statusLabel}</span></div>
+        </label>`;
+      }).join('');
+
+  document.getElementById('app-state').innerHTML = `
+    <div class="user-greeting">
+      <div class="user-av">${userData.name.charAt(0).toUpperCase()}</div>
+      <div>
+        <div class="user-name">${userData.name}</div>
+        <div class="user-sub">Tap a request below to attach your receipt</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Select request</div>
+      <div class="card-body" style="padding-top:10px">
+        ${reqOptions}
+      </div>
+    </div>
+
+    <div id="upload-section" style="display:none">
+      <div class="card">
+        <div class="card-title">Receipt photo</div>
+        <div class="card-body">
+          <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+            <div class="upload-icon">📷</div>
+            <div class="upload-text">Tap to take photo or choose file</div>
+            <div class="upload-hint">JPG, PNG, or PDF accepted</div>
+          </div>
+          <input type="file" id="file-input" accept="image/*,application/pdf" capture="environment" onchange="handleFile(this)">
+          <div id="preview-area"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Details</div>
+        <div class="card-body">
+          <div class="amount-row">
+            <div class="form-group">
+              <label class="form-label">Estimated amount</label>
+              <input type="text" id="estimated-amt" class="form-input" readonly style="background:var(--cream);color:var(--ink3)">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Actual amount <span class="req">*</span></label>
+              <input type="number" id="actual-amt" class="form-input" placeholder="0.00" step="0.01" min="0">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Note (optional)</label>
+            <textarea id="receipt-note" class="form-textarea" placeholder="Any details about this purchase..."></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div id="submit-error" style="color:var(--red);font-size:13px;margin-bottom:12px;display:none"></div>
+      <button class="btn-submit" id="submit-btn" onclick="submitReceipt()">Submit Receipt</button>
+    </div>`;
+}
+
+function selectRequest(id) {
+  selectedRequestId = id;
+  requests.forEach(r => {
+    const el = document.getElementById(`req-opt-${r.id}`);
+    if (el) el.classList.toggle('selected', r.id === id);
+  });
+  document.getElementById('upload-section').style.display = 'block';
+  // Pre-fill estimated amount
+  const req = requests.find(r => r.id === id);
+  if (req) {
+    const amt = req.actual_cost || req.estimated_cost;
+    document.getElementById('estimated-amt').value = '$' + parseFloat(amt).toFixed(2);
+    document.getElementById('actual-amt').value = parseFloat(amt).toFixed(2);
+  }
+  document.getElementById('upload-section').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function handleFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  selectedFile = file;
+  const zone = document.getElementById('upload-zone');
+  zone.classList.add('has-file');
+  const preview = document.getElementById('preview-area');
+  if (file.type.startsWith('image/')) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      preview.innerHTML = `<div class="preview-wrap"><img src="${e.target.result}" alt="Receipt preview"></div>`;
+    };
+    reader.readAsDataURL(file);
+  } else {
+    preview.innerHTML = `<div style="margin-top:10px;padding:10px 12px;background:var(--teal3);border-radius:8px;font-size:13px;color:var(--teal)">✓ ${file.name}</div>`;
+  }
+}
+
+async function submitReceipt() {
+  const actualAmt = document.getElementById('actual-amt').value;
+  const note      = document.getElementById('receipt-note').value.trim();
+  const errEl     = document.getElementById('submit-error');
+  const btn       = document.getElementById('submit-btn');
+  errEl.style.display = 'none';
+
+  if (!selectedRequestId) { showErr('Please select a request.'); return; }
+  if (!selectedFile)      { showErr('Please attach a receipt photo.'); return; }
+  if (!actualAmt)         { showErr('Please enter the actual amount spent.'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  const fd = new FormData();
+  fd.append('request_id', selectedRequestId);
+  fd.append('actual_cost', actualAmt);
+  fd.append('note', note);
+  fd.append('file', selectedFile);
+
+  try {
+    const r = await fetch(`/api/receipt/${token}/submit`, {method:'POST', body:fd});
+    const data = await r.json();
+    if (!r.ok) { showErr(data.error || 'Submission failed'); btn.disabled=false; btn.textContent='Submit Receipt'; return; }
+    showSuccess();
+  } catch(e) {
+    showErr('Network error — please try again.');
+    btn.disabled = false;
+    btn.textContent = 'Submit Receipt';
+  }
+}
+
+function showErr(msg) {
+  const el = document.getElementById('submit-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function showSuccess() {
+  document.getElementById('app-state').innerHTML = `
+    <div class="success-state">
+      <div class="icon">✅</div>
+      <h2>Receipt submitted!</h2>
+      <p>Your receipt has been attached to the request.<br>The team will review it and you'll be reimbursed once approved.</p>
+      <button class="btn-another" onclick="location.reload()">Submit another</button>
+    </div>`;
+}
+
+init();
+</script>
+</body>
+</html>
