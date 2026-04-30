@@ -393,6 +393,25 @@ def delete_user(uid):
     return jsonify({'ok':True})
 
 # ─── Budget members (department owners) ──────────────────────────────────────
+@app.route('/api/budgets/<int:bid>', methods=['DELETE'])
+def delete_budget(bid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    conn = get_db()
+    b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
+    if not b: conn.close(); return jsonify({'error':'Not found'}),404
+    b = dict(b)
+    if u['role'] not in ('admin','treasurer','president'):
+        if not b['production_id'] or not is_producer_of(u['id'],b['production_id']):
+            conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    # Nullify budget_id on any linked requests rather than hard-fail
+    conn.execute('UPDATE bb_purchase_requests SET budget_id=NULL WHERE budget_id=%s',(bid,))
+    conn.execute('DELETE FROM bb_budget_members WHERE budget_id=%s',(bid,))
+    conn.execute('DELETE FROM bb_budgets WHERE id=%s',(bid,))
+    conn.commit(); conn.close()
+    log_action(u['id'],'deleted_budget','budget',bid,b['name'])
+    return jsonify({'ok':True})
+
 @app.route('/api/budgets/<int:bid>/members', methods=['GET'])
 def list_budget_members(bid):
     err = require_auth()
