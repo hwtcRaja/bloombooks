@@ -1154,80 +1154,114 @@ async function doApprove(rid, action) {
 
 // ── Approvals Queue ──────────────────────────────────────────────────────────
 async function renderApprovals() {
+  document.getElementById('tb-title').textContent = 'Request Board';
   try {
     const all = await api('GET', '/requests');
-    const queue = all.filter(r => ['pending_producer','pending_treasurer','pending_president'].includes(r.status));
-    const myQueue = queue.filter(r => {
-      if (currentUser.role === 'treasurer') return r.status === 'pending_treasurer';
-      if (currentUser.role === 'president') return r.status === 'pending_president';
-      if (currentUser.role === 'admin') return true;
-      // producer — handled by server filtering already
-      return true;
-    });
 
-    if (myQueue.length === 0) {
-      document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-icon">✓</div><h3>All clear!</h3><p>No requests awaiting approval.</p></div>`;
-      return;
+    // "In Review" = has at least one approval but not fully done yet
+    const inReview = all.filter(r =>
+      ['pending_treasurer','pending_president'].includes(r.status) &&
+      (r.producer_acted_at || r.treasurer_acted_at)
+    );
+    const inReviewIds = new Set(inReview.map(r => r.id));
+    const pending  = all.filter(r => ['pending_producer','pending_treasurer','pending_president'].includes(r.status) && !inReviewIds.has(r.id));
+    const approved = all.filter(r => r.status === 'approved');
+    const paid     = all.filter(r => r.status === 'reimbursed');
+    const denied   = all.filter(r => r.status === 'denied');
+
+    function approvalTrail(r) {
+      const isShow = !!r.production_id;
+      const steps = [];
+      if (isShow) steps.push({ label:'Producer', done:!!r.producer_acted_at, note:r.producer_note, current:r.status==='pending_producer' });
+      steps.push({ label:'Treasurer', done:!!r.treasurer_acted_at, note:r.treasurer_note, current:r.status==='pending_treasurer' });
+      steps.push({ label:'President', done:!!r.president_acted_at, note:r.president_note, current:r.status==='pending_president' });
+      return '<div class="flex gap-4 mt-8 flex-wrap" style="align-items:center">' +
+        steps.map((s,i) => {
+          const color = s.done ? 'var(--green)' : s.current ? 'var(--amber)' : 'var(--ink3)';
+          const bg    = s.done ? 'var(--green-bg)' : s.current ? 'var(--amber-bg)' : 'var(--cream2)';
+          const icon  = s.done ? '✓' : s.current ? '⏳' : '·';
+          return (i>0?'<span style="color:var(--border);font-size:9px;margin:0 2px">→</span>':'') +
+            `<span title="${s.note||''}" style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:99px;background:${bg};color:${color};cursor:${s.note?'help':'default'}">${icon} ${s.label}</span>`;
+        }).join('') + '</div>';
     }
 
-    document.getElementById('content').innerHTML = `
-      <div class="section-sub">${myQueue.length} request${myQueue.length!==1?'s':''} awaiting action</div>
-      <div style="display:flex;flex-direction:column;gap:12px">
-        ${myQueue.map(r => {
-          const canAct =
-            (currentUser.role==='admin') ||
-            (r.status==='pending_treasurer' && currentUser.role==='treasurer') ||
-            (r.status==='pending_president' && currentUser.role==='president') ||
-            (r.status==='pending_producer');
-          const budget_pct = r.budget_total > 0 ? Math.min(100, ((r.budget_spent + r.estimated_cost)/r.budget_total)*100) : 0;
-          return `<div class="card">
-            <div class="card-body">
-              <div class="flex flex-center gap-8 mb-12">
-                ${statusBadge(r.status, r.is_sap)}
-                ${r.production_name ? `<span class="badge badge-treasurer">${r.production_name}</span>` : '<span class="text-xs text-muted">Org-level</span>'}
-                <span class="text-xs text-muted" style="margin-left:auto">${fmtDate(r.submitted_at)}</span>
-              </div>
-              <div class="flex flex-center gap-12 mb-8">
-                <div>
-                  <div class="fw-600">${r.title}</div>
-                  <div class="text-xs text-muted">${r.submitter_name} · ${r.vendor||'No vendor'}</div>
-                </div>
-                <div style="margin-left:auto;text-align:right">
-                  <div class="fw-600" style="font-size:18px">${fmtMoney(r.estimated_cost)}</div>
-                  <div class="text-xs text-muted">${r.budget_name||''}</div>
-                </div>
-              </div>
-              ${r.description ? `<div class="text-sm text-muted mb-8">${r.description}</div>` : ''}
-              ${r.item_url ? `<div class="mb-8"><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:12px;color:var(--teal)">🌐 View item →</a></div>` : ''}
-              ${r.sap_reason ? `<div class="text-sm mb-8" style="color:var(--amber);background:var(--amber-bg);padding:8px 10px;border-radius:var(--r-sm)">SAP reason: ${r.sap_reason}</div>` : ''}
-              ${r.producer_note ? `<div class="text-xs text-muted mb-4">Producer note: ${r.producer_note}</div>` : ''}
-              ${r.budget_name ? `<div class="mb-8">
-                <div class="flex flex-center gap-8">
-                  <span class="text-xs text-muted">Budget after approval</span>
-                  <span class="text-xs text-muted" style="margin-left:auto">${fmtMoney(r.budget_spent+r.estimated_cost)} / ${fmtMoney(r.budget_total)}</span>
-                </div>
-                <div class="budget-bar-wrap mt-4"><div class="budget-bar-fill ${budget_pct>90?'danger':budget_pct>70?'warn':''}" style="width:${budget_pct}%"></div></div>
-              </div>` : ''}
-              ${r.receipts && r.receipts.length > 0 ? `<div class="receipt-grid mb-8">${r.receipts.map(rc=>`<div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.style.display='none'"><span style="font-size:18px">📎</span></div>`).join('')}</div>` : ''}
-              ${canAct ? `
-                <div class="approve-panel mt-8">
-                  ${r.status==='pending_president' ? `<div class="form-group"><label class="form-label">Confirm actual cost</label><input type="number" id="act-${r.id}" class="form-input" value="${r.actual_cost||r.estimated_cost}" step="0.01"></div>` : ''}
-                  <div class="form-group"><label class="form-label">Note for volunteer (optional)</label><textarea id="note-${r.id}" class="form-textarea" style="min-height:56px"></textarea></div>
-                  <div class="flex gap-8">
-                    <button class="btn btn-approve" onclick="quickApprove(${r.id},'approve')">✓ Approve</button>
-                    <button class="btn btn-danger" onclick="quickApprove(${r.id},'deny')">✕ Deny</button>
-                    <button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">Full detail</button>
-                  </div>
-                </div>` : `<button class="btn btn-outline btn-sm mt-8" onclick="showRequestDetail(${r.id})">View detail</button>`}
+    function canActOn(r) {
+      if (currentUser.role === 'admin') return ['pending_producer','pending_treasurer','pending_president'].includes(r.status);
+      if (currentUser.role === 'treasurer') return r.status === 'pending_treasurer';
+      if (currentUser.role === 'president') return r.status === 'pending_president';
+      if (currentUser.role === 'producer') return r.status === 'pending_producer';
+      return false;
+    }
+
+    function requestCard(r) {
+      const bp = r.budget_total > 0 ? Math.min(100,((r.budget_spent+r.estimated_cost)/r.budget_total)*100) : 0;
+      const acting = canActOn(r);
+      return `<div class="card mb-8">
+        <div class="card-body" style="padding:11px 13px;font-size:13px">
+          <div class="flex flex-center gap-6 mb-5">
+            ${r.production_name?`<span class="badge badge-treasurer" style="font-size:10px">${r.production_name}</span>`:'<span class="text-xs text-muted">Org</span>'}
+            ${r.is_sap?'<span class="badge badge-sap" style="font-size:10px">SAP</span>':''}
+            ${r.purchase_method==='online'?'<span style="font-size:10px">🌐</span>':'<span style="font-size:10px">🏪</span>'}
+            <span class="text-xs text-muted" style="margin-left:auto">${fmtDate(r.submitted_at)}</span>
+          </div>
+          <div class="fw-600 mb-1" style="line-height:1.3">${r.title}</div>
+          <div class="text-xs text-muted mb-5">${r.submitter_name}${r.budget_name?' · '+r.budget_name:''}</div>
+          <div class="fw-600" style="font-size:15px">${fmtMoney(r.estimated_cost)}${r.actual_cost&&r.actual_cost!==r.estimated_cost?` <span class="text-xs text-muted">actual ${fmtMoney(r.actual_cost)}</span>`:''}</div>
+          ${r.item_url?`<div class="mt-4"><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:11px;color:var(--teal)">🌐 View item →</a></div>`:''}
+          ${r.sap_reason?`<div class="mt-5 text-xs" style="color:var(--amber);background:var(--amber-bg);padding:4px 7px;border-radius:var(--r-sm)">SAP: ${r.sap_reason}</div>`:''}
+          ${r.budget_name?`<div class="mt-5"><div class="budget-bar-wrap" style="height:3px"><div class="budget-bar-fill ${bp>90?'danger':bp>70?'warn':''}" style="width:${bp}%;height:3px"></div></div><div class="text-xs text-muted mt-1">${fmtMoney(r.budget_spent)}/${fmtMoney(r.budget_total)}</div></div>`:''}
+          ${r.receipts&&r.receipts.length>0?`<div class="flex gap-3 mt-5">${r.receipts.map(rc=>`<div class="receipt-thumb" style="width:36px;height:36px" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.outerHTML='<span>📎</span>'"></div>`).join('')}</div>`:''}
+          ${approvalTrail(r)}
+          ${acting?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+            ${r.status==='pending_president'?`<input type="number" id="act-${r.id}" class="form-input mb-6" value="${r.actual_cost||r.estimated_cost}" step="0.01" placeholder="Actual cost" style="padding:5px 9px;font-size:12px">` :''}
+            <textarea id="note-${r.id}" class="form-textarea mb-6" style="min-height:38px;font-size:12px" placeholder="Note (optional)..."></textarea>
+            <div class="flex gap-6">
+              <button class="btn btn-approve btn-sm" style="flex:1" onclick="quickApprove(${r.id},'approve')">✓ Approve</button>
+              <button class="btn btn-danger btn-sm" style="flex:1" onclick="quickApprove(${r.id},'deny')">✕ Deny</button>
             </div>
-          </div>`;
-        }).join('')}
+          </div>`:`<button class="btn btn-outline btn-sm mt-6 w-full" onclick="showRequestDetail(${r.id})">View</button>`}
+        </div>
       </div>`;
+    }
+
+    const colDefs = [
+      { key:'pending',  label:'Pending',   color:'#c97c10', data:pending  },
+      { key:'inreview', label:'In Review', color:'#185fa5', data:inReview },
+      { key:'approved', label:'Approved',  color:'#2d7d4f', data:approved },
+      { key:'paid',     label:'Paid',      color:'#555',    data:paid     },
+    ];
+
+    document.getElementById('content').innerHTML = `
+      <div style="overflow-x:auto">
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(220px,1fr));gap:14px;min-width:700px">
+          ${colDefs.map(col => `<div>
+            <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px;padding:6px 2px">
+              <span style="width:8px;height:8px;border-radius:50%;background:${col.color};flex-shrink:0"></span>
+              <span style="font-size:13px;font-weight:700">${col.label}</span>
+              <span style="margin-left:auto;font-size:11px;font-weight:600;padding:1px 7px;border-radius:99px;background:var(--cream2);color:var(--ink3)">${col.data.length}</span>
+            </div>
+            <div style="min-height:60px">
+              ${col.data.length===0
+                ?'<div style="border:2px dashed var(--border);border-radius:var(--r);padding:16px;text-align:center;color:var(--ink3);font-size:12px">Nothing here</div>'
+                :col.data.map(r=>requestCard(r)).join('')}
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>
+      ${denied.length>0?`<div style="margin-top:24px">
+        <div class="text-xs text-muted fw-600 mb-8">DENIED (${denied.length})</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">
+          ${denied.map(r=>`<div class="card" style="opacity:.55"><div class="card-body" style="padding:10px 13px">
+            <div class="fw-600 text-sm mb-1">${r.title}</div>
+            <div class="text-xs text-muted">${r.submitter_name} · ${fmtMoney(r.estimated_cost)}</div>
+            ${r.president_note||r.treasurer_note||r.producer_note?`<div class="text-xs mt-4" style="color:var(--red)">${r.president_note||r.treasurer_note||r.producer_note}</div>`:''}
+          </div></div>`).join('')}
+        </div>
+      </div>`:''}`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
   }
 }
-
 async function quickApprove(rid, action) {
   const note = document.getElementById(`note-${rid}`)?.value || '';
   const actEl = document.getElementById(`act-${rid}`);
@@ -1455,12 +1489,55 @@ async function renderBudgets() {
         </div>`;
     }
 
-    // Org-level budgets
+    // Org-level budgets — with parent/subcategory hierarchy
     if (orgBudgets.length > 0) {
-      html += `
-        <div class="fw-600 mb-12" style="font-size:15px">Org-level budgets</div>
-        ${orgBudgets.filter(b=>b.is_active).map(b => budgetCard(b, canEdit)).join('')}
-        ${orgBudgets.filter(b=>!b.is_active).length > 0 ? `<div class="text-xs text-muted mt-12 mb-8">Archived</div>${orgBudgets.filter(b=>!b.is_active).map(b=>budgetCard(b,isAdmin)).join('')}` : ''}`;
+      const topLevel = orgBudgets.filter(b => !b.parent_id && b.is_active);
+      const subBudgets = orgBudgets.filter(b => b.parent_id);
+
+      html += `<div class="fw-600 mb-12" style="font-size:15px">Org-level budgets</div>`;
+      topLevel.forEach(parent => {
+        const children = subBudgets.filter(c => c.parent_id === parent.id && c.is_active);
+        const pp = parent.total_amount>0?Math.min(100,(parent.spent/parent.total_amount)*100):0;
+        const pr = parent.total_amount - parent.spent;
+        html += `<div class="card mb-12"><div class="card-body" style="padding:14px 16px">
+          <div class="flex flex-center mb-6">
+            <div><div class="fw-600">${parent.name}</div><div class="text-xs text-muted">${parent.area}</div></div>
+            <div style="margin-left:auto;text-align:right">
+              <div class="fw-600" style="color:${pr<0?'var(--red)':'var(--ink)'}">${fmtMoney(pr)}</div>
+              <div class="text-xs text-muted">of ${fmtMoney(parent.total_amount)}</div>
+            </div>
+          </div>
+          <div class="budget-bar-wrap mb-8"><div class="budget-bar-fill ${pp>90?'danger':pp>70?'warn':''}" style="width:${pp}%"></div></div>
+          ${children.map(c => {
+            const cp = c.total_amount>0?Math.min(100,(c.spent/c.total_amount)*100):0;
+            const cr = c.total_amount - c.spent;
+            return `<div style="border-left:3px solid var(--border);padding-left:12px;margin:8px 0">
+              <div class="flex flex-center mb-3">
+                <div><div class="text-sm fw-600">${c.name}</div><div class="text-xs text-muted">${c.area}</div></div>
+                <div style="margin-left:auto;text-align:right">
+                  <div class="fw-600 text-sm" style="color:${cr<0?'var(--red)':'var(--ink)'}">${fmtMoney(cr)}</div>
+                  <div class="text-xs text-muted">of ${fmtMoney(c.total_amount)}</div>
+                </div>
+              </div>
+              <div class="budget-bar-wrap" style="height:4px"><div class="budget-bar-fill" style="width:${cp}%;height:4px"></div></div>
+              ${canEdit?`<div class="flex gap-6 mt-4">
+                <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 7px" onclick="showBudgetModal(${c.id},'${c.name.replace(/'/g,"\\'")}','${c.area}','${c.season||''}',${c.total_amount},null,${c.parent_id})">Edit</button>
+                <button class="btn btn-danger btn-sm" style="font-size:11px;padding:2px 7px" onclick="confirmDeleteBudget(${c.id},'${c.name.replace(/'/g,"\\'")}')">Delete</button>
+              </div>`:''}
+            </div>`;
+          }).join('')}
+          ${canEdit?`<div class="flex gap-6 mt-8">
+            <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="showBudgetModal(${parent.id},'${parent.name.replace(/'/g,"\\'")}','${parent.area}','${parent.season||''}',${parent.total_amount})">Edit</button>
+            <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="showBudgetModal(0,'','','',0,null,${parent.id})">+ Sub-budget</button>
+            <button class="btn btn-danger btn-sm" style="font-size:11px;padding:3px 8px" onclick="confirmDeleteBudget(${parent.id},'${parent.name.replace(/'/g,"\\'")}')">Delete</button>
+          </div>`:''}
+        </div></div>`;
+      });
+      const archived = orgBudgets.filter(b => !b.is_active);
+      if (archived.length > 0) {
+        html += `<div class="text-xs text-muted mt-12 mb-8">Archived</div>`;
+        html += archived.map(b => budgetCard(b, canEdit)).join('');
+      }
     }
 
     if (!html) html = `<div class="empty"><div class="empty-icon">💰</div><h3>No budgets yet</h3>${isAdmin?'<button class="btn btn-primary mt-16" onclick="showBudgetModal()">Create first budget</button>':''}</div>`;
@@ -1470,17 +1547,36 @@ async function renderBudgets() {
   }
 }
 
-function showBudgetModal(id=0, name='', area='', season='', total=0, production_id=null) {
+function showBudgetModal(id=0, name='', area='', season='', total=0, production_id=null, parent_id=null) {
   const isEdit = !!id;
+  // Build parent options from org-level budgets (top-level only, no parent themselves)
+  const parentOpts = allBudgets
+    .filter(b => !b.production_id && !b.parent_id && b.is_active && b.id !== id)
+    .map(b => `<option value="${b.id}" ${parent_id==b.id?'selected':''}>${b.name}</option>`)
+    .join('');
+
   const html = `
     <div class="modal-header"><span class="modal-title">${isEdit?'Edit':'New'} ${production_id?'department budget':'org budget'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <div class="form-group"><label class="form-label">Name <span class="req">*</span></label><input type="text" id="b-name" class="form-input" value="${name}" placeholder="e.g. Scenery & Props"></div>
+      <div class="form-group"><label class="form-label">Name <span class="req">*</span></label>
+        <input type="text" id="b-name" class="form-input" value="${name}" placeholder="e.g. Marketing, Props, Scenery"></div>
       <div class="form-row">
-        <div class="form-group"><label class="form-label">Area / type</label><input type="text" id="b-area" class="form-input" value="${area}" placeholder="e.g. Props, Costumes, Technical"></div>
-        <div class="form-group"><label class="form-label">Season</label><input type="text" id="b-season" class="form-input" value="${season}" placeholder="e.g. 2024-2025"></div>
+        <div class="form-group"><label class="form-label">Area / type</label>
+          <input type="text" id="b-area" class="form-input" value="${area}" placeholder="e.g. Props, Costumes, Marketing"></div>
+        <div class="form-group"><label class="form-label">Season</label>
+          <input type="text" id="b-season" class="form-input" value="${season}" placeholder="e.g. 2024-2025"></div>
       </div>
-      <div class="form-group"><label class="form-label">Total amount <span class="req">*</span></label><input type="number" id="b-total" class="form-input" value="${total||''}" placeholder="0.00" step="0.01"></div>
+      <div class="form-group"><label class="form-label">Budget amount <span class="req">*</span></label>
+        <input type="number" id="b-total" class="form-input" value="${total||''}" placeholder="0.00" step="0.01"></div>
+      ${!production_id && parentOpts ? `
+      <div class="form-group">
+        <label class="form-label">Parent category (optional)</label>
+        <select id="b-parent" class="form-select">
+          <option value="">Top-level category</option>
+          ${parentOpts}
+        </select>
+        <div class="form-hint">Make this a subcategory under an existing org budget</div>
+      </div>` : `<input type="hidden" id="b-parent" value="">`}
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -1490,12 +1586,14 @@ function showBudgetModal(id=0, name='', area='', season='', total=0, production_
 }
 
 async function saveBudget(id, production_id) {
+  const parentEl = document.getElementById('b-parent');
   const data = {
     name: document.getElementById('b-name').value.trim(),
     area: document.getElementById('b-area').value.trim(),
     season: document.getElementById('b-season').value.trim(),
     total_amount: parseFloat(document.getElementById('b-total').value),
-    production_id: production_id || null
+    production_id: production_id || null,
+    parent_id: parentEl && parentEl.value ? parseInt(parentEl.value) : null,
   };
   if (!data.name || !data.total_amount) { toast('Name and amount are required', 'error'); return; }
   try {
