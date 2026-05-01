@@ -1031,7 +1031,8 @@ async function submitRequest() {
   const sapReason = document.getElementById('req-sap-reason')?.value.trim() || '';
   const method = document.querySelector('input[name="purchase-method"]:checked')?.value || 'in_store';
   const vendor  = method === 'in_store' ? (document.getElementById('req-vendor')?.value.trim() || '') : '';
-  const itemUrl = method === 'online'   ? (document.getElementById('req-item-url')?.value.trim() || '') : '';
+  const rawUrl  = method === 'online' ? (document.getElementById('req-item-url')?.value.trim() || '') : '';
+  const itemUrl = rawUrl && !rawUrl.match(/^https?:\/\//) ? 'https://' + rawUrl : rawUrl;
   const prodEl  = document.getElementById('req-production');
   const prodId  = prodEl ? prodEl.value : null;
   const errEl   = document.getElementById('req-error');
@@ -1076,7 +1077,6 @@ async function showRequestDetail(rid) {
   const reqs = await api('GET', '/requests');
   const r = reqs.find(x => x.id === rid) || (await api('GET', `/requests?mine=1`)).find(x => x.id === rid);
   if (!r) return;
-  console.log('[DEBUG] Request:', r.id, r.title, 'receipts:', r.receipts);
 
   const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
   const canApprove = isAdmin && (r.status === 'pending_treasurer' || r.status === 'pending_president');
@@ -1140,9 +1140,42 @@ async function showRequestDetail(rid) {
       ${receiptsHtml}
       ${uploadHtml}
       ${approvalHtml}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Close</button>
+      ${(isAdmin || (r.submitted_by === currentUser.id && r.status.startsWith('pending_'))) ? `
+        <button class="btn btn-danger" onclick="confirmDeleteRequest(${r.id},'${r.title.replace(/'/g,"\\'")}')">Delete request</button>` : ''}
     </div>`;
 
   showModal(html, 'large');
+}
+
+async function confirmDeleteRequest(rid, title) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Delete request</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm">Are you sure you want to permanently delete <strong>${title}</strong>?</p>
+      <p class="text-sm mt-8" style="color:var(--red)">This cannot be undone. Any attached receipts will also be removed.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="doDeleteRequest(${rid})">Delete permanently</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doDeleteRequest(rid) {
+  try {
+    await api('DELETE', `/requests/${rid}`);
+    toast('Request deleted.', 'info');
+    closeModal();
+    refreshBadges();
+    // Refresh whichever page we're on
+    const active = document.querySelector('.sb-item.active')?.dataset?.page;
+    if (active === 'approvals') renderApprovals();
+    else if (active === 'all-requests') renderAllRequests();
+    else renderMyRequests();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 async function uploadReceiptForRequest(rid, input) {
