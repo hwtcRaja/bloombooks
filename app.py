@@ -1259,6 +1259,23 @@ def create_production():
     log_action(current_user()['id'],'created_production','production',prod_id,name)
     return jsonify({'ok':True,'id':prod_id})
 
+@app.route('/api/productions/<int:pid>', methods=['DELETE'])
+def delete_production(pid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ('admin','treasurer','president'):
+        return jsonify({'error':'Insufficient permissions'}),403
+    conn = get_db()
+    # Nullify production_id on requests and budgets rather than cascade-failing
+    conn.execute('UPDATE bb_purchase_requests SET production_id=NULL WHERE production_id=%s',(pid,))
+    conn.execute('UPDATE bb_budgets SET production_id=NULL WHERE production_id=%s',(pid,))
+    conn.execute('DELETE FROM bb_production_members WHERE production_id=%s',(pid,))
+    conn.execute('DELETE FROM bb_production_revenue WHERE production_id=%s',(pid,))
+    conn.execute('DELETE FROM bb_productions WHERE id=%s',(pid,))
+    conn.commit(); conn.close()
+    log_action(u['id'],'deleted_production','production',pid)
+    return jsonify({'ok':True})
+
 @app.route('/api/productions/<int:pid>', methods=['PATCH'])
 def update_production(pid):
     u = current_user()
