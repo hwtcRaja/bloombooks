@@ -782,6 +782,33 @@ def create_request():
     )
     return jsonify({'ok': True, 'id': req_id})
 
+@app.route('/api/requests/<int:rid>', methods=['DELETE'])
+def delete_request(rid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    conn = get_db()
+    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s',(rid,)).fetchone()
+    if not req: conn.close(); return jsonify({'error':'Not found'}),404
+    req = dict(req)
+    # Submitter can delete their own pending requests; admins/treasurer/president can delete anything
+    is_admin = u['role'] in ('admin','treasurer','president')
+    is_owner = req['submitted_by'] == u['id']
+    is_pending = req['status'].startswith('pending_')
+    if not is_admin and not (is_owner and is_pending):
+        conn.close()
+        return jsonify({'error': 'You can only delete your own pending requests'}),403
+    # Clean up related records first
+    conn.execute('DELETE FROM bb_receipts WHERE request_id=%s',(rid,))
+    conn.execute('DELETE FROM bb_reimbursements WHERE request_id=%s',(rid,))
+    # If already approved, reverse the budget spend
+    if req['status'] in ('approved','reimbursed') and req.get('budget_id') and req.get('actual_cost'):
+        conn.execute('UPDATE bb_budgets SET spent=GREATEST(0,spent-%s) WHERE id=%s',
+                     (req['actual_cost'], req['budget_id']))
+    conn.execute('DELETE FROM bb_purchase_requests WHERE id=%s',(rid,))
+    conn.commit(); conn.close()
+    log_action(u['id'],'deleted_request','request',rid,req['title'])
+    return jsonify({'ok':True})
+
 @app.route('/api/requests/<int:rid>/approve', methods=['POST'])
 def approve_request(rid):
     err = require_auth(['treasurer', 'president', 'admin'])
