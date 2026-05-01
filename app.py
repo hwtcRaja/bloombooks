@@ -5,12 +5,11 @@ import psycopg2.extras
 import hashlib
 import os
 import json
+import secrets
 from datetime import datetime
 import cloudinary
 import cloudinary.uploader
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests as req_lib
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'bloombooks-dev-key')
