@@ -557,7 +557,7 @@ def list_users():
 
 @app.route('/api/users/create', methods=['POST'])
 def create_user():
-    err = require_auth(['admin'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     data = request.json
     name     = data.get('name', '').strip()
@@ -748,37 +748,39 @@ def create_request():
     err = require_auth()
     if err: return err
     u = current_user()
-
-    # enforce training gate
     if not u['training_complete'] and u['role'] == 'volunteer':
         return jsonify({'error': 'You must complete purchasing training before submitting requests.'}), 403
-
     data = request.json
-    is_emergency = 1 if data.get('is_emergency') else 0
-    req_type = 'emergency' if is_emergency else 'pre_approval'
-    status = 'pending_treasurer'
-
+    is_sap   = 1 if data.get('is_sap') else 0
+    req_type = 'sap' if is_sap else 'pre_approval'
+    purchase_method = data.get('purchase_method', 'in_store')
+    item_url = data.get('item_url', '')
+    prod_id  = data.get('production_id') or None
+    if prod_id and get_production_producers(int(prod_id)):
+        status = 'pending_producer'
+    else:
+        status = 'pending_treasurer'
     conn = get_db()
-    cur = conn.execute(
-        '''INSERT INTO bb_purchase_requests 
-           (type,status,title,description,vendor,estimated_cost,budget_id,submitted_by,is_emergency,emergency_reason)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-        (req_type, status, data['title'], data.get('description',''),
-         data.get('vendor',''), float(data['estimated_cost']),
-         data['budget_id'], u['id'], is_emergency, data.get('emergency_reason',''))
+    conn.execute(
+        '''INSERT INTO bb_purchase_requests
+           (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
+            submitted_by,is_emergency,emergency_reason,purchase_method,item_url)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+        (req_type, status, data['title'], data.get('description',''), data.get('vendor',''),
+         float(data['estimated_cost']), data.get('budget_id') or None,
+         prod_id, u['id'], is_sap, data.get('sap_reason',''), purchase_method, item_url)
     )
-    req_id = cur.lastrowid
+    row = conn.execute('SELECT lastval() AS id').fetchone()
+    req_id = row['id']
     conn.commit()
     conn.close()
-
     log_action(u['id'], 'submitted_request', 'request', req_id, data['title'])
     notify_request_submitted(
         req_id=req_id, req_title=data['title'],
         submitter_name=u['name'], submitter_email=u['email'],
         estimated_cost=data['estimated_cost'], req_type=req_type,
-        purchase_method=data.get('purchase_method','in_store'),
-        item_url=data.get('item_url',''),
-        production_id=prod_id, status=status
+        purchase_method=purchase_method, item_url=item_url,
+        production_id=int(prod_id) if prod_id else None, status=status
     )
     return jsonify({'ok': True, 'id': req_id})
 
