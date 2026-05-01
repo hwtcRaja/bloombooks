@@ -27,7 +27,7 @@ cloudinary.config(
 
 # ─── Email config ─────────────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
-FROM_EMAIL     = os.environ.get('FROM_EMAIL', 'BloomBooks <noreply@hwtco.org>')
+FROM_EMAIL     = os.environ.get('FROM_EMAIL', 'BloomBooks <info@hwtco.org>')
 APP_URL        = os.environ.get('APP_URL', 'http://localhost:5001')
 
 # ─── Database ─────────────────────────────────────────────────────────────────
@@ -762,7 +762,10 @@ def approve_request(rid):
 
 @app.route('/api/debug', methods=['GET'])
 def debug_config():
-    """Temporary debug endpoint — shows config status without secrets."""
+    conn = get_db()
+    receipt_count = conn.execute('SELECT COUNT(*) as n FROM bb_receipts').fetchone()['n']
+    recent_receipts = conn.execute('SELECT * FROM bb_receipts ORDER BY uploaded_at DESC LIMIT 5').fetchall()
+    conn.close()
     return jsonify({
         'cloudinary_configured': bool(cloudinary.config().cloud_name),
         'cloudinary_cloud_name': cloudinary.config().cloud_name or 'NOT SET',
@@ -771,6 +774,8 @@ def debug_config():
         'from_email': FROM_EMAIL,
         'app_url': APP_URL,
         'database_connected': bool(DATABASE_URL),
+        'receipt_count': receipt_count,
+        'recent_receipts': [dict(r) for r in recent_receipts],
     })
 
 # ─── Receipts ─────────────────────────────────────────────────────────────────
