@@ -632,10 +632,11 @@ def create_budget():
     if u['role'] not in ('admin','treasurer','president','producer'):
         if not prod_id or not is_producer_of(u['id'],int(prod_id)):
             return jsonify({'error':'Insufficient permissions'}),403
+    # Parent categories have no amount of their own — children roll up to them
+    amount = 0 if data.get('is_category') else float(data.get('total_amount', 0))
     conn = get_db()
     conn.execute('INSERT INTO bb_budgets (name,area,season,total_amount,production_id,parent_id) VALUES (%s,%s,%s,%s,%s,%s)',
-                 (data['name'], data.get('area','General'), data.get('season',''),
-                  float(data['total_amount']), prod_id, parent_id))
+                 (data['name'], data.get('area','General'), data.get('season',''), amount, prod_id, parent_id))
     conn.commit(); conn.close()
     return jsonify({'ok':True})
 
