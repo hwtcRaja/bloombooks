@@ -26,11 +26,9 @@ cloudinary.config(
 )
 
 # ─── Email config ─────────────────────────────────────────────────────────────
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
-EMAIL_USER = os.environ.get('EMAIL_USER', '')
-EMAIL_PASS = os.environ.get('EMAIL_PASS', '')
-APP_URL    = os.environ.get('APP_URL', 'http://localhost:5001')
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+FROM_EMAIL     = os.environ.get('FROM_EMAIL', 'BloomBooks <noreply@hwtco.org>')
+APP_URL        = os.environ.get('APP_URL', 'http://localhost:5001')
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 class DBWrapper:
@@ -1080,37 +1078,44 @@ def get_receipt_page_data(token):
 @app.route('/api/receipt/<token>/submit', methods=['POST'])
 def submit_receipt_mobile(token):
     conn = get_db()
-    u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
-    if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
-    u = dict(u)
-    request_id = request.form.get('request_id')
-    note       = request.form.get('note','')
-    actual     = request.form.get('actual_cost','')
-    if not request_id: return jsonify({'error':'No request selected'}),400
-    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s AND submitted_by=%s',(request_id,u['id'])).fetchone()
-    if not req: conn.close(); return jsonify({'error':'Request not found'}),404
-    image_url = None
-    if 'file' in request.files and request.files['file'].filename:
-        if not cloudinary.config().cloud_name:
-            conn.close(); return jsonify({'error':'File upload not configured'}),500
-        try:
+    try:
+        u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+        if not u:
+            conn.close(); return jsonify({'error':'Invalid or expired link'}),404
+        u = dict(u)
+        request_id = request.form.get('request_id')
+        note       = request.form.get('note','')
+        actual     = request.form.get('actual_cost','')
+        if not request_id:
+            conn.close(); return jsonify({'error':'No request selected'}),400
+        request_id = int(request_id)
+        req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s AND submitted_by=%s',(request_id,u['id'])).fetchone()
+        if not req:
+            conn.close(); return jsonify({'error':'Request not found'}),404
+        image_url = None
+        if 'file' in request.files and request.files['file'].filename:
+            if not cloudinary.config().cloud_name:
+                conn.close(); return jsonify({'error':'File upload not configured — contact an admin'}),500
             result = cloudinary.uploader.upload(request.files['file'],folder='bloombooks/receipts',resource_type='auto')
             image_url = result['secure_url']
             conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
                          (request_id,image_url,result['public_id']))
-        except Exception as e:
-            conn.close(); return jsonify({'error':f'Upload failed: {str(e)}'}),500
-    if actual:
-        try: conn.execute('UPDATE bb_purchase_requests SET actual_cost=%s WHERE id=%s',(float(actual),request_id))
+        if actual:
+            try: conn.execute('UPDATE bb_purchase_requests SET actual_cost=%s WHERE id=%s',(float(actual),request_id))
+            except Exception: pass
+        if note:
+            existing = req['description'] or ''
+            conn.execute('UPDATE bb_purchase_requests SET description=%s WHERE id=%s',
+                         (f"{existing}\n\n[Receipt note]: {note}".strip(),request_id))
+        conn.commit()
+        log_action(u['id'],'mobile_receipt_upload','request',request_id)
+        conn.close()
+        return jsonify({'ok':True,'image_url':image_url})
+    except Exception as e:
+        print(f"[RECEIPT SUBMIT ERROR] {e}")
+        try: conn.close()
         except Exception: pass
-    if note:
-        existing = req['description'] or ''
-        conn.execute('UPDATE bb_purchase_requests SET description=%s WHERE id=%s',
-                     (f"{existing}\n\n[Receipt note]: {note}".strip(),request_id))
-    conn.commit()
-    log_action(u['id'],'mobile_receipt_upload','request',int(request_id))
-    conn.close()
-    return jsonify({'ok':True,'image_url':image_url})
+        return jsonify({'error': f'Submission error: {str(e)}'}), 500
 
 @app.route('/api/receipt/<token>/new-request', methods=['POST'])
 def mobile_new_request(token):
