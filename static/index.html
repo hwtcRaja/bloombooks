@@ -1999,6 +1999,13 @@ function renderProdTab() {
               <option ${p.status==='archived'?'selected':''} value="archived">Archived</option>
             </select></div>
           <button class="btn btn-primary" onclick="saveProductionSettings(${p.id})">Save changes</button>
+          ${['admin','treasurer','president'].includes(currentUser.role) ? `
+          <hr class="divider" style="margin-top:24px">
+          <div>
+            <div class="fw-600 text-sm mb-4" style="color:var(--red)">Danger zone</div>
+            <p class="text-xs text-muted mb-12">Deleting a production is permanent. Existing purchase requests will be kept but unlinked from this production.</p>
+            <button class="btn btn-danger btn-sm" onclick="confirmDeleteProduction(${p.id},'${p.name.replace(/'/g,"\\'")}')">Delete this production</button>
+          </div>` : ''}
         </div>
       </div>`;
   }
@@ -2398,6 +2405,29 @@ async function saveProductionSettings(pid) {
     _currentProd = prods.find(p=>p.id===pid);
     renderProductionDetail();
   } catch(e) { toast(e.message,'error'); }
+}
+
+function confirmDeleteProduction(pid, name) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Delete production</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm">Are you sure you want to permanently delete <strong>${name}</strong>?</p>
+      <p class="text-sm mt-8" style="color:var(--red)">This cannot be undone. Team members and departments will be removed. Existing purchase requests will be kept but unlinked from this production.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="doDeleteProduction(${pid})">Delete permanently</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doDeleteProduction(pid) {
+  try {
+    await api('DELETE', `/productions/${pid}`);
+    toast('Production deleted.', 'info');
+    closeModal();
+    nav('productions');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────
