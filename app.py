@@ -272,7 +272,9 @@ def send_email(to, subject, body_html):
     else:
         to_list = [t for t in to if t]
     if not to_list:
+        print(f"[EMAIL SKIPPED — empty recipients] {subject}")
         return False
+    print(f"[EMAIL] Sending to {to_list} | {subject}")
     try:
         resp = req_lib.post(
             'https://api.resend.com/emails',
@@ -280,8 +282,8 @@ def send_email(to, subject, body_html):
             json={'from': FROM_EMAIL, 'to': to_list, 'subject': subject, 'html': body_html},
             timeout=10
         )
+        print(f"[EMAIL] Resend response: {resp.status_code} {resp.text[:200]}")
         if resp.status_code not in (200, 201, 202):
-            print(f"[EMAIL ERROR] Resend {resp.status_code}: {resp.text[:200]}")
             return False
         return True
     except Exception as e:
@@ -758,6 +760,19 @@ def approve_request(rid):
     )
     return jsonify({'ok': True, 'new_status': new_status})
 
+@app.route('/api/debug', methods=['GET'])
+def debug_config():
+    """Temporary debug endpoint — shows config status without secrets."""
+    return jsonify({
+        'cloudinary_configured': bool(cloudinary.config().cloud_name),
+        'cloudinary_cloud_name': cloudinary.config().cloud_name or 'NOT SET',
+        'resend_configured': bool(RESEND_API_KEY),
+        'resend_key_prefix': RESEND_API_KEY[:8] + '...' if RESEND_API_KEY else 'NOT SET',
+        'from_email': FROM_EMAIL,
+        'app_url': APP_URL,
+        'database_connected': bool(DATABASE_URL),
+    })
+
 # ─── Receipts ─────────────────────────────────────────────────────────────────
 @app.route('/api/requests/<int:rid>/receipts', methods=['POST'])
 def upload_receipt(rid):
@@ -766,13 +781,18 @@ def upload_receipt(rid):
     u = current_user()
 
     if 'file' not in request.files:
+        print(f"[RECEIPT] No file in request.files. Keys: {list(request.files.keys())}")
         return jsonify({'error': 'No file provided'}), 400
 
     file = request.files['file']
+    print(f"[RECEIPT] File received: {file.filename}, content_type: {file.content_type}")
+
     if not cloudinary.config().cloud_name:
-        return jsonify({'error': 'Cloudinary not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
+        print(f"[RECEIPT] Cloudinary not configured")
+        return jsonify({'error': 'Cloudinary not configured.'}), 500
 
     try:
+        print(f"[RECEIPT] Uploading to Cloudinary...")
         result = cloudinary.uploader.upload(
             file,
             folder='bloombooks/receipts',
@@ -780,16 +800,19 @@ def upload_receipt(rid):
         )
         image_url = result['secure_url']
         public_id = result['public_id']
+        print(f"[RECEIPT] Cloudinary upload OK: {image_url}")
 
         conn = get_db()
         conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
                      (rid, image_url, public_id))
         conn.commit()
         conn.close()
+        print(f"[RECEIPT] Saved to DB for request {rid}")
 
         log_action(u['id'], 'uploaded_receipt', 'request', rid)
         return jsonify({'ok': True, 'image_url': image_url})
     except Exception as e:
+        print(f"[RECEIPT ERROR] {type(e).__name__}: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ─── Reimbursements ───────────────────────────────────────────────────────────
