@@ -1052,6 +1052,7 @@ async function showRequestDetail(rid) {
   const reqs = await api('GET', '/requests');
   const r = reqs.find(x => x.id === rid) || (await api('GET', `/requests?mine=1`)).find(x => x.id === rid);
   if (!r) return;
+  console.log('[DEBUG] Request:', r.id, r.title, 'receipts:', r.receipts);
 
   const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
   const canApprove = isAdmin && (r.status === 'pending_treasurer' || r.status === 'pending_president');
