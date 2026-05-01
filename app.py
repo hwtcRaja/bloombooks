@@ -648,14 +648,16 @@ def list_requests():
     base += ' ORDER BY r.submitted_at DESC'
 
     rows = conn.execute(base, params).fetchall()
+    conn.close()
+    # Fetch receipts separately to avoid cursor conflicts
     result = []
     for row in rows:
         r = dict(row)
-        # attach receipts
-        receipts = conn.execute('SELECT * FROM bb_receipts WHERE request_id=?', (r['id'],)).fetchall()
+        conn2 = get_db()
+        receipts = conn2.execute('SELECT * FROM bb_receipts WHERE request_id=%s', (r['id'],)).fetchall()
         r['receipts'] = [dict(rec) for rec in receipts]
+        conn2.close()
         result.append(r)
-    conn.close()
     return jsonify(result)
 
 @app.route('/api/requests', methods=['POST'])
@@ -760,11 +762,23 @@ def approve_request(rid):
     )
     return jsonify({'ok': True, 'new_status': new_status})
 
-@app.route('/api/debug', methods=['GET'])
+@app.route('/api/debug/test-email', methods=['POST'])
+def test_email():
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    ok = send_email(u['email'], '🧪 BloomBooks test email',
+        email_html('Test Email', f'<p>This is a test from BloomBooks. If you can see this, emails are working!</p><p>Sent to: {u["email"]}</p>'))
+    return jsonify({'ok': ok, 'sent_to': u['email'], 'resend_configured': bool(RESEND_API_KEY), 'from': FROM_EMAIL})
 def debug_config():
     conn = get_db()
     receipt_count = conn.execute('SELECT COUNT(*) as n FROM bb_receipts').fetchone()['n']
     recent_receipts = conn.execute('SELECT * FROM bb_receipts ORDER BY uploaded_at DESC LIMIT 5').fetchall()
+    # Test joining receipts to requests
+    joined = conn.execute('''SELECT r.id, r.title, r.status, COUNT(rec.id) as receipt_count
+                             FROM bb_purchase_requests r
+                             LEFT JOIN bb_receipts rec ON rec.request_id = r.id
+                             GROUP BY r.id, r.title, r.status
+                             ORDER BY r.id DESC LIMIT 5''').fetchall()
     conn.close()
     return jsonify({
         'cloudinary_configured': bool(cloudinary.config().cloud_name),
@@ -776,6 +790,7 @@ def debug_config():
         'database_connected': bool(DATABASE_URL),
         'receipt_count': receipt_count,
         'recent_receipts': [dict(r) for r in recent_receipts],
+        'requests_with_receipt_counts': [dict(r) for r in joined],
     })
 
 # ─── Receipts ─────────────────────────────────────────────────────────────────
