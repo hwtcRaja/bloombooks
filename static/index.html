@@ -1771,6 +1771,7 @@ async function renderProductions() {
               <div class="text-xs text-muted fw-600 mb-8">BUDGET OVERVIEW</div>
               <div class="fw-600" style="font-size:20px">${fmtMoney(totalBudget)}</div>
               <div class="text-xs text-muted mb-8">Spent ${fmtMoney(totalSpent)} · Remaining ${fmtMoney(totalBudget-totalSpent)}</div>
+              ${p.total_revenue_actual > 0 ? `<div class="text-xs mb-8" style="color:var(--green)">Revenue received: ${fmtMoney(p.total_revenue_actual)} · Net cost: ${fmtMoney(p.net_cost)}</div>` : p.total_revenue_expected > 0 ? `<div class="text-xs text-muted mb-8">Projected revenue: ${fmtMoney(p.total_revenue_expected)}</div>` : ''}
               <div class="budget-bar-wrap mb-12"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
               ${p.budgets.map(b=>{
                 const bp=b.total_amount>0?Math.min(100,(b.spent/b.total_amount)*100):0;
@@ -1868,8 +1869,8 @@ function renderProductionDetail() {
   const totalBudget = p.budgets.reduce((s,b)=>s+b.total_amount,0);
   const totalSpent  = p.total_spent||0;
   const pct = totalBudget>0?Math.min(100,(totalSpent/totalBudget)*100):0;
-  const tabs = ['departments','team','settings'];
-  const tabLabels = {departments:'Departments', team:'Team', settings:'Settings'};
+  const tabs = ['departments','team','revenue','settings'];
+  const tabLabels = {departments:'Departments', team:'Team', revenue:'Revenue', settings:'Settings'};
   document.getElementById('tb-title').textContent = p.name;
   document.getElementById('tb-actions').innerHTML = `<button class="btn btn-outline btn-sm" onclick="nav('productions')">← All productions</button>`;
   document.getElementById('content').innerHTML = `
@@ -1975,6 +1976,8 @@ function renderProdTab() {
         </div></div>`).join('')}` : ''}
       ${producers.length===0&&members.length===0?'<div class="empty"><h3>No team members yet</h3><p>Add team members to give them access to this production.</p></div>':''}`;
 
+  } else if (_prodTab === 'revenue') {
+    renderRevenueTab();
   } else {
     tc.innerHTML = `
       <div class="card"><div class="card-header"><span class="card-title">Production settings</span></div>
@@ -1999,6 +2002,199 @@ function renderProdTab() {
         </div>
       </div>`;
   }
+}
+
+const REVENUE_SOURCES = [
+  'Ticket Sales', 'Concessions', 'Program Ads', 'Merchandise',
+  'Grants', 'Donations', 'Sponsorships', 'Matching Gifts', 'Other'
+];
+
+async function renderRevenueTab() {
+  const p = _currentProd;
+  const canManage = ['admin','treasurer','president'].includes(currentUser.role) || p.i_am_producer;
+  const tc = document.getElementById('prod-tab-content');
+  tc.innerHTML = '<div class="text-xs text-muted">Loading revenue...</div>';
+
+  try {
+    const entries = await api('GET', `/productions/${p.id}/revenue`);
+    const totalExpected = entries.reduce((s,r) => s+r.expected, 0);
+    const totalActual   = entries.reduce((s,r) => s+r.actual, 0);
+    const totalSpent    = p.total_spent || 0;
+    const netCost       = totalSpent - totalActual;
+
+    tc.innerHTML = `
+      <!-- Summary bar -->
+      <div class="card mb-16">
+        <div class="card-body" style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;text-align:center">
+          <div style="padding:12px;border-right:1px solid var(--border)">
+            <div class="text-xs text-muted mb-4">Total spend</div>
+            <div class="fw-600" style="font-size:18px;color:var(--red)">${fmtMoney(totalSpent)}</div>
+          </div>
+          <div style="padding:12px;border-right:1px solid var(--border)">
+            <div class="text-xs text-muted mb-4">Revenue received</div>
+            <div class="fw-600" style="font-size:18px;color:var(--green)">${fmtMoney(totalActual)}</div>
+            ${totalExpected > totalActual ? `<div class="text-xs text-muted">${fmtMoney(totalExpected)} projected</div>` : ''}
+          </div>
+          <div style="padding:12px">
+            <div class="text-xs text-muted mb-4">Net cost</div>
+            <div class="fw-600" style="font-size:18px;color:${netCost<0?'var(--green)':'var(--ink)'}">${fmtMoney(netCost)}</div>
+            ${netCost < 0 ? '<div class="text-xs" style="color:var(--green)">surplus</div>' : ''}
+          </div>
+        </div>
+      </div>
+
+      ${canManage ? `<div class="flex mb-12">
+        <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="showAddRevenueModal(${p.id})">+ Add revenue</button>
+      </div>` : ''}
+
+      ${entries.length === 0
+        ? `<div class="empty"><div class="empty-icon">💵</div><h3>No revenue entries yet</h3><p>Track ticket sales, concessions, program ads, and other income for this production.</p></div>`
+        : `<div class="table-wrap"><table>
+            <thead><tr><th>Source</th><th>Description</th><th>Expected</th><th>Received</th><th>Date</th>${canManage?'<th></th>':''}</tr></thead>
+            <tbody>${entries.map(r => `<tr>
+              <td><div class="fw-600 text-sm">${r.source}</div></td>
+              <td class="td-muted">${r.description||'—'}</td>
+              <td class="fw-600">${fmtMoney(r.expected)}</td>
+              <td class="fw-600" style="color:${r.actual>0?'var(--green)':'var(--ink3)'}">${fmtMoney(r.actual)}</td>
+              <td class="td-muted">${r.received_date?fmtDate(r.received_date):'—'}</td>
+              ${canManage?`<td>
+                <div class="flex gap-6">
+                  <button class="btn btn-outline btn-sm" onclick="showEditRevenueModal(${p.id},${JSON.stringify(r).replace(/"/g,'&quot;')})">Edit</button>
+                  <button class="btn btn-danger btn-sm" onclick="deleteRevenue(${p.id},${r.id})">×</button>
+                </div>
+              </td>`:''}
+            </tr>`).join('')}
+            <tr style="border-top:2px solid var(--border)">
+              <td colspan="2" class="fw-600">Totals</td>
+              <td class="fw-600">${fmtMoney(totalExpected)}</td>
+              <td class="fw-600" style="color:var(--green)">${fmtMoney(totalActual)}</td>
+              <td colspan="${canManage?2:1}"></td>
+            </tr>
+            </tbody></table></div>`}`;
+  } catch(e) {
+    document.getElementById('prod-tab-content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+function showAddRevenueModal(pid) {
+  const srcOpts = REVENUE_SOURCES.map(s => `<option value="${s}">${s}</option>`).join('');
+  const html = `
+    <div class="modal-header"><span class="modal-title">Add revenue</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Source <span class="req">*</span></label>
+        <select id="rev-source" class="form-select" onchange="toggleCustomSource(this.value)">
+          ${srcOpts}
+        </select></div>
+      <div id="rev-custom-wrap" class="form-group hidden">
+        <label class="form-label">Custom source name</label>
+        <input type="text" id="rev-custom" class="form-input" placeholder="e.g. Raffle, Merchandise sale">
+      </div>
+      <div class="form-group"><label class="form-label">Description</label>
+        <input type="text" id="rev-desc" class="form-input" placeholder="e.g. Opening weekend ticket sales"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Expected amount</label>
+          <input type="number" id="rev-expected" class="form-input" placeholder="0.00" step="0.01" min="0"></div>
+        <div class="form-group"><label class="form-label">Actual received</label>
+          <input type="number" id="rev-actual" class="form-input" placeholder="0.00" step="0.01" min="0"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Date received</label>
+        <input type="date" id="rev-date" class="form-input"></div>
+      <div id="rev-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveRevenue(${pid})">Add revenue</button>
+    </div>`;
+  showModal(html);
+}
+
+function showEditRevenueModal(pid, entry) {
+  const srcOpts = REVENUE_SOURCES.map(s =>
+    `<option value="${s}" ${entry.source===s?'selected':''}>${s}</option>`).join('');
+  const isCustom = !REVENUE_SOURCES.includes(entry.source);
+  const html = `
+    <div class="modal-header"><span class="modal-title">Edit revenue</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Source <span class="req">*</span></label>
+        <select id="rev-source" class="form-select" onchange="toggleCustomSource(this.value)">
+          ${srcOpts}
+          ${isCustom ? `<option value="${entry.source}" selected>${entry.source}</option>` : ''}
+        </select></div>
+      <div id="rev-custom-wrap" class="form-group ${isCustom?'':'hidden'}">
+        <label class="form-label">Custom source name</label>
+        <input type="text" id="rev-custom" class="form-input" value="${isCustom?entry.source:''}" placeholder="e.g. Raffle">
+      </div>
+      <div class="form-group"><label class="form-label">Description</label>
+        <input type="text" id="rev-desc" class="form-input" value="${entry.description||''}"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Expected amount</label>
+          <input type="number" id="rev-expected" class="form-input" value="${entry.expected||0}" step="0.01" min="0"></div>
+        <div class="form-group"><label class="form-label">Actual received</label>
+          <input type="number" id="rev-actual" class="form-input" value="${entry.actual||0}" step="0.01" min="0"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Date received</label>
+        <input type="date" id="rev-date" class="form-input" value="${entry.received_date||''}"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="updateRevenue(${pid},${entry.id})">Save changes</button>
+    </div>`;
+  showModal(html);
+}
+
+function toggleCustomSource(val) {
+  document.getElementById('rev-custom-wrap').classList.toggle('hidden', val !== 'Other');
+}
+
+function getRevenueFormData() {
+  const sourceEl = document.getElementById('rev-source');
+  const customEl = document.getElementById('rev-custom');
+  const source = sourceEl.value === 'Other' && customEl?.value.trim()
+    ? customEl.value.trim() : sourceEl.value;
+  return {
+    source,
+    description: document.getElementById('rev-desc').value.trim(),
+    expected: parseFloat(document.getElementById('rev-expected').value || 0),
+    actual:   parseFloat(document.getElementById('rev-actual').value || 0),
+    received_date: document.getElementById('rev-date').value || null,
+  };
+}
+
+async function saveRevenue(pid) {
+  const data = getRevenueFormData();
+  const errEl = document.getElementById('rev-error');
+  errEl.classList.add('hidden');
+  if (!data.source) { errEl.textContent='Source is required'; errEl.classList.remove('hidden'); return; }
+  try {
+    await api('POST', `/productions/${pid}/revenue`, data);
+    toast('Revenue added!', 'success');
+    closeModal();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p => p.id === pid);
+    renderRevenueTab();
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+async function updateRevenue(pid, rid) {
+  const data = getRevenueFormData();
+  try {
+    await api('PATCH', `/productions/${pid}/revenue/${rid}`, data);
+    toast('Updated!', 'success');
+    closeModal();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p => p.id === pid);
+    renderRevenueTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteRevenue(pid, rid) {
+  try {
+    await api('DELETE', `/productions/${pid}/revenue/${rid}`);
+    toast('Removed.', 'info');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p => p.id === pid);
+    renderRevenueTab();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 function showAddDeptModal() {
