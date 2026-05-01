@@ -214,7 +214,7 @@ function renderReceiptTab() {
             <div class="upload-text">Take photo or choose file</div>
             <div class="upload-sub">JPG, PNG, or PDF</div>
           </div>
-          <input type="file" id="r-file-input" accept="image/*,application/pdf" capture="environment" onchange="handleReceiptFile(this)">
+          <input type="file" id="r-file-input" accept="image/*,application/pdf" onchange="handleReceiptFile(this)">
           <div id="r-preview"></div>
         </div>
       </div>
@@ -429,7 +429,7 @@ function renderNewRequestTab() {
             <div class="upload-text">Take photo or choose file</div>
             <div class="upload-sub">JPG, PNG, or PDF</div>
           </div>
-          <input type="file" id="n-file-input" accept="image/*,application/pdf" capture="environment" onchange="handleNewFile(this)">
+          <input type="file" id="n-file-input" accept="image/*,application/pdf" onchange="handleNewFile(this)">
           <div id="n-preview"></div>
         </div>
       </div>

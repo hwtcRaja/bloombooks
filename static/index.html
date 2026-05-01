@@ -1206,7 +1206,7 @@ async function renderApprovals() {
                 </div>
                 <div class="budget-bar-wrap mt-4"><div class="budget-bar-fill ${budget_pct>90?'danger':budget_pct>70?'warn':''}" style="width:${budget_pct}%"></div></div>
               </div>` : ''}
-              ${r.receipts && r.receipts.length > 0 ? `<div class="receipt-grid mb-8">${r.receipts.map(rc=>`<div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" loading="lazy"></div>`).join('')}</div>` : ''}
+              ${r.receipts && r.receipts.length > 0 ? `<div class="receipt-grid mb-8">${r.receipts.map(rc=>`<div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.style.display='none'"><span style="font-size:18px">📎</span></div>`).join('')}</div>` : ''}
               ${canAct ? `
                 <div class="approve-panel mt-8">
                   ${r.status==='pending_president' ? `<div class="form-group"><label class="form-label">Confirm actual cost</label><input type="number" id="act-${r.id}" class="form-input" value="${r.actual_cost||r.estimated_cost}" step="0.01"></div>` : ''}
@@ -2878,6 +2878,11 @@ function closeModal() {
 }
 
 function openLightbox(url) {
+  if (!url) return;
+  // If PDF, open in new tab instead
+  if (url.toLowerCase().includes('.pdf') || url.toLowerCase().includes('/raw/')) {
+    window.open(url, '_blank'); return;
+  }
   document.getElementById('lightbox-img').src = url;
   document.getElementById('lightbox').classList.remove('hidden');
 }
