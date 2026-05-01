@@ -962,11 +962,35 @@ function populateBudgetDropdown(prodId) {
       }).join('');
     }
   } else {
-    const orgBudgets = allBudgets.filter(b => !b.production_id);
-    opts += orgBudgets.map(b => {
+    // Only show budgets with an actual amount (not parent categories with total_amount=0)
+    const orgBudgets = allBudgets.filter(b => !b.production_id && b.total_amount > 0);
+    // Group sub-budgets under their parent label
+    const parentMap = {};
+    const standalone = [];
+    orgBudgets.forEach(b => {
+      if (b.parent_id) {
+        const parent = allBudgets.find(p => p.id === b.parent_id);
+        const key = parent ? parent.name : 'Other';
+        if (!parentMap[key]) parentMap[key] = [];
+        parentMap[key].push(b);
+      } else {
+        standalone.push(b);
+      }
+    });
+    // Grouped sub-budgets
+    for (const [groupName, items] of Object.entries(parentMap)) {
+      opts += `<optgroup label="${groupName}">`;
+      items.forEach(b => {
+        const rem = b.total_amount - b.spent;
+        opts += `<option value="${b.id}">${b.name} (${fmtMoney(rem)} left)</option>`;
+      });
+      opts += '</optgroup>';
+    }
+    // Standalone budgets
+    standalone.forEach(b => {
       const rem = b.total_amount - b.spent;
-      return `<option value="${b.id}">${b.name} — ${b.area} (${fmtMoney(rem)} remaining)</option>`;
-    }).join('');
+      opts += `<option value="${b.id}">${b.name} — ${b.area} (${fmtMoney(rem)} remaining)</option>`;
+    });
   }
   sel.innerHTML = opts;
 }
@@ -1497,14 +1521,20 @@ async function renderBudgets() {
       html += `<div class="fw-600 mb-12" style="font-size:15px">Org-level budgets</div>`;
       topLevel.forEach(parent => {
         const children = subBudgets.filter(c => c.parent_id === parent.id && c.is_active);
-        const pp = parent.total_amount>0?Math.min(100,(parent.spent/parent.total_amount)*100):0;
-        const pr = parent.total_amount - parent.spent;
+        // Parent total = sum of children (rollup), parent.total_amount is just 0/ignored
+        const rollupTotal = children.reduce((s,c)=>s+c.total_amount,0);
+        const rollupSpent = children.reduce((s,c)=>s+c.spent,0);
+        const pp = rollupTotal>0?Math.min(100,(rollupSpent/rollupTotal)*100):0;
+        const pr = rollupTotal - rollupSpent;
         html += `<div class="card mb-12"><div class="card-body" style="padding:14px 16px">
           <div class="flex flex-center mb-6">
-            <div><div class="fw-600">${parent.name}</div><div class="text-xs text-muted">${parent.area}</div></div>
+            <div>
+              <div class="fw-600">${parent.name}</div>
+              <div class="text-xs text-muted">${parent.area}${children.length>0?' · '+children.length+' sub-budget'+(children.length!==1?'s':''):' · category'}</div>
+            </div>
             <div style="margin-left:auto;text-align:right">
-              <div class="fw-600" style="color:${pr<0?'var(--red)':'var(--ink)'}">${fmtMoney(pr)}</div>
-              <div class="text-xs text-muted">of ${fmtMoney(parent.total_amount)}</div>
+              <div class="fw-600" style="color:${pr<0?'var(--red)':'var(--ink)'}">${fmtMoney(pr)} remaining</div>
+              <div class="text-xs text-muted">${fmtMoney(rollupSpent)} of ${fmtMoney(rollupTotal)} spent</div>
             </div>
           </div>
           <div class="budget-bar-wrap mb-8"><div class="budget-bar-fill ${pp>90?'danger':pp>70?'warn':''}" style="width:${pp}%"></div></div>
@@ -1527,7 +1557,7 @@ async function renderBudgets() {
             </div>`;
           }).join('')}
           ${canEdit?`<div class="flex gap-6 mt-8">
-            <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="showBudgetModal(${parent.id},'${parent.name.replace(/'/g,"\\'")}','${parent.area}','${parent.season||''}',${parent.total_amount})">Edit</button>
+            <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="showBudgetModal(${parent.id},'${parent.name.replace(/'/g,"\\'")}','${parent.area}','${parent.season||''}',0)">Edit</button>
             <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="showBudgetModal(0,'','','',0,null,${parent.id})">+ Sub-budget</button>
             <button class="btn btn-danger btn-sm" style="font-size:11px;padding:3px 8px" onclick="confirmDeleteBudget(${parent.id},'${parent.name.replace(/'/g,"\\'")}')">Delete</button>
           </div>`:''}
@@ -1549,25 +1579,37 @@ async function renderBudgets() {
 
 function showBudgetModal(id=0, name='', area='', season='', total=0, production_id=null, parent_id=null) {
   const isEdit = !!id;
-  // Build parent options from org-level budgets (top-level only, no parent themselves)
+  const isSubBudget = !!parent_id; // Creating a sub-budget under a parent
   const parentOpts = allBudgets
     .filter(b => !b.production_id && !b.parent_id && b.is_active && b.id !== id)
     .map(b => `<option value="${b.id}" ${parent_id==b.id?'selected':''}>${b.name}</option>`)
     .join('');
 
+  // Work out if this is a category (parent) or a budget (leaf with amount)
+  // A top-level org budget with no parent_id set is treated as a category container
+  // if it has sub-budgets. For new ones, user picks by whether they set a parent.
+
   const html = `
-    <div class="modal-header"><span class="modal-title">${isEdit?'Edit':'New'} ${production_id?'department budget':'org budget'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-header">
+      <span class="modal-title">${isEdit ? 'Edit' : (isSubBudget ? 'New sub-budget' : 'New')} ${production_id ? 'department budget' : isSubBudget ? 'sub-budget' : 'budget category'}</span>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
     <div class="modal-body">
       <div class="form-group"><label class="form-label">Name <span class="req">*</span></label>
-        <input type="text" id="b-name" class="form-input" value="${name}" placeholder="e.g. Marketing, Props, Scenery"></div>
+        <input type="text" id="b-name" class="form-input" value="${name}" placeholder="${isSubBudget ? 'e.g. Print, Digital, Social' : 'e.g. Marketing, Operations'}"></div>
       <div class="form-row">
         <div class="form-group"><label class="form-label">Area / type</label>
-          <input type="text" id="b-area" class="form-input" value="${area}" placeholder="e.g. Props, Costumes, Marketing"></div>
+          <input type="text" id="b-area" class="form-input" value="${area}" placeholder="e.g. Marketing, Admin"></div>
         <div class="form-group"><label class="form-label">Season</label>
           <input type="text" id="b-season" class="form-input" value="${season}" placeholder="e.g. 2024-2025"></div>
       </div>
+      ${(isSubBudget || production_id) ? `
       <div class="form-group"><label class="form-label">Budget amount <span class="req">*</span></label>
-        <input type="number" id="b-total" class="form-input" value="${total||''}" placeholder="0.00" step="0.01"></div>
+        <input type="number" id="b-total" class="form-input" value="${total||''}" placeholder="0.00" step="0.01"></div>` : `
+      <div class="panel mb-4" style="background:var(--teal3);border-color:var(--teal);padding:10px 14px;font-size:13px">
+        💡 This creates a <strong>category container</strong>. Its total will be the sum of sub-budgets you add to it — no amount needed here.
+      </div>
+      <input type="hidden" id="b-total" value="0">`}
       ${!production_id && parentOpts ? `
       <div class="form-group">
         <label class="form-label">Parent category (optional)</label>
@@ -1575,31 +1617,40 @@ function showBudgetModal(id=0, name='', area='', season='', total=0, production_
           <option value="">Top-level category</option>
           ${parentOpts}
         </select>
-        <div class="form-hint">Make this a subcategory under an existing org budget</div>
-      </div>` : `<input type="hidden" id="b-parent" value="">`}
+        <div class="form-hint">Nest this under an existing category</div>
+      </div>` : `<input type="hidden" id="b-parent" value="${parent_id||''}">`}
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveBudget(${id},${production_id||'null'})">${isEdit?'Save changes':'Create'}</button>
+      <button class="btn btn-primary" onclick="saveBudget(${id},${production_id||'null'})">${isEdit ? 'Save changes' : 'Create'}</button>
     </div>`;
   showModal(html);
 }
 
 async function saveBudget(id, production_id) {
+  const name     = document.getElementById('b-name').value.trim();
   const parentEl = document.getElementById('b-parent');
+  const totalEl  = document.getElementById('b-total');
+  const parent_id = parentEl && parentEl.value ? parseInt(parentEl.value) : null;
+  const isCategory = !production_id && !parent_id; // top-level org category = no amount needed
+  const total_amount = isCategory ? 0 : parseFloat(totalEl?.value || 0);
+
+  if (!name) { toast('Name is required', 'error'); return; }
+  if (!isCategory && !total_amount) { toast('Please enter a budget amount', 'error'); return; }
+
   const data = {
-    name: document.getElementById('b-name').value.trim(),
+    name,
     area: document.getElementById('b-area').value.trim(),
     season: document.getElementById('b-season').value.trim(),
-    total_amount: parseFloat(document.getElementById('b-total').value),
+    total_amount,
     production_id: production_id || null,
-    parent_id: parentEl && parentEl.value ? parseInt(parentEl.value) : null,
+    parent_id,
+    is_category: isCategory,
   };
-  if (!data.name || !data.total_amount) { toast('Name and amount are required', 'error'); return; }
   try {
     if (id) await api('PATCH', `/budgets/${id}`, data);
     else await api('POST', '/budgets', data);
-    toast(id ? 'Budget updated!' : 'Budget created!', 'success');
+    toast(id ? 'Budget updated!' : 'Created!', 'success');
     closeModal();
     await loadBudgets();
     renderBudgets();
