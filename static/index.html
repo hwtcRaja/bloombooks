@@ -1060,9 +1060,10 @@ async function showRequestDetail(rid) {
 
   const receiptsHtml = r.receipts && r.receipts.length > 0 ?
     `<div class="receipt-grid">${r.receipts.map(rc => `
-      <div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')">
-        <img src="${rc.image_url}" alt="Receipt" loading="lazy">
-      </div>`).join('')}</div>` :
+      <div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')" title="Click to view full size">
+        <img src="${rc.image_url}" alt="Receipt" onerror="this.outerHTML='<span style=font-size:24px>📎</span>'">
+      </div>`).join('')}</div>
+     <div class="text-xs text-muted mt-4">${r.receipts.length} receipt${r.receipts.length!==1?'s':''} attached — click to view</div>` :
     `<span class="text-xs text-muted">No receipts uploaded</span>`;
 
   const uploadHtml = (r.status !== 'denied') ? `
