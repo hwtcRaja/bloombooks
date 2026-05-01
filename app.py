@@ -162,6 +162,19 @@ def init_db():
         created_at  TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_production_revenue (
+        id            SERIAL PRIMARY KEY,
+        production_id INTEGER REFERENCES bb_productions(id) ON DELETE CASCADE,
+        source        TEXT NOT NULL,
+        description   TEXT,
+        expected      REAL DEFAULT 0,
+        actual        REAL DEFAULT 0,
+        received_date TEXT,
+        created_by    INTEGER REFERENCES bb_users(id),
+        created_at    TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
+        updated_at    TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
     # Seed admin users
     def hash_pw(pw):
         return hashlib.sha256(pw.encode()).hexdigest()
@@ -1168,6 +1181,237 @@ def audit_log():
     ''').fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
+
+@app.route('/api/users/<int:uid>', methods=['PATCH'])
+def update_user(uid):
+    err = require_auth(['admin','treasurer','president'])
+    if err: return err
+    data = request.json
+    conn = get_db()
+    if 'name'              in data: conn.execute('UPDATE bb_users SET name=%s WHERE id=%s',(data['name'],uid))
+    if 'email'             in data: conn.execute('UPDATE bb_users SET email=%s WHERE id=%s',(data['email'].strip().lower(),uid))
+    if 'role'              in data: conn.execute('UPDATE bb_users SET role=%s WHERE id=%s',(data['role'],uid))
+    if 'training_complete' in data: conn.execute('UPDATE bb_users SET training_complete=%s WHERE id=%s',(data['training_complete'],uid))
+    if 'is_active'         in data: conn.execute('UPDATE bb_users SET is_active=%s WHERE id=%s',(data['is_active'],uid))
+    if 'password' in data and data['password']:
+        conn.execute('UPDATE bb_users SET password=%s WHERE id=%s',(hash_pw(data['password']),uid))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
+
+# ─── Productions ──────────────────────────────────────────────────────────────
+@app.route('/api/productions', methods=['GET'])
+def list_productions():
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    is_admin = u['role'] in ('admin','treasurer','president')
+    if is_admin:
+        prods = conn.execute('SELECT * FROM bb_productions ORDER BY status,name').fetchall()
+    else:
+        my_ids = [r['production_id'] for r in
+                  conn.execute('SELECT production_id FROM bb_production_members WHERE user_id=%s',(u['id'],)).fetchall()]
+        if not my_ids:
+            conn.close(); return jsonify([])
+        ph = ','.join(['%s']*len(my_ids))
+        prods = conn.execute(f'SELECT * FROM bb_productions WHERE id IN ({ph}) ORDER BY status,name', my_ids).fetchall()
+    result = []
+    for p in prods:
+        prod = dict(p)
+        members = conn.execute('''SELECT u.id AS user_id,u.name,u.email,u.role,m.member_role
+                                  FROM bb_production_members m JOIN bb_users u ON m.user_id=u.id
+                                  WHERE m.production_id=%s ORDER BY m.member_role,u.name''',(prod['id'],)).fetchall()
+        prod['members'] = [dict(m) for m in members]
+        budgets = conn.execute('SELECT * FROM bb_budgets WHERE production_id=%s AND is_active=1',(prod['id'],)).fetchall()
+        prod['budgets'] = []
+        for b in budgets:
+            bd = dict(b)
+            owners = conn.execute('''SELECT bm.user_id,u.name,u.email FROM bb_budget_members bm
+                                     JOIN bb_users u ON bm.user_id=u.id WHERE bm.budget_id=%s''',(bd['id'],)).fetchall()
+            bd['owners'] = [dict(o) for o in owners]
+            prod['budgets'].append(bd)
+        prod['total_spent'] = sum(b['spent'] for b in prod['budgets'])
+        rev = conn.execute('SELECT expected,actual FROM bb_production_revenue WHERE production_id=%s',(prod['id'],)).fetchall()
+        prod['total_revenue_expected'] = sum(r['expected'] for r in rev)
+        prod['total_revenue_actual']   = sum(r['actual']   for r in rev)
+        prod['net_cost'] = prod['total_spent'] - prod['total_revenue_actual']
+        prod['i_am_producer'] = any(m['user_id']==u['id'] and m['member_role']=='producer' for m in prod['members'])
+        result.append(prod)
+    conn.close()
+    return jsonify(result)
+
+@app.route('/api/productions', methods=['POST'])
+def create_production():
+    err = require_auth(['admin','treasurer','president'])
+    if err: return err
+    data = request.json
+    name,season = data.get('name','').strip(), data.get('season','').strip()
+    if not name or not season: return jsonify({'error':'Name and season required'}),400
+    conn = get_db()
+    conn.execute('INSERT INTO bb_productions (name,season,description,total_budget,status) VALUES (%s,%s,%s,%s,%s)',
+                 (name,season,data.get('description',''),float(data.get('total_budget',0)),'active'))
+    row = conn.execute('SELECT id FROM bb_productions WHERE name=%s AND season=%s ORDER BY id DESC LIMIT 1',(name,season)).fetchone()
+    prod_id = row['id']
+    if data.get('producer_id'):
+        conn.execute('INSERT INTO bb_production_members (production_id,user_id,member_role) VALUES (%s,%s,%s)',
+                     (prod_id,data['producer_id'],'producer'))
+    conn.commit(); conn.close()
+    log_action(current_user()['id'],'created_production','production',prod_id,name)
+    return jsonify({'ok':True,'id':prod_id})
+
+@app.route('/api/productions/<int:pid>', methods=['PATCH'])
+def update_production(pid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'],pid):
+        return jsonify({'error':'Insufficient permissions'}),403
+    data = request.json
+    conn = get_db()
+    for f in ['name','season','description','total_budget','status']:
+        if f in data: conn.execute(f'UPDATE bb_productions SET {f}=%s WHERE id=%s',(data[f],pid))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
+
+@app.route('/api/productions/<int:pid>/members', methods=['POST'])
+def add_production_member(pid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'],pid):
+        return jsonify({'error':'Insufficient permissions'}),403
+    data = request.json
+    conn = get_db()
+    try:
+        conn.execute('INSERT INTO bb_production_members (production_id,user_id,member_role) VALUES (%s,%s,%s)',
+                     (pid,data['user_id'],data.get('member_role','member')))
+        conn.commit(); conn.close(); return jsonify({'ok':True})
+    except psycopg2.IntegrityError:
+        conn.close(); return jsonify({'error':'Person already a member'}),409
+
+@app.route('/api/productions/<int:pid>/members/<int:uid>', methods=['DELETE'])
+def remove_production_member(pid, uid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'],pid):
+        return jsonify({'error':'Insufficient permissions'}),403
+    conn = get_db()
+    conn.execute('DELETE FROM bb_production_members WHERE production_id=%s AND user_id=%s',(pid,uid))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
+
+# ─── Budget members ───────────────────────────────────────────────────────────
+@app.route('/api/budgets/<int:bid>/members', methods=['POST'])
+def add_budget_member(bid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    conn = get_db()
+    b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
+    if not b: conn.close(); return jsonify({'error':'Not found'}),404
+    b = dict(b)
+    if u['role'] not in ('admin','treasurer','president'):
+        if not b.get('production_id') or not is_producer_of(u['id'],b['production_id']):
+            conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    data = request.json
+    try:
+        conn.execute('INSERT INTO bb_budget_members (budget_id,user_id,is_owner) VALUES (%s,%s,%s)',
+                     (bid,data['user_id'],int(data.get('is_owner',1))))
+        conn.commit(); conn.close(); return jsonify({'ok':True})
+    except psycopg2.IntegrityError:
+        conn.close(); return jsonify({'error':'Already assigned'}),409
+
+@app.route('/api/budgets/<int:bid>/members/<int:uid>', methods=['DELETE'])
+def remove_budget_member(bid, uid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    conn = get_db()
+    b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
+    if not b: conn.close(); return jsonify({'error':'Not found'}),404
+    b = dict(b)
+    if u['role'] not in ('admin','treasurer','president'):
+        if not b.get('production_id') or not is_producer_of(u['id'],b['production_id']):
+            conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    conn.execute('DELETE FROM bb_budget_members WHERE budget_id=%s AND user_id=%s',(bid,uid))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
+
+# ─── Receipt token ────────────────────────────────────────────────────────────
+@app.route('/api/users/<int:uid>/receipt-token', methods=['GET'])
+def get_receipt_token(uid):
+    err = require_auth(['admin','treasurer','president'])
+    if err: return err
+    conn = get_db()
+    u = conn.execute('SELECT receipt_token FROM bb_users WHERE id=%s',(uid,)).fetchone()
+    if not u or not u['receipt_token']:
+        token = secrets.token_urlsafe(24)
+        conn.execute('UPDATE bb_users SET receipt_token=%s WHERE id=%s',(token,uid))
+        conn.commit()
+    else:
+        token = u['receipt_token']
+    conn.close()
+    return jsonify({'token':token,'link':f"{APP_URL}/receipt/{token}"})
+
+# ─── Production Revenue ───────────────────────────────────────────────────────
+@app.route('/api/productions/<int:pid>/revenue', methods=['GET'])
+def list_revenue(pid):
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM bb_production_revenue WHERE production_id=%s ORDER BY created_at DESC', (pid,)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/productions/<int:pid>/revenue', methods=['POST'])
+def create_revenue(pid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
+    data = request.json
+    if not data.get('source'): return jsonify({'error': 'Source is required'}), 400
+    now = datetime.now().isoformat()
+    conn = get_db()
+    conn.execute('''INSERT INTO bb_production_revenue
+                    (production_id,source,description,expected,actual,received_date,created_by,updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)''',
+                 (pid, data['source'], data.get('description',''),
+                  float(data.get('expected', 0)), float(data.get('actual', 0)),
+                  data.get('received_date','') or None, u['id'], now))
+    conn.commit(); conn.close()
+    return jsonify({'ok': True})
+
+@app.route('/api/productions/<int:pid>/revenue/<int:rid>', methods=['PATCH'])
+def update_revenue(pid, rid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
+    data = request.json
+    now = datetime.now().isoformat()
+    conn = get_db()
+    fields, vals = [], []
+    for f in ['source','description','expected','actual','received_date']:
+        if f in data:
+            fields.append(f'{f}=%s')
+            vals.append(float(data[f]) if f in ('expected','actual') else (data[f] or None))
+    fields.append('updated_at=%s'); vals.append(now)
+    vals.append(rid)
+    conn.execute(f'UPDATE bb_production_revenue SET {",".join(fields)} WHERE id=%s AND production_id=%s',
+                 vals + [pid])
+    conn.commit(); conn.close()
+    return jsonify({'ok': True})
+
+@app.route('/api/productions/<int:pid>/revenue/<int:rid>', methods=['DELETE'])
+def delete_revenue(pid, rid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
+    conn = get_db()
+    conn.execute('DELETE FROM bb_production_revenue WHERE id=%s AND production_id=%s', (rid, pid))
+    conn.commit(); conn.close()
+    return jsonify({'ok': True})
 
 # ─── Receipt token / mobile receipt link ─────────────────────────────────────
 def ensure_receipt_token(user_id):
