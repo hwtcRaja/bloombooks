@@ -175,6 +175,26 @@ def init_db():
         updated_at    TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_statements (
+        id            SERIAL PRIMARY KEY,
+        title         TEXT NOT NULL,
+        description   TEXT,
+        production_id INTEGER REFERENCES bb_productions(id),
+        budget_id     INTEGER REFERENCES bb_budgets(id),
+        created_by    INTEGER REFERENCES bb_users(id),
+        status        TEXT DEFAULT 'draft',
+        submitted_at  TEXT,
+        created_at    TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
+        updated_at    TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_statement_items (
+        id           SERIAL PRIMARY KEY,
+        statement_id INTEGER REFERENCES bb_statements(id) ON DELETE CASCADE,
+        request_id   INTEGER REFERENCES bb_purchase_requests(id) ON DELETE CASCADE,
+        UNIQUE(statement_id, request_id)
+    )''')
+
     # Seed admin users
     def hash_pw(pw):
         return hashlib.sha256(pw.encode()).hexdigest()
@@ -258,8 +278,16 @@ def init_db():
         ("bb_purchase_requests", "producer_acted_at", "TEXT"),
         ("bb_purchase_requests", "purchase_method",   "TEXT DEFAULT 'in_store'"),
         ("bb_purchase_requests", "item_url",          "TEXT"),
+        ("bb_purchase_requests", "authorized_by",     "TEXT"),
+        ("bb_purchase_requests", "reimb_method",      "TEXT"),
+        ("bb_purchase_requests", "reimb_handle",      "TEXT"),
+        ("bb_purchase_requests", "needs_revision",    "INTEGER DEFAULT 0"),
+        ("bb_purchase_requests", "revision_note",     "TEXT"),
+        ("bb_purchase_requests", "statement_id",      "INTEGER"),
         ("bb_users",             "is_active",         "INTEGER DEFAULT 1"),
         ("bb_users",             "receipt_token",     "TEXT"),
+        ("bb_users",             "reimb_method",      "TEXT"),
+        ("bb_users",             "reimb_handle",      "TEXT"),
     ]
     for table, column, col_type in migrations:
         c.execute("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name=%s AND column_name=%s",
@@ -967,59 +995,52 @@ def list_reimbursements():
     if err: return err
     u = current_user()
     conn = get_db()
-
-    if u['role'] in ('admin', 'treasurer', 'president'):
-        rows = conn.execute('''
-            SELECT rb.*, u.name as user_name, u.email as user_email,
-                   pr.title, pr.estimated_cost, pr.actual_cost, pr.is_emergency
-            FROM bb_reimbursements rb
-            JOIN bb_users u ON rb.user_id = u.id
-            JOIN bb_purchase_requests pr ON rb.request_id = pr.id
-            ORDER BY rb.created_at DESC
-        ''').fetchall()
+    if u['role'] in ('admin','treasurer','president'):
+        rows = conn.execute('''SELECT rb.*,u.name as user_name,u.email as user_email,
+                               pr.title,pr.estimated_cost,pr.actual_cost,pr.is_emergency,
+                               pr.reimb_method,pr.reimb_handle
+                               FROM bb_reimbursements rb
+                               JOIN bb_users u ON rb.user_id=u.id
+                               JOIN bb_purchase_requests pr ON rb.request_id=pr.id
+                               ORDER BY rb.created_at DESC''').fetchall()
     else:
-        rows = conn.execute('''
-            SELECT rb.*, u.name as user_name, u.email as user_email,
-                   pr.title, pr.estimated_cost, pr.actual_cost, pr.is_emergency
-            FROM bb_reimbursements rb
-            JOIN bb_users u ON rb.user_id = u.id
-            JOIN bb_purchase_requests pr ON rb.request_id = pr.id
-            WHERE rb.user_id=%s
-            ORDER BY rb.created_at DESC
-        ''', (u['id'],)).fetchall()
-
+        rows = conn.execute('''SELECT rb.*,u.name as user_name,u.email as user_email,
+                               pr.title,pr.estimated_cost,pr.actual_cost,pr.is_emergency,
+                               pr.reimb_method,pr.reimb_handle
+                               FROM bb_reimbursements rb
+                               JOIN bb_users u ON rb.user_id=u.id
+                               JOIN bb_purchase_requests pr ON rb.request_id=pr.id
+                               WHERE rb.user_id=%s ORDER BY rb.created_at DESC''',(u['id'],)).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/reimbursements/<int:rid>/pay', methods=['POST'])
 def mark_paid(rid):
-    err = require_auth(['treasurer', 'admin', 'president'])
+    err = require_auth(['treasurer','admin','president'])
     if err: return err
     u = current_user()
     data = request.json
-    now = datetime.now().isoformat()
-
+    now  = datetime.now().isoformat()
     conn = get_db()
-    rb = conn.execute('SELECT * FROM bb_reimbursements WHERE id=?', (rid,)).fetchone()
-    if not rb:
-        conn.close()
-        return jsonify({'error': 'Not found'}), 404
-
-    conn.execute('UPDATE bb_reimbursements SET status=%s,method=%s,paid_at=%s,notes=%s WHERE id=?',
-                 ('paid', data.get('method',''), now, data.get('notes',''), rid))
-    # update request status
-    conn.execute("UPDATE bb_purchase_requests SET status='reimbursed', updated_at=%s WHERE id=?",
-                 (now, rb['request_id']))
-    conn.commit()
-
-    # notify user
-    user_info = get_user_email(rb['user_id'])
-    conn.close()
-    log_action(u['id'], 'marked_paid', 'reimbursement', rid)
-    req_info = get_db().execute('SELECT title FROM bb_purchase_requests WHERE id=%s',(rb['request_id'],)).fetchone()
-    req_title = req_info['title'] if req_info else 'your purchase'
-    notify_reimbursement_paid(rb['user_id'], rb['amount'], data.get('method',''), req_title)
-    return jsonify({'ok': True})
+    rb = conn.execute('SELECT * FROM bb_reimbursements WHERE id=%s',(rid,)).fetchone()
+    if not rb: conn.close(); return jsonify({'error':'Not found'}),404
+    rb = dict(rb)
+    # Pull the request's reimb preference if not overridden
+    req = conn.execute('SELECT title,reimb_method,reimb_handle FROM bb_purchase_requests WHERE id=%s',
+                       (rb['request_id'],)).fetchone()
+    method = data.get('method') or (req['reimb_method'] if req else '') or ''
+    handle = data.get('handle') or (req['reimb_handle'] if req else '') or ''
+    notes  = data.get('notes','')
+    if handle: notes = f"{method} — {handle}" + (f"\n{notes}" if notes else '')
+    conn.execute('UPDATE bb_reimbursements SET status=%s,method=%s,paid_at=%s,notes=%s WHERE id=%s',
+                 ('paid',method,now,notes,rid))
+    conn.execute("UPDATE bb_purchase_requests SET status='reimbursed',updated_at=%s WHERE id=%s",
+                 (now,rb['request_id']))
+    conn.commit(); conn.close()
+    log_action(u['id'],'marked_paid','reimbursement',rid)
+    req_title = req['title'] if req else 'your purchase'
+    notify_reimbursement_paid(rb['user_id'], rb['amount'], method, req_title)
+    return jsonify({'ok':True})
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 @app.route('/api/training', methods=['GET'])
@@ -1365,6 +1386,335 @@ def get_receipt_token(uid):
         token = u['receipt_token']
     conn.close()
     return jsonify({'token':token,'link':f"{APP_URL}/receipt/{token}"})
+
+# ─── Statements ───────────────────────────────────────────────────────────────
+@app.route('/api/statements', methods=['GET'])
+def list_statements():
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    is_admin = u['role'] in ('admin','treasurer','president')
+    if is_admin:
+        rows = conn.execute('''SELECT s.*,u.name as creator_name,p.name as production_name,b.name as budget_name
+                               FROM bb_statements s LEFT JOIN bb_users u ON s.created_by=u.id
+                               LEFT JOIN bb_productions p ON s.production_id=p.id
+                               LEFT JOIN bb_budgets b ON s.budget_id=b.id
+                               ORDER BY s.updated_at DESC''').fetchall()
+    else:
+        rows = conn.execute('''SELECT s.*,u.name as creator_name,p.name as production_name,b.name as budget_name
+                               FROM bb_statements s LEFT JOIN bb_users u ON s.created_by=u.id
+                               LEFT JOIN bb_productions p ON s.production_id=p.id
+                               LEFT JOIN bb_budgets b ON s.budget_id=b.id
+                               WHERE s.created_by=%s ORDER BY s.updated_at DESC''',(u['id'],)).fetchall()
+    result = []
+    for row in rows:
+        s = dict(row)
+        items = conn.execute('''SELECT r.*,sub.name as submitter_name,b.name as budget_name,b.area as budget_area
+                                FROM bb_statement_items si
+                                JOIN bb_purchase_requests r ON si.request_id=r.id
+                                LEFT JOIN bb_users sub ON r.submitted_by=sub.id
+                                LEFT JOIN bb_budgets b ON r.budget_id=b.id
+                                WHERE si.statement_id=%s''',(s['id'],)).fetchall()
+        s['items'] = []
+        for item in items:
+            it = dict(item)
+            conn2 = get_db()
+            receipts = conn2.execute('SELECT * FROM bb_receipts WHERE request_id=%s',(it['id'],)).fetchall()
+            it['receipts'] = [dict(r) for r in receipts]
+            conn2.close()
+            s['items'].append(it)
+        s['total'] = sum(i.get('actual_cost') or i.get('estimated_cost',0) for i in s['items'])
+        result.append(s)
+    conn.close()
+    return jsonify(result)
+
+@app.route('/api/statements', methods=['POST'])
+def create_statement():
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    data = request.json
+    if not data.get('title'): return jsonify({'error':'Title is required'}),400
+    now = datetime.now().isoformat()
+    conn = get_db()
+    conn.execute('''INSERT INTO bb_statements (title,description,production_id,budget_id,created_by,updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s)''',
+                 (data['title'], data.get('description',''),
+                  data.get('production_id') or None, data.get('budget_id') or None,
+                  u['id'], now))
+    row = conn.execute('SELECT lastval() AS id').fetchone()
+    sid = row['id']
+    conn.commit(); conn.close()
+    log_action(u['id'],'created_statement','statement',sid,data['title'])
+    return jsonify({'ok':True,'id':sid})
+
+@app.route('/api/statements/<int:sid>', methods=['PATCH'])
+def update_statement(sid):
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    s = conn.execute('SELECT * FROM bb_statements WHERE id=%s',(sid,)).fetchone()
+    if not s: conn.close(); return jsonify({'error':'Not found'}),404
+    if dict(s)['created_by'] != u['id'] and u['role'] not in ('admin','treasurer','president'):
+        conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    data = request.json
+    now = datetime.now().isoformat()
+    fields,vals = ['updated_at=%s'],[now]
+    for f in ['title','description','production_id','budget_id']:
+        if f in data: fields.append(f'{f}=%s'); vals.append(data[f] or None)
+    vals.append(sid)
+    conn.execute(f'UPDATE bb_statements SET {",".join(fields)} WHERE id=%s',vals)
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
+
+@app.route('/api/statements/<int:sid>', methods=['DELETE'])
+def delete_statement(sid):
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    s = conn.execute('SELECT * FROM bb_statements WHERE id=%s',(sid,)).fetchone()
+    if not s: conn.close(); return jsonify({'error':'Not found'}),404
+    s = dict(s)
+    if s['created_by'] != u['id'] and u['role'] not in ('admin','treasurer','president'):
+        conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    if s['status'] not in ('draft',):
+        conn.close(); return jsonify({'error':'Only draft statements can be deleted'}),400
+    # Delete linked requests too
+    items = conn.execute('SELECT request_id FROM bb_statement_items WHERE statement_id=%s',(sid,)).fetchall()
+    for item in items:
+        conn.execute('DELETE FROM bb_receipts WHERE request_id=%s',(item['request_id'],))
+        conn.execute('DELETE FROM bb_purchase_requests WHERE id=%s',(item['request_id'],))
+    conn.execute('DELETE FROM bb_statement_items WHERE statement_id=%s',(sid,))
+    conn.execute('DELETE FROM bb_statements WHERE id=%s',(sid,))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
+
+@app.route('/api/statements/<int:sid>/items', methods=['POST'])
+def add_statement_item(sid):
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    s = conn.execute('SELECT * FROM bb_statements WHERE id=%s',(sid,)).fetchone()
+    if not s: conn.close(); return jsonify({'error':'Not found'}),404
+    s = dict(s)
+    if s['created_by'] != u['id']:
+        conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    if s['status'] != 'draft':
+        conn.close(); return jsonify({'error':'Statement already submitted'}),400
+    data = request.json
+    if not data.get('title') or not data.get('estimated_cost'):
+        conn.close(); return jsonify({'error':'Title and estimated cost are required'}),400
+    now = datetime.now().isoformat()
+    # Create as a draft request (status='draft')
+    conn.execute('''INSERT INTO bb_purchase_requests
+                    (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
+                     submitted_by,is_emergency,purchase_method,item_url,authorized_by,
+                     reimb_method,reimb_handle,statement_id,submitted_at,updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                 (data.get('type','pre_approval'), 'draft',
+                  data['title'], data.get('description',''), data.get('vendor',''),
+                  float(data['estimated_cost']), s.get('budget_id') or data.get('budget_id') or None,
+                  s.get('production_id') or data.get('production_id') or None,
+                  u['id'], 1 if data.get('type')=='sap' else 0,
+                  data.get('purchase_method','in_store'), data.get('item_url',''),
+                  data.get('authorized_by',''), data.get('reimb_method',''), data.get('reimb_handle',''),
+                  sid, now, now))
+    row = conn.execute('SELECT lastval() AS id').fetchone()
+    req_id = row['id']
+    conn.execute('INSERT INTO bb_statement_items (statement_id,request_id) VALUES (%s,%s)',(sid,req_id))
+    conn.execute('UPDATE bb_statements SET updated_at=%s WHERE id=%s',(now,sid))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True,'request_id':req_id})
+
+@app.route('/api/statements/<int:sid>/items/<int:rid>', methods=['PATCH'])
+def update_statement_item(sid, rid):
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    s = conn.execute('SELECT * FROM bb_statements WHERE id=%s',(sid,)).fetchone()
+    if not s or dict(s)['created_by'] != u['id']:
+        conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    data = request.json
+    fields,vals = [],[]
+    for f in ['title','description','vendor','estimated_cost','actual_cost','purchase_method',
+              'item_url','authorized_by','reimb_method','reimb_handle']:
+        if f in data:
+            fields.append(f'{f}=%s')
+            vals.append(float(data[f]) if f in ('estimated_cost','actual_cost') else data[f])
+    if fields:
+        vals.append(rid)
+        conn.execute(f'UPDATE bb_purchase_requests SET {",".join(fields)} WHERE id=%s',vals)
+        conn.commit()
+    conn.close()
+    return jsonify({'ok':True})
+
+@app.route('/api/statements/<int:sid>/items/<int:rid>', methods=['DELETE'])
+def delete_statement_item(sid, rid):
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    s = conn.execute('SELECT * FROM bb_statements WHERE id=%s',(sid,)).fetchone()
+    if not s or dict(s)['created_by'] != u['id']:
+        conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    conn.execute('DELETE FROM bb_receipts WHERE request_id=%s',(rid,))
+    conn.execute('DELETE FROM bb_statement_items WHERE statement_id=%s AND request_id=%s',(sid,rid))
+    conn.execute('DELETE FROM bb_purchase_requests WHERE id=%s',(rid,))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
+
+@app.route('/api/statements/<int:sid>/submit', methods=['POST'])
+def submit_statement(sid):
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    s = conn.execute('SELECT * FROM bb_statements WHERE id=%s',(sid,)).fetchone()
+    if not s: conn.close(); return jsonify({'error':'Not found'}),404
+    s = dict(s)
+    if s['created_by'] != u['id']:
+        conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    if s['status'] != 'draft':
+        conn.close(); return jsonify({'error':'Already submitted'}),400
+    items = conn.execute('''SELECT r.* FROM bb_statement_items si
+                            JOIN bb_purchase_requests r ON si.request_id=r.id
+                            WHERE si.statement_id=%s''',(sid,)).fetchall()
+    if not items:
+        conn.close(); return jsonify({'error':'Add at least one item before submitting'}),400
+    now = datetime.now().isoformat()
+    # Determine initial status for each item
+    prod_id = s.get('production_id')
+    if prod_id and get_production_producers(prod_id):
+        item_status = 'pending_producer'
+    else:
+        item_status = 'pending_treasurer'
+    for item in items:
+        conn.execute('''UPDATE bb_purchase_requests SET status=%s,submitted_at=%s,updated_at=%s
+                        WHERE id=%s''',(item_status,now,now,item['id']))
+    conn.execute("UPDATE bb_statements SET status='submitted',submitted_at=%s,updated_at=%s WHERE id=%s",
+                 (now,now,sid))
+    conn.commit()
+    conn.close()
+    log_action(u['id'],'submitted_statement','statement',sid,s['title'])
+    # Notify approvers
+    for item in items:
+        item = dict(item)
+        notify_request_submitted(
+            req_id=item['id'], req_title=item['title'],
+            submitter_name=u['name'], submitter_email=u['email'],
+            estimated_cost=item['estimated_cost'], req_type=item['type'],
+            purchase_method=item.get('purchase_method','in_store'),
+            item_url=item.get('item_url',''),
+            production_id=prod_id, status=item_status
+        )
+    return jsonify({'ok':True})
+
+# ─── Send back (needs revision) ───────────────────────────────────────────────
+@app.route('/api/requests/<int:rid>/send-back', methods=['POST'])
+def send_back_request(rid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    data = request.json
+    note = data.get('note','').strip()
+    if not note: return jsonify({'error':'Please provide a reason for sending back'}),400
+    conn = get_db()
+    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s',(rid,)).fetchone()
+    if not req: conn.close(); return jsonify({'error':'Not found'}),404
+    req = dict(req)
+    # Only approvers at the current stage can send back
+    can_act = (u['role'] in ('admin','treasurer','president') or
+               (req['status']=='pending_producer' and is_producer_of(u['id'],req.get('production_id'))))
+    if not can_act:
+        conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    now = datetime.now().isoformat()
+    conn.execute('''UPDATE bb_purchase_requests SET status='needs_revision',
+                    needs_revision=1, revision_note=%s, updated_at=%s WHERE id=%s''',
+                 (note, now, rid))
+    conn.commit(); conn.close()
+    log_action(u['id'],'sent_back_request','request',rid,note)
+    # Notify submitter
+    submitter = get_user_email(req['submitted_by'])
+    if submitter:
+        send_email(submitter['email'], f'↩ Changes needed: {req["title"]}',
+            email_html('Changes Needed on Your Request',
+                f'<p>Your request for <strong>{req["title"]}</strong> has been sent back for revision.</p>'
+                f'<p><strong>What needs to change:</strong> {note}</p>'
+                f'<p>Please update your request and resubmit.</p>',
+                'View in BloomBooks', APP_URL))
+    return jsonify({'ok':True})
+
+@app.route('/api/requests/<int:rid>/resubmit', methods=['POST'])
+def resubmit_request(rid):
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s',(rid,)).fetchone()
+    if not req: conn.close(); return jsonify({'error':'Not found'}),404
+    req = dict(req)
+    if req['submitted_by'] != u['id']:
+        conn.close(); return jsonify({'error':'Only the submitter can resubmit'}),403
+    if req['status'] != 'needs_revision':
+        conn.close(); return jsonify({'error':'This request does not need revision'}),400
+    data = request.json
+    now = datetime.now().isoformat()
+    # Determine which stage to send back to
+    prod_id = req.get('production_id')
+    if prod_id and get_production_producers(prod_id):
+        new_status = 'pending_producer'
+    else:
+        new_status = 'pending_treasurer'
+    fields = ['status=%s','needs_revision=0','updated_at=%s']
+    vals   = [new_status, now]
+    for f in ['title','description','vendor','estimated_cost','purchase_method','item_url','authorized_by']:
+        if f in data:
+            fields.append(f'{f}=%s')
+            vals.append(float(data[f]) if f=='estimated_cost' else data[f])
+    vals.append(rid)
+    conn.execute(f'UPDATE bb_purchase_requests SET {",".join(fields)} WHERE id=%s', vals)
+    conn.commit(); conn.close()
+    log_action(u['id'],'resubmitted_request','request',rid)
+    # Notify approvers
+    notify_request_submitted(
+        req_id=rid, req_title=req['title'],
+        submitter_name=u['name'], submitter_email=u['email'],
+        estimated_cost=data.get('estimated_cost', req['estimated_cost']),
+        req_type=req['type'], purchase_method=req.get('purchase_method','in_store'),
+        item_url=req.get('item_url',''), production_id=prod_id, status=new_status
+    )
+    return jsonify({'ok':True})
+
+# ─── User profile ─────────────────────────────────────────────────────────────
+@app.route('/api/profile', methods=['GET'])
+def get_profile():
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    return jsonify({'user': u})
+
+@app.route('/api/profile', methods=['PATCH'])
+def update_profile():
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    data = request.json
+    conn = get_db()
+    fields, vals = [], []
+    if 'reimb_method' in data: fields.append('reimb_method=%s'); vals.append(data['reimb_method'])
+    if 'reimb_handle' in data: fields.append('reimb_handle=%s'); vals.append(data['reimb_handle'])
+    if 'password' in data and data['password']:
+        fields.append('password=%s'); vals.append(hash_pw(data['password']))
+    if fields:
+        vals.append(u['id'])
+        conn.execute(f'UPDATE bb_users SET {",".join(fields)} WHERE id=%s', vals)
+        conn.commit()
+    conn.close()
+    return jsonify({'ok': True})
 
 # ─── Production Revenue ───────────────────────────────────────────────────────
 @app.route('/api/productions/<int:pid>/revenue', methods=['GET'])
