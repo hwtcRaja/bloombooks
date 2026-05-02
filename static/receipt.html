@@ -463,8 +463,6 @@ async function renderStatementsTab() {
   const mc = document.getElementById('main-content');
   mc.innerHTML = '<div class="loading"><div class="spinner"></div>Loading statements...</div>';
   try {
-    const stmts = await fetch(`/api/statements`, {credentials:'include'});
-    // Statements require login — use token to proxy
     const r = await fetch(`/api/receipt/${token}/statements`);
     let statements = [];
     if (r.ok) { const d = await r.json(); statements = d; }
@@ -566,7 +564,7 @@ async function createMobileStatement(btn) {
   if (!title){errEl.textContent='Title is required';errEl.style.display='block';return;}
   btn.disabled=true;btn.textContent='Creating...';
   try {
-    const r=await fetch('/api/statements',{method:'POST',credentials:'include',
+    const r=await fetch(`/api/receipt/${token}/statements`,{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({title,description:desc})});
     const d=await r.json();
     if (!r.ok){errEl.textContent=d.error||'Failed';errEl.style.display='block';btn.disabled=false;btn.textContent='Create statement';return;}
@@ -615,6 +613,15 @@ function showMobileAddItem(sid) {
         <div class="form-group"><label class="form-label">Account info</label>
           <input type="text" id="sit-reimb-handle" class="form-input" placeholder="Username"></div>
       </div>
+      <div class="form-group"><label class="form-label">Receipt photo</label>
+        <div class="upload-zone" id="sit-upload-zone" onclick="document.getElementById('sit-receipt-file').click()">
+          <div class="upload-icon" style="font-size:24px;margin-bottom:4px">📷</div>
+          <div class="upload-text" style="font-size:13px">Tap to attach receipt</div>
+        </div>
+        <input type="file" id="sit-receipt-file" accept="image/*,application/pdf" style="display:none"
+          onchange="document.getElementById('sit-upload-zone').classList.toggle('has-file',!!this.files[0]);document.getElementById('sit-file-name').textContent=this.files[0]?.name||''">
+        <div id="sit-file-name" style="font-size:12px;color:var(--teal);margin-top:5px"></div>
+      </div>
     </div>
     <div id="sit-error" class="form-error" style="display:none;margin-bottom:10px"></div>
     <button class="btn-primary" onclick="addMobileStatementItem(${sid},this)">Add item</button>`;
@@ -646,11 +653,14 @@ async function addMobileStatementItem(sid, btn) {
   if (statementItemType==='sap'&&!auth){errEl.textContent='Please specify who authorized this purchase';errEl.style.display='block';return;}
   btn.disabled=true;btn.textContent='Adding...';
   try {
-    const r=await fetch(`/api/statements/${sid}/items`,{method:'POST',credentials:'include',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({type:statementItemType,title,estimated_cost:parseFloat(cost),
-        budget_id:parseInt(budget),vendor,sap_reason:sapReason,authorized_by:auth,
-        reimb_method:reimbM,reimb_handle:reimbH})});
+    const fd=new FormData();
+    fd.append('type',statementItemType);fd.append('title',title);
+    fd.append('estimated_cost',cost);fd.append('budget_id',budget);
+    fd.append('vendor',vendor);fd.append('sap_reason',sapReason);
+    fd.append('authorized_by',auth);fd.append('reimb_method',reimbM);fd.append('reimb_handle',reimbH);
+    const sitFile=document.getElementById('sit-receipt-file')?.files[0];
+    if(statementItemType==='sap'&&sitFile)fd.append('file',sitFile);
+    const r=await fetch(`/api/receipt/${token}/statements/${sid}/items`,{method:'POST',body:fd});
     const d=await r.json();
     if (!r.ok){errEl.textContent=d.error||'Failed';errEl.style.display='block';btn.disabled=false;btn.textContent='Add item';return;}
     document.querySelector('div[style*="position:fixed"]')?.remove();
@@ -661,8 +671,7 @@ async function addMobileStatementItem(sid, btn) {
 
 async function submitMobileStatement(sid) {
   try {
-    const r=await fetch(`/api/statements/${sid}/submit`,{method:'POST',credentials:'include',
-      headers:{'Content-Type':'application/json'},body:'{}'});
+    const r=await fetch(`/api/receipt/${token}/statements/${sid}/submit`,{method:'POST'});
     const d=await r.json();
     if (!r.ok){alert(d.error||'Submission failed');return;}
     toast('Statement submitted!');

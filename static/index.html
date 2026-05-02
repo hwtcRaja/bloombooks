@@ -2665,8 +2665,20 @@ function buildItemFormHTML(sid, item) {
         <label class="form-label">Item link</label>
         <input type="url" id="sitem-url" class="form-input" value="${item?.item_url||''}" placeholder="https://..."></div>
       <div id="sitem-sap-fields" class="${isSAP?'':'hidden'}">
+        <div class="form-group"><label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
+          <textarea id="sitem-sap-reason" class="form-textarea" placeholder="Explain why this could not wait for pre-approval...">${item?.sap_reason||''}</textarea></div>
         <div class="form-group"><label class="form-label">Who authorized this purchase? <span class="req">*</span></label>
           <input type="text" id="sitem-auth" class="form-input" value="${item?.authorized_by||''}" placeholder="e.g. Producer Sarah approved verbally"></div>
+        <div class="form-group">
+          <label class="form-label">Receipt photo</label>
+          <div class="upload-area" onclick="document.getElementById('sitem-receipt-file').click()" style="padding:14px;text-align:center;cursor:pointer">
+            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto 4px;display:block;opacity:.4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            <span class="text-xs text-muted">Click to attach receipt photo or PDF</span>
+          </div>
+          <input type="file" id="sitem-receipt-file" accept="image/*,application/pdf" class="hidden"
+            onchange="document.getElementById('sitem-file-name').textContent=this.files[0]?.name||''">
+          <div id="sitem-file-name" class="text-xs mt-4" style="color:var(--teal)"></div>
+        </div>
       </div>
       <hr class="divider">
       <div class="text-xs text-muted fw-600 mb-8">REIMBURSEMENT PREFERENCE</div>
@@ -2723,14 +2735,16 @@ function getItemFormData() {
   const itemUrl= rawUrl&&!rawUrl.match(/^https?:\/\//)?'https://'+rawUrl:rawUrl;
   return {
     type,
-    title:         document.getElementById('sitem-title').value.trim(),
-    estimated_cost:parseFloat(document.getElementById('sitem-cost').value||0),
-    vendor:        document.getElementById('sitem-vendor').value.trim(),
+    title:          document.getElementById('sitem-title').value.trim(),
+    estimated_cost: parseFloat(document.getElementById('sitem-cost').value||0),
+    vendor:         document.getElementById('sitem-vendor').value.trim(),
     purchase_method:document.getElementById('sitem-method').value,
-    item_url:      itemUrl,
-    authorized_by: document.getElementById('sitem-auth')?.value.trim()||'',
-    reimb_method:  document.getElementById('sitem-reimb-method').value,
-    reimb_handle:  document.getElementById('sitem-reimb-handle').value.trim(),
+    item_url:       itemUrl,
+    sap_reason:     document.getElementById('sitem-sap-reason')?.value.trim()||'',
+    authorized_by:  document.getElementById('sitem-auth')?.value.trim()||'',
+    reimb_method:   document.getElementById('sitem-reimb-method').value,
+    reimb_handle:   document.getElementById('sitem-reimb-handle').value.trim(),
+    _file:          document.getElementById('sitem-receipt-file')?.files[0]||null,
   };
 }
 
@@ -2740,9 +2754,17 @@ async function saveStatementItem(sid) {
   errEl.classList.add('hidden');
   if (!data.title) { errEl.textContent='Description is required'; errEl.classList.remove('hidden'); return; }
   if (!data.estimated_cost) { errEl.textContent='Amount is required'; errEl.classList.remove('hidden'); return; }
+  if (data.type==='sap'&&!data.sap_reason) { errEl.textContent='Please explain why prior approval was not possible'; errEl.classList.remove('hidden'); return; }
   if (data.type==='sap'&&!data.authorized_by) { errEl.textContent='Please specify who authorized this SAP'; errEl.classList.remove('hidden'); return; }
   try {
-    await api('POST', `/statements/${sid}/items`, data);
+    const {_file, ...payload} = data;
+    const res = await api('POST', `/statements/${sid}/items`, payload);
+    // Upload receipt if provided
+    if (_file && res.request_id) {
+      const fd = new FormData();
+      fd.append('file', _file);
+      await api('POST', `/requests/${res.request_id}/receipts`, fd, true);
+    }
     toast('Item added!','success');
     closeModal();
     renderStatements();
