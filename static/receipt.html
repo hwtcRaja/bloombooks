@@ -126,8 +126,9 @@ input[type=file]{display:none}
 </div>
 
 <div class="tab-bar" id="tab-bar" style="display:none">
-  <button class="tab-btn active" id="tab-receipt" onclick="switchTab('receipt')">📎 Submit Receipt</button>
-  <button class="tab-btn" id="tab-new" onclick="switchTab('new')">➕ New Request</button>
+  <button class="tab-btn active" id="tab-receipt" onclick="switchTab('receipt')" style="font-size:12px">📎 Receipt</button>
+  <button class="tab-btn" id="tab-new" onclick="switchTab('new')" style="font-size:12px">➕ Request</button>
+  <button class="tab-btn" id="tab-statements" onclick="switchTab('statements')" style="font-size:12px">📋 Statements</button>
 </div>
 
 <div class="content" id="main-content">
@@ -139,16 +140,25 @@ const token   = location.pathname.split('/receipt/')[1];
 let pageData  = null;
 let activeTab = 'receipt';
 
-// ── Receipt tab state
+const REIMB_METHODS = ['Venmo','Cash App','Zelle','PayPal','Direct Check'];
+const REIMB_LABELS  = {'Venmo':'Venmo @username','Cash App':'$Cashtag','Zelle':'Phone or email','PayPal':'PayPal email','Direct Check':'Mailing address'};
+
+// Receipt tab state
 let receiptSelectedFile = null;
 let receiptSelectedId   = null;
 
-// ── New request tab state
-let newMethod  = 'in_store';
-let newType    = 'pre_approval';
-let newFile    = null;
+// New request tab state
+let newMethod = 'in_store';
+let newType   = 'pre_approval';
+let newFile   = null;
+
+// Statement tab state
+let currentStatementId = null;
+let statementItemMethod = 'in_store';
+let statementItemType   = 'pre_approval';
 
 async function init() {
+  showLoading();
   try {
     const r = await fetch(`/api/receipt/${token}`);
     const d = await r.json();
@@ -164,14 +174,16 @@ async function init() {
 
 function switchTab(tab) {
   activeTab = tab;
-  document.getElementById('tab-receipt').classList.toggle('active', tab === 'receipt');
-  document.getElementById('tab-new').classList.toggle('active', tab === 'new');
+  ['receipt','new','statements'].forEach(t => {
+    document.getElementById(`tab-${t}`)?.classList.toggle('active', t===tab);
+  });
   renderTab();
 }
 
 function renderTab() {
-  if (activeTab === 'receipt') renderReceiptTab();
-  else renderNewRequestTab();
+  if (activeTab === 'receipt')    renderReceiptTab();
+  else if (activeTab === 'new')   renderNewRequestTab();
+  else                            renderStatementsTab();
 }
 
 // ══════════════════════════════════════════════
@@ -181,12 +193,12 @@ function renderReceiptTab() {
   const u = pageData.user;
   const reqs = pageData.requests;
   const reqCards = reqs.length === 0
-    ? `<div class="empty-note">No open requests found.<br>Submit a new request first using the ➕ tab.</div>`
+    ? `<div class="empty-note">No open requests found.<br>Submit a request using the ➕ tab first.</div>`
     : reqs.map(r => {
-        const approved = ['approved'].includes(r.status);
-        const statusLabel = r.status === 'approved' ? 'Approved' : r.status.replace('pending_','Awaiting ').replace('_',' ');
+        const approved = r.status === 'approved';
+        const statusLabel = r.status.replace('pending_','Awaiting ').replace('_',' ');
         const amt = r.actual_cost || r.estimated_cost;
-        return `<div class="req-card" id="rcard-${r.id}" onclick="selectReceiptRequest(${r.id}, ${amt})">
+        return `<div class="req-card" id="rcard-${r.id}" onclick="selectReceiptRequest(${r.id},${amt})">
           <div class="req-card-title">${r.title}</div>
           <div class="req-card-meta">$${parseFloat(amt).toFixed(2)}${r.vendor?' · '+r.vendor:''}
             <span class="status-pill ${approved?'sp-approved':'sp-pending'}">${statusLabel}</span>
@@ -199,44 +211,27 @@ function renderReceiptTab() {
       <div class="user-av">${u.name.charAt(0).toUpperCase()}</div>
       <div><div class="user-name">${u.name}</div><div class="user-sub">Select a request to attach a receipt</div></div>
     </div>
-
-    <div class="card">
-      <div class="card-label">Select request</div>
-      <div class="card-body" style="padding-top:8px">${reqCards}</div>
-    </div>
-
+    <div class="card"><div class="card-label">Select request</div><div class="card-body" style="padding-top:8px">${reqCards}</div></div>
     <div id="receipt-form" style="display:none">
-      <div class="card">
-        <div class="card-label">Receipt photo</div>
-        <div class="card-body">
-          <div class="upload-zone" id="r-upload-zone" onclick="document.getElementById('r-file-input').click()">
-            <div class="upload-icon">📷</div>
-            <div class="upload-text">Take photo or choose file</div>
-            <div class="upload-sub">JPG, PNG, or PDF</div>
-          </div>
-          <input type="file" id="r-file-input" accept="image/*,application/pdf" onchange="handleReceiptFile(this)">
-          <div id="r-preview"></div>
+      <div class="card"><div class="card-label">Receipt photo</div><div class="card-body">
+        <div class="upload-zone" id="r-upload-zone" onclick="document.getElementById('r-file-input').click()">
+          <div class="upload-icon">📷</div>
+          <div class="upload-text">Take photo or choose file</div>
+          <div class="upload-sub">JPG, PNG, or PDF</div>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-label">Details</div>
-        <div class="card-body">
-          <div class="two-col">
-            <div class="form-group">
-              <label class="form-label">Estimated</label>
-              <input type="text" id="r-estimated" class="form-input" readonly style="background:var(--cream);color:var(--ink3)">
-            </div>
-            <div class="form-group">
-              <label class="form-label">Actual <span class="req">*</span></label>
-              <input type="number" id="r-actual" class="form-input" placeholder="0.00" step="0.01" min="0">
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Note (optional)</label>
-            <textarea id="r-note" class="form-textarea" placeholder="Any details about this purchase..."></textarea>
-          </div>
+        <input type="file" id="r-file-input" accept="image/*,application/pdf" onchange="handleReceiptFile(this)">
+        <div id="r-preview"></div>
+      </div></div>
+      <div class="card"><div class="card-label">Details</div><div class="card-body">
+        <div class="two-col">
+          <div class="form-group"><label class="form-label">Estimated</label>
+            <input type="text" id="r-estimated" class="form-input" readonly style="background:var(--cream);color:var(--ink3)"></div>
+          <div class="form-group"><label class="form-label">Actual <span class="req">*</span></label>
+            <input type="number" id="r-actual" class="form-input" placeholder="0.00" step="0.01" min="0"></div>
         </div>
-      </div>
+        <div class="form-group"><label class="form-label">Note (optional)</label>
+          <textarea id="r-note" class="form-textarea" placeholder="Any details..."></textarea></div>
+      </div></div>
       <div id="r-error" class="form-error" style="margin-bottom:10px;display:none"></div>
       <button class="btn-primary" id="r-submit-btn" onclick="submitReceipt()">Submit Receipt</button>
     </div>`;
@@ -244,27 +239,24 @@ function renderReceiptTab() {
 
 function selectReceiptRequest(id, amt) {
   receiptSelectedId = id;
-  pageData.requests.forEach(r => {
-    document.getElementById(`rcard-${r.id}`)?.classList.toggle('selected', r.id === id);
-  });
+  pageData.requests.forEach(r => document.getElementById(`rcard-${r.id}`)?.classList.toggle('selected', r.id===id));
   document.getElementById('receipt-form').style.display = 'block';
-  document.getElementById('r-estimated').value = '$' + parseFloat(amt).toFixed(2);
+  document.getElementById('r-estimated').value = '$'+parseFloat(amt).toFixed(2);
   document.getElementById('r-actual').value    = parseFloat(amt).toFixed(2);
-  document.getElementById('receipt-form').scrollIntoView({behavior:'smooth', block:'start'});
+  document.getElementById('receipt-form').scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 function handleReceiptFile(input) {
-  const file = input.files[0];
-  if (!file) return;
+  const file = input.files[0]; if (!file) return;
   receiptSelectedFile = file;
   document.getElementById('r-upload-zone').classList.add('has-file');
   const preview = document.getElementById('r-preview');
   if (file.type.startsWith('image/')) {
     const reader = new FileReader();
-    reader.onload = e => { preview.innerHTML = `<div class="preview-wrap"><img src="${e.target.result}"></div>`; };
+    reader.onload = e => { preview.innerHTML=`<div class="preview-wrap"><img src="${e.target.result}"></div>`; };
     reader.readAsDataURL(file);
   } else {
-    preview.innerHTML = `<div style="margin-top:8px;padding:9px 12px;background:var(--teal3);border-radius:var(--r-sm);font-size:13px;color:var(--teal)">✓ ${file.name}</div>`;
+    preview.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:var(--teal3);border-radius:var(--r-sm);font-size:13px;color:var(--teal)">✓ ${file.name}</div>`;
   }
 }
 
@@ -273,297 +265,453 @@ async function submitReceipt() {
   const note   = document.getElementById('r-note').value.trim();
   const errEl  = document.getElementById('r-error');
   const btn    = document.getElementById('r-submit-btn');
-  errEl.style.display = 'none';
-  if (!receiptSelectedId) { showRErr('Please select a request.'); return; }
+  errEl.style.display='none';
+  if (!receiptSelectedId){ showRErr('Please select a request.'); return; }
   if (!receiptSelectedFile){ showRErr('Please attach a receipt photo.'); return; }
-  if (!actual)             { showRErr('Please enter the actual amount.'); return; }
-  btn.disabled = true; btn.textContent = 'Submitting...';
-  const fd = new FormData();
-  fd.append('request_id', receiptSelectedId);
-  fd.append('actual_cost', actual);
-  fd.append('note', note);
-  fd.append('file', receiptSelectedFile);
+  if (!actual){ showRErr('Please enter the actual amount.'); return; }
+  btn.disabled=true; btn.textContent='Submitting...';
+  const fd=new FormData();
+  fd.append('request_id',receiptSelectedId); fd.append('actual_cost',actual);
+  fd.append('note',note); fd.append('file',receiptSelectedFile);
   try {
-    const r = await fetch(`/api/receipt/${token}/submit`, {method:'POST', body:fd});
-    const d = await r.json();
-    if (!r.ok) { showRErr(d.error || 'Submission failed'); btn.disabled=false; btn.textContent='Submit Receipt'; return; }
+    const r=await fetch(`/api/receipt/${token}/submit`,{method:'POST',body:fd});
+    const d=await r.json();
+    if (!r.ok){showRErr(d.error||'Submission failed');btn.disabled=false;btn.textContent='Submit Receipt';return;}
     showSuccess('receipt');
-  } catch(e) {
-    showRErr('Network error — please try again.');
-    btn.disabled=false; btn.textContent='Submit Receipt';
-  }
+  } catch(e){showRErr('Network error — please try again.');btn.disabled=false;btn.textContent='Submit Receipt';}
 }
-function showRErr(msg) { const e=document.getElementById('r-error'); e.textContent=msg; e.style.display='block'; }
+function showRErr(msg){const e=document.getElementById('r-error');e.textContent=msg;e.style.display='block';}
 
 // ══════════════════════════════════════════════
 // NEW REQUEST TAB
 // ══════════════════════════════════════════════
 function renderNewRequestTab() {
   const u = pageData.user;
-  const budgets = pageData.budgets || [];
+  const budgets = pageData.budgets||[];
   const trained = u.training_complete;
-
-  // Group budgets by production
-  const byProd = {};
-  const orgBudgets = [];
-  for (const b of budgets) {
-    if (b.production_id) {
-      const key = b.production_id;
-      if (!byProd[key]) byProd[key] = {name: b.production_name, items: []};
-      byProd[key].items.push(b);
-    } else {
-      orgBudgets.push(b);
-    }
-  }
-
   let budgetOpts = '<option value="">Select department / budget...</option>';
-  for (const [pid, group] of Object.entries(byProd)) {
-    budgetOpts += `<optgroup label="${group.name}">`;
-    group.items.forEach(b => {
-      const rem = b.total_amount - b.spent;
-      budgetOpts += `<option value="${b.id}">${b.name} (${fmtMoney(rem)} left)</option>`;
-    });
-    budgetOpts += '</optgroup>';
+  const byProd={},orgBudgets=[];
+  for (const b of budgets) {
+    if (b.production_id){
+      if (!byProd[b.production_id]) byProd[b.production_id]={name:b.production_name,items:[]};
+      byProd[b.production_id].items.push(b);
+    } else { orgBudgets.push(b); }
   }
-  if (orgBudgets.length > 0) {
-    budgetOpts += `<optgroup label="Org-level">`;
-    orgBudgets.forEach(b => {
-      const rem = b.total_amount - b.spent;
-      budgetOpts += `<option value="${b.id}">${b.name} (${fmtMoney(rem)} left)</option>`;
-    });
-    budgetOpts += '</optgroup>';
+  for (const [,g] of Object.entries(byProd)) {
+    budgetOpts+=`<optgroup label="${g.name}">`;
+    g.items.forEach(b=>{ budgetOpts+=`<option value="${b.id}">${b.name} (${fmtMoney(b.total_amount-b.spent)} left)</option>`; });
+    budgetOpts+='</optgroup>';
   }
-
-  const prodOpts = (pageData.productions||[]).map(p=>`<option value="${p.id}">${p.name} — ${p.season}</option>`).join('');
+  if (orgBudgets.length>0){
+    budgetOpts+=`<optgroup label="Org-level">`;
+    orgBudgets.forEach(b=>{ budgetOpts+=`<option value="${b.id}">${b.name} (${fmtMoney(b.total_amount-b.spent)} left)</option>`; });
+    budgetOpts+='</optgroup>';
+  }
+  const prodOpts=(pageData.productions||[]).map(p=>`<option value="${p.id}">${p.name} — ${p.season}</option>`).join('');
+  const reimbOpts=REIMB_METHODS.map(m=>`<option value="${m}">${m}</option>`).join('');
 
   document.getElementById('main-content').innerHTML = `
     <div class="user-greeting">
       <div class="user-av">${u.name.charAt(0).toUpperCase()}</div>
       <div><div class="user-name">${u.name}</div><div class="user-sub">Submit a new purchase request</div></div>
     </div>
-
-    ${!trained ? `<div class="training-warn">⚠️ You haven't completed purchasing training yet. You can still submit requests but an admin may need to approve access.</div>` : ''}
-
-    <div class="card">
-      <div class="card-label">Request type</div>
-      <div class="card-body" style="padding-top:8px">
-        <div class="type-toggle">
-          <div class="type-opt active-pre" id="ntype-pre" onclick="setNewType('pre_approval')">
-            <div class="type-opt-title">Pre-approval</div>
-            <div class="type-opt-sub">Submit before buying</div>
-          </div>
-          <div class="type-opt" id="ntype-sap" onclick="setNewType('sap')">
-            <div class="type-opt-title">SAP</div>
-            <div class="type-opt-sub">Already purchased</div>
-          </div>
-        </div>
+    ${!trained?`<div class="training-warn">⚠️ Training not yet complete. You can still submit but an admin may need to approve access.</div>`:''}
+    <div class="card"><div class="card-label">Request type</div><div class="card-body" style="padding-top:8px">
+      <div class="type-toggle">
+        <div class="type-opt active-pre" id="ntype-pre" onclick="setNewType('pre_approval')">
+          <div class="type-opt-title">Pre-approval</div><div class="type-opt-sub">Submit before buying</div></div>
+        <div class="type-opt" id="ntype-sap" onclick="setNewType('sap')">
+          <div class="type-opt-title">SAP</div><div class="type-opt-sub">Already purchased</div></div>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">Purchase details</div>
-      <div class="card-body">
-        <div class="form-group">
-          <label class="form-label">What are you buying? <span class="req">*</span></label>
-          <input type="text" id="n-title" class="form-input" placeholder="e.g. Paint for set construction">
-        </div>
-        <div class="two-col">
-          <div class="form-group">
-            <label class="form-label">Estimated cost <span class="req">*</span></label>
-            <input type="number" id="n-cost" class="form-input" placeholder="0.00" step="0.01" min="0" inputmode="decimal">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Budget / dept <span class="req">*</span></label>
-            <select id="n-budget" class="form-select">${budgetOpts}</select>
-          </div>
-        </div>
-        ${prodOpts ? `<div class="form-group">
-          <label class="form-label">Production (if applicable)</label>
-          <select id="n-prod" class="form-select">
-            <option value="">Org-level / not show-specific</option>
-            ${prodOpts}
-          </select>
-        </div>` : ''}
+    </div></div>
+    <div class="card"><div class="card-label">Purchase details</div><div class="card-body">
+      <div class="form-group"><label class="form-label">What are you buying? <span class="req">*</span></label>
+        <input type="text" id="n-title" class="form-input" placeholder="e.g. Fabric for Act 2 costumes"></div>
+      <div class="two-col">
+        <div class="form-group"><label class="form-label">Estimated cost <span class="req">*</span></label>
+          <input type="number" id="n-cost" class="form-input" placeholder="0.00" step="0.01" min="0" inputmode="decimal"></div>
+        <div class="form-group"><label class="form-label">Budget <span class="req">*</span></label>
+          <select id="n-budget" class="form-select">${budgetOpts}</select></div>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">Purchase method</div>
-      <div class="card-body" style="padding-top:8px">
-        <div class="method-toggle">
-          <div class="method-opt active" id="nmethod-store" onclick="setNewMethod('in_store')">
-            <div style="font-size:18px;margin-bottom:3px">🏪</div>
-            <div style="font-size:13px;font-weight:600">In-store</div>
-          </div>
-          <div class="method-opt" id="nmethod-online" onclick="setNewMethod('online')">
-            <div style="font-size:18px;margin-bottom:3px">🌐</div>
-            <div style="font-size:13px;font-weight:600">Online</div>
-          </div>
-        </div>
-        <div id="n-vendor-field" class="form-group" style="margin-top:10px">
-          <label class="form-label">Store / vendor name</label>
-          <input type="text" id="n-vendor" class="form-input" placeholder="e.g. Home Depot, Joann Fabrics">
-        </div>
-        <div id="n-url-field" class="form-group" style="margin-top:10px;display:none">
-          <label class="form-label">Link to item <span class="req">*</span></label>
-          <input type="url" id="n-item-url" class="form-input" placeholder="https://..." inputmode="url">
-        </div>
+      ${prodOpts?`<div class="form-group"><label class="form-label">Production (if applicable)</label>
+        <select id="n-prod" class="form-select"><option value="">Org-level</option>${prodOpts}</select></div>`:''}
+    </div></div>
+    <div class="card"><div class="card-label">Purchase method</div><div class="card-body" style="padding-top:8px">
+      <div class="method-toggle">
+        <div class="method-opt active" id="nmethod-store" onclick="setNewMethod('in_store')"><div style="font-size:18px;margin-bottom:3px">🏪</div><div style="font-size:13px;font-weight:600">In-store</div></div>
+        <div class="method-opt" id="nmethod-online" onclick="setNewMethod('online')"><div style="font-size:18px;margin-bottom:3px">🌐</div><div style="font-size:13px;font-weight:600">Online</div></div>
       </div>
-    </div>
-
+      <div id="n-vendor-field" class="form-group" style="margin-top:10px">
+        <label class="form-label">Store / vendor</label>
+        <input type="text" id="n-vendor" class="form-input" placeholder="e.g. Joann Fabrics"></div>
+      <div id="n-url-field" class="form-group" style="margin-top:10px;display:none">
+        <label class="form-label">Item link <span class="req">*</span></label>
+        <input type="url" id="n-item-url" class="form-input" placeholder="https://..." inputmode="url"></div>
+    </div></div>
     <div id="n-sap-section" style="display:none">
-      <div class="card">
-        <div class="card-label">SAP details</div>
-        <div class="card-body">
-          <div class="form-group">
-            <label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
-            <textarea id="n-sap-reason" class="form-textarea" placeholder="Explain the circumstances..."></textarea>
-          </div>
+      <div class="card"><div class="card-label">SAP details</div><div class="card-body">
+        <div class="form-group"><label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
+          <textarea id="n-sap-reason" class="form-textarea" placeholder="Explain the circumstances..."></textarea></div>
+        <div class="form-group"><label class="form-label">Who authorized this purchase? <span class="req">*</span></label>
+          <input type="text" id="n-authorized-by" class="form-input" placeholder="e.g. Producer Sarah approved verbally">
+          <div class="form-hint">Name/role of who told you to buy this</div></div>
+      </div></div>
+      <div class="card"><div class="card-label">Reimbursement preference</div><div class="card-body">
+        <div class="two-col">
+          <div class="form-group"><label class="form-label">Method</label>
+            <select id="n-reimb-method" class="form-select" onchange="updateMobileReimbHandle(this.value)">
+              <option value="">My profile default</option>${reimbOpts}
+            </select></div>
+          <div class="form-group"><label class="form-label" id="n-reimb-label">Account info</label>
+            <input type="text" id="n-reimb-handle" class="form-input" placeholder="Username or info"></div>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-label">Receipt photo</div>
-        <div class="card-body">
-          <div class="upload-zone" id="n-upload-zone" onclick="document.getElementById('n-file-input').click()">
-            <div class="upload-icon">📷</div>
-            <div class="upload-text">Take photo or choose file</div>
-            <div class="upload-sub">JPG, PNG, or PDF</div>
-          </div>
-          <input type="file" id="n-file-input" accept="image/*,application/pdf" onchange="handleNewFile(this)">
-          <div id="n-preview"></div>
+      </div></div>
+      <div class="card"><div class="card-label">Receipt photo</div><div class="card-body">
+        <div class="upload-zone" id="n-upload-zone" onclick="document.getElementById('n-file-input').click()">
+          <div class="upload-icon">📷</div><div class="upload-text">Take photo or choose file</div>
+          <div class="upload-sub">JPG, PNG, or PDF</div>
         </div>
-      </div>
+        <input type="file" id="n-file-input" accept="image/*,application/pdf" onchange="handleNewFile(this)">
+        <div id="n-preview"></div>
+      </div></div>
     </div>
-
-    <div class="card">
-      <div class="card-body">
-        <div class="form-group" style="margin-bottom:0">
-          <label class="form-label">Additional notes (optional)</label>
-          <textarea id="n-desc" class="form-textarea" placeholder="Any context that would help approvers..."></textarea>
-        </div>
-      </div>
-    </div>
-
+    <div class="card"><div class="card-body">
+      <div class="form-group" style="margin-bottom:0"><label class="form-label">Additional notes (optional)</label>
+        <textarea id="n-desc" class="form-textarea" placeholder="Any context for approvers..."></textarea></div>
+    </div></div>
     <div id="n-error" class="form-error" style="margin-bottom:10px;display:none"></div>
     <button class="btn-primary" id="n-submit-btn" onclick="submitNewRequest()">Submit Request</button>`;
 }
 
-function fmtMoney(n) {
-  return '$' + (parseFloat(n)||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+function updateMobileReimbHandle(method) {
+  const label = document.getElementById('n-reimb-label');
+  if (label) label.textContent = REIMB_LABELS[method]||'Account info';
+  const input = document.getElementById('n-reimb-handle');
+  if (input) input.placeholder = REIMB_LABELS[method]||'';
 }
 
 function setNewType(type) {
-  newType = type;
-  const isSAP = type === 'sap';
-  document.getElementById('ntype-pre').className = 'type-opt' + (!isSAP ? ' active-pre' : '');
-  document.getElementById('ntype-sap').className = 'type-opt' + (isSAP ? ' active-sap' : '');
-  document.getElementById('n-sap-section').style.display = isSAP ? 'block' : 'none';
+  newType=type; const isSAP=type==='sap';
+  document.getElementById('ntype-pre').className='type-opt'+(isSAP?'':' active-pre');
+  document.getElementById('ntype-sap').className='type-opt'+(isSAP?' active-sap':'');
+  document.getElementById('n-sap-section').style.display=isSAP?'block':'none';
 }
 
 function setNewMethod(method) {
-  newMethod = method;
-  const isOnline = method === 'online';
-  document.getElementById('nmethod-store').classList.toggle('active', !isOnline);
-  document.getElementById('nmethod-online').classList.toggle('active', isOnline);
-  document.getElementById('n-vendor-field').style.display = isOnline ? 'none' : 'block';
-  document.getElementById('n-url-field').style.display    = isOnline ? 'block' : 'none';
+  newMethod=method; const isOnline=method==='online';
+  document.getElementById('nmethod-store').classList.toggle('active',!isOnline);
+  document.getElementById('nmethod-online').classList.toggle('active',isOnline);
+  document.getElementById('n-vendor-field').style.display=isOnline?'none':'block';
+  document.getElementById('n-url-field').style.display=isOnline?'block':'none';
 }
 
 function handleNewFile(input) {
-  const file = input.files[0];
-  if (!file) return;
-  newFile = file;
+  const file=input.files[0]; if (!file) return; newFile=file;
   document.getElementById('n-upload-zone').classList.add('has-file');
-  const preview = document.getElementById('n-preview');
-  if (file.type.startsWith('image/')) {
-    const reader = new FileReader();
-    reader.onload = e => { preview.innerHTML = `<div class="preview-wrap"><img src="${e.target.result}"></div>`; };
+  const preview=document.getElementById('n-preview');
+  if (file.type.startsWith('image/')){
+    const reader=new FileReader();
+    reader.onload=e=>{preview.innerHTML=`<div class="preview-wrap"><img src="${e.target.result}"></div>`;};
     reader.readAsDataURL(file);
-  } else {
-    preview.innerHTML = `<div style="margin-top:8px;padding:9px 12px;background:var(--teal3);border-radius:var(--r-sm);font-size:13px;color:var(--teal)">✓ ${file.name}</div>`;
-  }
+  } else { preview.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:var(--teal3);border-radius:var(--r-sm);font-size:13px;color:var(--teal)">✓ ${file.name}</div>`; }
 }
 
 async function submitNewRequest() {
-  const title   = document.getElementById('n-title')?.value.trim() || '';
-  const cost    = document.getElementById('n-cost')?.value || '';
-  const budget  = document.getElementById('n-budget')?.value || '';
-  const prodEl  = document.getElementById('n-prod');
-  const prodId  = prodEl ? prodEl.value : '';
-  const vendor  = newMethod === 'in_store' ? (document.getElementById('n-vendor')?.value.trim() || '') : '';
-  const itemUrl = newMethod === 'online'   ? (document.getElementById('n-item-url')?.value.trim() || '') : '';
-  const desc    = document.getElementById('n-desc')?.value.trim() || '';
-  const sapReason = document.getElementById('n-sap-reason')?.value.trim() || '';
+  const title   = document.getElementById('n-title')?.value.trim()||'';
+  const cost    = document.getElementById('n-cost')?.value||'';
+  const budget  = document.getElementById('n-budget')?.value||'';
+  const prodId  = document.getElementById('n-prod')?.value||'';
+  const vendor  = newMethod==='in_store'?(document.getElementById('n-vendor')?.value.trim()||''):'';
+  const rawUrl  = newMethod==='online'?(document.getElementById('n-item-url')?.value.trim()||''):'';
+  const itemUrl = rawUrl&&!rawUrl.match(/^https?:\/\//)?'https://'+rawUrl:rawUrl;
+  const desc    = document.getElementById('n-desc')?.value.trim()||'';
+  const sapReason   = document.getElementById('n-sap-reason')?.value.trim()||'';
+  const authorizedBy= document.getElementById('n-authorized-by')?.value.trim()||'';
+  const reimbMethod = document.getElementById('n-reimb-method')?.value||'';
+  const reimbHandle = document.getElementById('n-reimb-handle')?.value.trim()||'';
   const errEl   = document.getElementById('n-error');
   const btn     = document.getElementById('n-submit-btn');
-  errEl.style.display = 'none';
-
-  if (!title)  { showNErr('Please describe what you\'re buying.'); return; }
-  if (!cost)   { showNErr('Please enter the estimated cost.'); return; }
-  if (!budget) { showNErr('Please select a budget or department.'); return; }
-  if (newMethod === 'online' && !itemUrl) { showNErr('Please provide a link to the item.'); return; }
-  if (newType === 'sap' && !sapReason) { showNErr('Please explain why prior approval was not possible.'); return; }
-
-  btn.disabled = true; btn.textContent = 'Submitting...';
-
-  const fd = new FormData();
-  fd.append('title', title);
-  fd.append('estimated_cost', cost);
-  fd.append('budget_id', budget);
-  fd.append('type', newType);
-  fd.append('purchase_method', newMethod);
-  fd.append('vendor', vendor);
-  fd.append('item_url', itemUrl);
-  fd.append('description', desc);
-  fd.append('sap_reason', sapReason);
-  if (prodId) fd.append('production_id', prodId);
-  if (newType === 'sap' && newFile) fd.append('file', newFile);
-
+  errEl.style.display='none';
+  if (!title) { showNErr('Please describe what you\'re buying.'); return; }
+  if (!cost)  { showNErr('Please enter the estimated cost.'); return; }
+  if (!budget){ showNErr('Please select a budget or department.'); return; }
+  if (newMethod==='online'&&!itemUrl){ showNErr('Please provide a link to the item.'); return; }
+  if (newType==='sap'&&!sapReason){ showNErr('Please explain why prior approval was not possible.'); return; }
+  if (newType==='sap'&&!authorizedBy){ showNErr('Please specify who authorized this purchase.'); return; }
+  btn.disabled=true; btn.textContent='Submitting...';
+  const fd=new FormData();
+  fd.append('title',title); fd.append('estimated_cost',cost); fd.append('budget_id',budget);
+  fd.append('type',newType); fd.append('purchase_method',newMethod); fd.append('vendor',vendor);
+  fd.append('item_url',itemUrl); fd.append('description',desc); fd.append('sap_reason',sapReason);
+  fd.append('authorized_by',authorizedBy); fd.append('reimb_method',reimbMethod);
+  fd.append('reimb_handle',reimbHandle);
+  if (prodId) fd.append('production_id',prodId);
+  if (newType==='sap'&&newFile) fd.append('file',newFile);
   try {
-    const r = await fetch(`/api/receipt/${token}/new-request`, {method:'POST', body:fd});
-    const d = await r.json();
-    if (!r.ok) { showNErr(d.error || 'Submission failed'); btn.disabled=false; btn.textContent='Submit Request'; return; }
+    const r=await fetch(`/api/receipt/${token}/new-request`,{method:'POST',body:fd});
+    const d=await r.json();
+    if (!r.ok){showNErr(d.error||'Submission failed');btn.disabled=false;btn.textContent='Submit Request';return;}
     showSuccess('new');
+  } catch(e){showNErr('Network error — please try again.');btn.disabled=false;btn.textContent='Submit Request';}
+}
+function showNErr(msg){const e=document.getElementById('n-error');e.textContent=msg;e.style.display='block';}
+
+// ══════════════════════════════════════════════
+// STATEMENTS TAB
+// ══════════════════════════════════════════════
+async function renderStatementsTab() {
+  const mc = document.getElementById('main-content');
+  mc.innerHTML = '<div class="loading"><div class="spinner"></div>Loading statements...</div>';
+  try {
+    const stmts = await fetch(`/api/statements`, {credentials:'include'});
+    // Statements require login — use token to proxy
+    const r = await fetch(`/api/receipt/${token}/statements`);
+    let statements = [];
+    if (r.ok) { const d = await r.json(); statements = d; }
+    else {
+      // Fall back — no statement proxy exists yet, show helpful message
+      mc.innerHTML = `
+        <div class="user-greeting">
+          <div class="user-av">${pageData.user.name.charAt(0).toUpperCase()}</div>
+          <div><div class="user-name">${pageData.user.name}</div><div class="user-sub">Purchase Statements</div></div>
+        </div>
+        <div class="card"><div class="card-body" style="text-align:center;padding:24px">
+          <div style="font-size:36px;margin-bottom:12px">📋</div>
+          <div class="fw-600 mb-8">Manage statements on desktop</div>
+          <p style="font-size:13px;color:var(--ink3);line-height:1.6">Create and manage purchase statements from the BloomBooks desktop app. Once submitted, you can attach receipts here on mobile.</p>
+        </div></div>
+        <div class="card"><div class="card-label">Your open requests</div><div class="card-body" style="padding-top:8px">
+          ${pageData.requests.length===0
+            ? '<div class="empty-note">No open requests — submit a new one using the ➕ tab.</div>'
+            : pageData.requests.map(r=>{
+                const amt = r.actual_cost||r.estimated_cost;
+                const statusLabel = r.status.replace('pending_','⏳ ').replace('_',' ');
+                return `<div class="req-card" style="cursor:default">
+                  <div class="req-card-title">${r.title}</div>
+                  <div class="req-card-meta">$${parseFloat(amt).toFixed(2)} · ${statusLabel}</div>
+                </div>`;
+              }).join('')}
+        </div></div>`;
+      return;
+    }
+
+    if (statements.length === 0) {
+      mc.innerHTML = `
+        <div class="user-greeting">
+          <div class="user-av">${pageData.user.name.charAt(0).toUpperCase()}</div>
+          <div><div class="user-name">Statements</div><div class="user-sub">Group purchases together</div></div>
+        </div>
+        <button class="btn-primary mb-16" onclick="showMobileNewStatement()">+ New statement</button>
+        <div class="empty-note">No statements yet. Create one to group multiple purchases together.</div>`;
+      return;
+    }
+
+    const statusColors = {draft:'var(--amber)',submitted:'var(--teal)',approved:'var(--green)',denied:'var(--red)',needs_revision:'var(--red)'};
+    const statusLabels = {draft:'Draft',submitted:'Submitted',approved:'Approved',denied:'Denied',needs_revision:'Needs revision'};
+
+    mc.innerHTML = `
+      <div class="user-greeting">
+        <div class="user-av">${pageData.user.name.charAt(0).toUpperCase()}</div>
+        <div><div class="user-name">Statements</div><div class="user-sub">${statements.length} statement${statements.length!==1?'s':''}</div></div>
+      </div>
+      <button class="btn-primary mb-16" onclick="showMobileNewStatement()">+ New statement</button>
+      ${statements.map(s=>{
+        const isDraft = s.status==='draft';
+        const color   = statusColors[s.status]||'var(--ink3)';
+        return `<div class="card mb-12">
+          <div class="card-body">
+            <div class="flex-between mb-8" style="display:flex;align-items:center;justify-content:space-between">
+              <div class="fw-600">${s.title}</div>
+              <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:${color}22;color:${color}">${statusLabels[s.status]||s.status}</span>
+            </div>
+            <div style="font-size:12px;color:var(--ink3);margin-bottom:10px">${s.items.length} item${s.items.length!==1?'s':''} · ${fmtMoney(s.total)}</div>
+            ${s.items.slice(0,3).map(i=>`<div style="font-size:13px;padding:6px 0;border-top:1px solid var(--border);display:flex;justify-content:space-between">
+              <span>${i.title}</span><span class="fw-600">${fmtMoney(i.estimated_cost)}</span>
+            </div>`).join('')}
+            ${s.items.length>3?`<div style="font-size:12px;color:var(--ink3);padding-top:6px;border-top:1px solid var(--border)">+${s.items.length-3} more items</div>`:''}
+            ${isDraft?`<div class="flex" style="gap:8px;margin-top:12px">
+              <button class="btn-primary" style="flex:1;padding:10px;font-size:13px" onclick="showMobileAddItem(${s.id})">+ Add item</button>
+              <button class="btn-primary" style="flex:1;padding:10px;font-size:13px;background:var(--green)" onclick="submitMobileStatement(${s.id})" ${s.items.length===0?'disabled':''}>Submit →</button>
+            </div>`:''}
+          </div>
+        </div>`;
+      }).join('')}`;
   } catch(e) {
-    showNErr('Network error — please try again.');
-    btn.disabled=false; btn.textContent='Submit Request';
+    document.getElementById('main-content').innerHTML = `<div class="error-state"><div class="big-icon">⚠️</div><p>${e.message}</p></div>`;
   }
 }
-function showNErr(msg) { const e=document.getElementById('n-error'); e.textContent=msg; e.style.display='block'; }
+
+function showMobileNewStatement() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:#fff;z-index:100;padding:16px;overflow-y:auto;max-width:480px;margin:0 auto';
+  overlay.innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <button onclick="this.closest('div[style]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer">←</button>
+      <h2 style="font-size:17px;font-weight:700">New statement</h2>
+    </div>
+    <div class="form-group"><label class="form-label">Title <span class="req">*</span></label>
+      <input type="text" id="mob-st-title" class="form-input" placeholder="e.g. Spring Musical Costume Purchases"></div>
+    <div class="form-group"><label class="form-label">Description (optional)</label>
+      <textarea id="mob-st-desc" class="form-textarea" placeholder="What is this statement for?"></textarea></div>
+    <div id="mob-st-error" class="form-error" style="display:none;margin-bottom:10px"></div>
+    <button class="btn-primary" onclick="createMobileStatement(this)">Create statement</button>`;
+  document.body.appendChild(overlay);
+}
+
+async function createMobileStatement(btn) {
+  const title = document.getElementById('mob-st-title').value.trim();
+  const desc  = document.getElementById('mob-st-desc').value.trim();
+  const errEl = document.getElementById('mob-st-error');
+  errEl.style.display='none';
+  if (!title){errEl.textContent='Title is required';errEl.style.display='block';return;}
+  btn.disabled=true;btn.textContent='Creating...';
+  try {
+    const r=await fetch('/api/statements',{method:'POST',credentials:'include',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({title,description:desc})});
+    const d=await r.json();
+    if (!r.ok){errEl.textContent=d.error||'Failed';errEl.style.display='block';btn.disabled=false;btn.textContent='Create statement';return;}
+    document.querySelector('div[style*="position:fixed"]')?.remove();
+    toast('Statement created!');
+    renderStatementsTab();
+  } catch(e){errEl.textContent='Network error';errEl.style.display='block';btn.disabled=false;btn.textContent='Create statement';}
+}
+
+function showMobileAddItem(sid) {
+  currentStatementId = sid;
+  const budgets = pageData.budgets||[];
+  let budgetOpts='<option value="">Select budget...</option>';
+  budgets.forEach(b=>{if(b.total_amount>0)budgetOpts+=`<option value="${b.id}">${b.name}</option>`;});
+  const reimbOpts=REIMB_METHODS.map(m=>`<option value="${m}">${m}</option>`).join('');
+
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:#fff;z-index:100;padding:16px;overflow-y:auto;max-width:480px;margin:0 auto';
+  overlay.innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <button onclick="this.closest('div[style]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer">←</button>
+      <h2 style="font-size:17px;font-weight:700">Add item to statement</h2>
+    </div>
+    <div class="type-toggle" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+      <div class="type-opt active-pre" id="sit-pre" onclick="setSItemType('pre_approval')"><div class="type-opt-title">Pre-approval</div></div>
+      <div class="type-opt" id="sit-sap" onclick="setSItemType('sap')"><div class="type-opt-title">SAP</div></div>
+    </div>
+    <div class="form-group"><label class="form-label">Description <span class="req">*</span></label>
+      <input type="text" id="sit-title" class="form-input" placeholder="What did you buy?"></div>
+    <div class="two-col" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group"><label class="form-label">Amount <span class="req">*</span></label>
+        <input type="number" id="sit-cost" class="form-input" placeholder="0.00" step="0.01"></div>
+      <div class="form-group"><label class="form-label">Budget <span class="req">*</span></label>
+        <select id="sit-budget" class="form-select">${budgetOpts}</select></div>
+    </div>
+    <div class="form-group"><label class="form-label">Vendor</label>
+      <input type="text" id="sit-vendor" class="form-input" placeholder="Store or website"></div>
+    <div id="sit-sap-fields" style="display:none">
+      <div class="form-group"><label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
+        <textarea id="sit-sap-reason" class="form-textarea"></textarea></div>
+      <div class="form-group"><label class="form-label">Who authorized this? <span class="req">*</span></label>
+        <input type="text" id="sit-auth" class="form-input" placeholder="e.g. Producer Sarah approved"></div>
+      <div class="two-col" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group"><label class="form-label">Reimb method</label>
+          <select id="sit-reimb-method" class="form-select"><option value="">Default</option>${reimbOpts}</select></div>
+        <div class="form-group"><label class="form-label">Account info</label>
+          <input type="text" id="sit-reimb-handle" class="form-input" placeholder="Username"></div>
+      </div>
+    </div>
+    <div id="sit-error" class="form-error" style="display:none;margin-bottom:10px"></div>
+    <button class="btn-primary" onclick="addMobileStatementItem(${sid},this)">Add item</button>`;
+  document.body.appendChild(overlay);
+}
+
+function setSItemType(type) {
+  statementItemType=type; const isSAP=type==='sap';
+  document.getElementById('sit-pre').className='type-opt'+(isSAP?'':' active-pre');
+  document.getElementById('sit-sap').className='type-opt'+(isSAP?' active-sap':'');
+  document.getElementById('sit-sap-fields').style.display=isSAP?'block':'none';
+}
+
+async function addMobileStatementItem(sid, btn) {
+  const title    = document.getElementById('sit-title').value.trim();
+  const cost     = document.getElementById('sit-cost').value;
+  const budget   = document.getElementById('sit-budget').value;
+  const vendor   = document.getElementById('sit-vendor').value.trim();
+  const sapReason= document.getElementById('sit-sap-reason')?.value.trim()||'';
+  const auth     = document.getElementById('sit-auth')?.value.trim()||'';
+  const reimbM   = document.getElementById('sit-reimb-method')?.value||'';
+  const reimbH   = document.getElementById('sit-reimb-handle')?.value.trim()||'';
+  const errEl    = document.getElementById('sit-error');
+  errEl.style.display='none';
+  if (!title){errEl.textContent='Description is required';errEl.style.display='block';return;}
+  if (!cost){errEl.textContent='Amount is required';errEl.style.display='block';return;}
+  if (!budget){errEl.textContent='Please select a budget';errEl.style.display='block';return;}
+  if (statementItemType==='sap'&&!sapReason){errEl.textContent='Please explain why prior approval was not possible';errEl.style.display='block';return;}
+  if (statementItemType==='sap'&&!auth){errEl.textContent='Please specify who authorized this purchase';errEl.style.display='block';return;}
+  btn.disabled=true;btn.textContent='Adding...';
+  try {
+    const r=await fetch(`/api/statements/${sid}/items`,{method:'POST',credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type:statementItemType,title,estimated_cost:parseFloat(cost),
+        budget_id:parseInt(budget),vendor,sap_reason:sapReason,authorized_by:auth,
+        reimb_method:reimbM,reimb_handle:reimbH})});
+    const d=await r.json();
+    if (!r.ok){errEl.textContent=d.error||'Failed';errEl.style.display='block';btn.disabled=false;btn.textContent='Add item';return;}
+    document.querySelector('div[style*="position:fixed"]')?.remove();
+    toast('Item added!');
+    renderStatementsTab();
+  } catch(e){errEl.textContent='Network error';errEl.style.display='block';btn.disabled=false;btn.textContent='Add item';}
+}
+
+async function submitMobileStatement(sid) {
+  try {
+    const r=await fetch(`/api/statements/${sid}/submit`,{method:'POST',credentials:'include',
+      headers:{'Content-Type':'application/json'},body:'{}'});
+    const d=await r.json();
+    if (!r.ok){alert(d.error||'Submission failed');return;}
+    toast('Statement submitted!');
+    renderStatementsTab();
+  } catch(e){alert('Network error — please try again.');}
+}
+
+function toast(msg) {
+  const t=document.createElement('div');
+  t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--teal);color:#fff;padding:10px 20px;border-radius:99px;font-size:14px;font-weight:600;z-index:200;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.2)';
+  t.textContent=msg; document.body.appendChild(t);
+  setTimeout(()=>t.remove(),2800);
+}
 
 // ══════════════════════════════════════════════
 // SHARED
 // ══════════════════════════════════════════════
+function fmtMoney(n){return '$'+(parseFloat(n)||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
+
+function showLoading() {
+  document.getElementById('main-content').innerHTML='<div class="loading"><div class="spinner"></div>Loading...</div>';
+}
+
 function showError(msg) {
-  document.getElementById('tab-bar').style.display = 'none';
-  document.getElementById('main-content').innerHTML = `
-    <div class="error-state">
-      <div class="big-icon">🚫</div>
-      <h3 style="font-size:18px;font-weight:700;margin-bottom:8px">Link not found</h3>
-      <p style="font-size:14px;color:var(--ink3)">${msg}</p>
-      <p style="font-size:13px;color:var(--ink3);margin-top:10px">Contact your production manager for a new link.</p>
+  document.getElementById('tab-bar').style.display='none';
+  document.getElementById('main-content').innerHTML=`
+    <div class="error-state"><div class="big-icon">🚫</div>
+    <h3 style="font-size:18px;font-weight:700;margin-bottom:8px">Link not found</h3>
+    <p style="font-size:14px;color:var(--ink3)">${msg}</p>
+    <p style="font-size:13px;color:var(--ink3);margin-top:10px">Contact your production manager for a new link.</p>
     </div>`;
 }
 
 function showSuccess(type) {
-  const msgs = {
-    receipt: { icon: '✅', title: 'Receipt submitted!',
-      body: 'Your receipt has been attached. The team will review it and process your reimbursement once approved.' },
-    new: { icon: '🎉', title: 'Request submitted!',
-      body: "Your purchase request has been submitted and is now in the approval queue. You'll get an update by email." },
+  const msgs={
+    receipt:{icon:'✅',title:'Receipt submitted!',body:'Your receipt has been attached. The team will review it and process your reimbursement once approved.'},
+    new:{icon:'🎉',title:'Request submitted!',body:"Your purchase request is now in the approval queue. You'll get an update by email."},
   };
-  const m = msgs[type];
-  document.getElementById('main-content').innerHTML = `
+  const m=msgs[type];
+  document.getElementById('main-content').innerHTML=`
     <div class="success-state">
-      <div class="big-icon">${m.icon}</div>
-      <h2>${m.title}</h2>
-      <p>${m.body}</p>
+      <div class="big-icon">${m.icon}</div><h2>${m.title}</h2><p>${m.body}</p>
       <button class="btn-another" onclick="location.reload()">Back to BloomBooks Mobile</button>
     </div>`;
-  document.getElementById('tab-bar').style.display = 'none';
+  document.getElementById('tab-bar').style.display='none';
 }
 
 init();
+
 </script>
 </body>
 </html>
