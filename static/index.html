@@ -382,6 +382,11 @@ tr:hover td{background:var(--cream)}
           <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
           New Request
         </button>
+        <button class="sb-item" data-page="statements" onclick="nav('statements')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
+          Statements
+          <span class="sb-badge" id="sb-statements-badge" style="display:none;background:var(--amber)">!</span>
+        </button>
         <button class="sb-item" data-page="reimbursements" onclick="nav('reimbursements')">
           <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z"/><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.941c-.391-.127-.68-.317-.843-.504a1 1 0 10-1.51 1.31c.562.649 1.413 1.076 2.353 1.253V15a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C13.398 13.766 14 12.991 14 12c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0011 9.092V7.151c.391.127.68.317.843.504a1 1 0 101.511-1.31c-.563-.649-1.413-1.076-2.354-1.253V5z" clip-rule="evenodd"/></svg>
           Reimbursements
@@ -426,13 +431,13 @@ tr:hover td{background:var(--cream)}
       </div>
     </div>
     <div class="sb-footer">
-      <div class="sb-user">
+      <div class="sb-user" style="cursor:pointer" onclick="nav('profile')" title="Edit profile">
         <div class="sb-user-av" id="sb-av">?</div>
         <div>
           <div class="sb-user-name" id="sb-name">—</div>
           <div class="sb-user-role" id="sb-role">—</div>
         </div>
-        <button class="sb-logout" onclick="doLogout()" title="Sign out">✕</button>
+        <button class="sb-logout" onclick="event.stopPropagation();doLogout()" title="Sign out">✕</button>
       </div>
     </div>
   </nav>
@@ -584,7 +589,8 @@ function nav(page) {
     dashboard: 'Dashboard', 'my-requests': 'My Requests', 'new-request': 'New Purchase Request',
     reimbursements: 'Reimbursements', approvals: 'Approval Queue', 'all-requests': 'All Requests',
     budgets: 'Budget Tracker', users: 'Users', training: 'Purchasing Training',
-    'training-admin': 'Manage Training', productions: 'Productions'
+    'training-admin': 'Manage Training', productions: 'Productions',
+    statements: 'Purchase Statements', profile: 'My Profile'
   };
   document.getElementById('tb-title').textContent = titles[page] || page;
   document.getElementById('tb-actions').innerHTML = '';
@@ -596,7 +602,9 @@ function nav(page) {
     'approvals': renderApprovals, 'all-requests': renderAllRequests,
     'budgets': renderBudgets, 'users': renderUsers,
     'training': renderTraining, 'training-admin': renderTrainingAdmin,
-    'productions': renderProductions
+    'productions': renderProductions,
+    'statements': renderStatements,
+    'profile': renderProfile
   };
   if (pages[page]) pages[page]();
 }
@@ -646,9 +654,11 @@ function statusBadge(status, isSAP) {
     pending_producer:  ['badge-pending', 'Awaiting producer'],
     pending_treasurer: ['badge-treasurer', 'Awaiting treasurer'],
     pending_president: ['badge-president', 'Awaiting president'],
+    needs_revision:    ['badge-sap', '↩ Needs revision'],
     approved:          ['badge-approved', 'Approved'],
     denied:            ['badge-denied', 'Denied'],
-    reimbursed:        ['badge-reimbursed', 'Reimbursed']
+    reimbursed:        ['badge-reimbursed', 'Reimbursed'],
+    draft:             ['badge-pending', 'Draft'],
   };
   const [cls, label] = map[status] || ['badge-pending', status];
   const emerg = isSAP ? '<span class="badge badge-sap ml-4">SAP</span>' : '';
@@ -775,13 +785,22 @@ async function renderMyRequests() {
           <thead><tr><th>Title</th><th>Amount</th><th>Budget</th><th>Type</th><th>Submitted</th><th>Status</th><th></th></tr></thead>
           <tbody>${reqs.map(r => `
             <tr>
-              <td><div class="fw-600">${r.title}</div><div class="text-xs text-muted">${r.vendor||''}</div></td>
+              <td>
+                <div class="fw-600">${r.title}</div>
+                <div class="text-xs text-muted">${r.vendor||''}</div>
+                ${r.status==='needs_revision'&&r.revision_note?`<div class="text-xs mt-4" style="color:var(--red)">↩ ${r.revision_note}</div>`:''}
+              </td>
               <td>${fmtMoney(r.estimated_cost)}</td>
               <td class="td-muted">${r.budget_name||'—'}</td>
               <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
               <td class="td-muted">${fmtDate(r.submitted_at)}</td>
               <td>${statusBadge(r.status, false)}</td>
-              <td><button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">View</button></td>
+              <td>
+                <div class="flex gap-6">
+                  <button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">View</button>
+                  ${r.status==='needs_revision'?`<button class="btn btn-primary btn-sm" onclick="showResubmitModal(${r.id},'${r.title.replace(/'/g,"\\'")}',${JSON.stringify(r).replace(/"/g,'&quot;')})">Fix &amp; resubmit</button>`:''}
+                </div>
+              </td>
             </tr>`).join('')}
           </tbody>
         </table>
@@ -908,11 +927,33 @@ async function renderNewRequest() {
             <textarea id="req-desc" class="form-textarea" placeholder="Why is this needed? Any additional context..."></textarea>
           </div>
           <div id="sap-field" class="form-group hidden">
-            <label class="form-label">Why was this an self-authorized purchase (SAP)? <span class="req">*</span></label>
+            <label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
             <textarea id="req-sap-reason" class="form-textarea" placeholder="Explain why this could not wait for pre-approval..."></textarea>
           </div>
+          <div id="sap-auth-field" class="form-group hidden">
+            <label class="form-label">Who authorized this purchase? <span class="req">*</span></label>
+            <input type="text" id="req-authorized-by" class="form-input" placeholder="e.g. Producer Sarah approved verbally">
+            <div class="form-hint">Name and/or role of the person who told you to make this purchase</div>
+          </div>
+          <div id="sap-reimb-field" class="hidden">
+            <hr class="divider">
+            <div class="text-xs text-muted fw-600 mb-8">REIMBURSEMENT PREFERENCE</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Method</label>
+                <select id="req-reimb-method" class="form-select" onchange="updateReimbHandle(this.value,'req')">
+                  <option value="">Profile default${currentUser.reimb_method?' ('+currentUser.reimb_method+')':''}</option>
+                  ${REIMB_METHODS.map(m=>`<option value="${m}">${m}</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" id="req-handle-label">Account info</label>
+                <input type="text" id="req-reimb-handle" class="form-input" value="${currentUser.reimb_handle||''}" placeholder="${currentUser.reimb_handle||''}">
+              </div>
+            </div>
+          </div>
           <div id="sap-upload" class="hidden">
-            <label class="form-label">Receipt (required for self-authorized purchase (SAP)s)</label>
+            <label class="form-label">Receipt (required for SAP)</label>
             <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()">
               <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto;opacity:.5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
               <p>Click to upload receipt photo or PDF</p>
@@ -1005,6 +1046,8 @@ function handleNewFileSelect(input) {
 
 function toggleSAP(isSAP) {
   document.getElementById('sap-field').classList.toggle('hidden', !isSAP);
+  document.getElementById('sap-auth-field').classList.toggle('hidden', !isSAP);
+  document.getElementById('sap-reimb-field').classList.toggle('hidden', !isSAP);
   document.getElementById('sap-upload').classList.toggle('hidden', !isSAP);
   document.getElementById('type-pre').style.border = isSAP ? '2px solid var(--border)' : '2px solid var(--teal)';
   document.getElementById('type-pre').style.background = isSAP ? '' : 'var(--teal3)';
@@ -1028,7 +1071,10 @@ async function submitRequest() {
   const budget = document.getElementById('req-budget').value;
   const desc   = document.getElementById('req-desc').value.trim();
   const isSAP  = document.querySelector('input[name="req-type"]:checked').value === 'sap';
-  const sapReason = document.getElementById('req-sap-reason')?.value.trim() || '';
+  const sapReason    = document.getElementById('req-sap-reason')?.value.trim() || '';
+  const authorizedBy = document.getElementById('req-authorized-by')?.value.trim() || '';
+  const reimbMethod  = document.getElementById('req-reimb-method')?.value || '';
+  const reimbHandle  = document.getElementById('req-reimb-handle')?.value.trim() || '';
   const method = document.querySelector('input[name="purchase-method"]:checked')?.value || 'in_store';
   const vendor  = method === 'in_store' ? (document.getElementById('req-vendor')?.value.trim() || '') : '';
   const rawUrl  = method === 'online' ? (document.getElementById('req-item-url')?.value.trim() || '') : '';
@@ -1044,6 +1090,9 @@ async function submitRequest() {
   if (isSAP && !sapReason) {
     errEl.textContent = 'Please explain why prior approval was not possible.'; errEl.classList.remove('hidden'); return;
   }
+  if (isSAP && !authorizedBy) {
+    errEl.textContent = 'Please specify who authorized this SAP purchase.'; errEl.classList.remove('hidden'); return;
+  }
   if (method === 'online' && !itemUrl) {
     errEl.textContent = 'Please provide a link to the item for online purchases.'; errEl.classList.remove('hidden'); return;
   }
@@ -1055,6 +1104,9 @@ async function submitRequest() {
       production_id: prodId ? parseInt(prodId) : null,
       is_sap: isSAP,
       sap_reason: sapReason,
+      authorized_by: authorizedBy,
+      reimb_method: reimbMethod,
+      reimb_handle: reimbHandle,
       purchase_method: method,
       item_url: itemUrl
     });
@@ -1275,6 +1327,7 @@ async function renderApprovals() {
             <div class="flex gap-6">
               <button class="btn btn-approve btn-sm" style="flex:1" onclick="quickApprove(${r.id},'approve')">✓ Approve</button>
               <button class="btn btn-danger btn-sm" style="flex:1" onclick="quickApprove(${r.id},'deny')">✕ Deny</button>
+              <button class="btn btn-outline btn-sm" title="Send back for revision" onclick="showSendBackModal(${r.id},'${r.title.replace(/'/g,"\\'")}')">↩</button>
             </div>
           </div>`:`<button class="btn btn-outline btn-sm mt-6 w-full" onclick="showRequestDetail(${r.id})">View</button>`}
         </div>
@@ -1404,7 +1457,10 @@ async function renderReimbursements() {
                 <td>${r.title}${r.is_sap ? ' <span class="badge badge-sap" style="font-size:10px">SAP</span>':''}</td>
                 <td class="fw-600">${fmtMoney(r.amount)}</td>
                 <td class="td-muted">${fmtDate(r.created_at)}</td>
-                ${isAdmin ? `<td><button class="btn btn-approve btn-sm" onclick="showPayModal(${r.id}, '${r.user_name}', ${r.amount})">Mark paid</button></td>` : ''}
+                ${isAdmin ? `<td>
+                  ${r.reimb_method||r.reimb_handle?`<div class="text-xs text-muted mb-4">${r.reimb_method||''}${r.reimb_handle?' — '+r.reimb_handle:''}</div>`:''}
+                  <button class="btn btn-approve btn-sm" onclick="showPayModal(${r.id},'${r.user_name}',${r.amount},'${r.reimb_method||''}','${r.reimb_handle||''}')">Mark paid</button>
+                </td>` : ''}
               </tr>`).join('')}
             </tbody>
           </table>
@@ -1430,18 +1486,30 @@ async function renderReimbursements() {
   }
 }
 
-function showPayModal(rid, name, amount) {
+function showPayModal(rid, name, amount, prefMethod, prefHandle) {
+  const methodOpts = ['', ...REIMB_METHODS].map(m =>
+    `<option value="${m}" ${prefMethod===m?'selected':''}>${m||'Select method...'}</option>`).join('');
   const html = `
     <div class="modal-header"><span class="modal-title">Mark reimbursement paid</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       <p class="text-sm mb-16">Confirm payment of <strong>${fmtMoney(amount)}</strong> to <strong>${name}</strong></p>
-      <div class="form-group">
-        <label class="form-label">Payment method</label>
-        <input type="text" id="pay-method" class="form-input" placeholder="e.g. Check #1042, Venmo, Zelle, Cash">
+      ${prefMethod ? `<div class="panel mb-16" style="background:var(--teal3);border-color:var(--teal)">
+        <div class="text-xs fw-600 mb-4" style="color:var(--teal)">PREFERRED METHOD</div>
+        <div class="text-sm fw-600">${prefMethod}${prefHandle?' — '+prefHandle:''}</div>
+      </div>` : ''}
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Payment method</label>
+          <select id="pay-method" class="form-select">${methodOpts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Account / reference</label>
+          <input type="text" id="pay-handle" class="form-input" value="${prefHandle||''}" placeholder="e.g. @username, check number">
+        </div>
       </div>
       <div class="form-group">
         <label class="form-label">Notes (optional)</label>
-        <textarea id="pay-notes" class="form-textarea" style="min-height:60px"></textarea>
+        <textarea id="pay-notes" class="form-textarea" style="min-height:56px"></textarea>
       </div>
     </div>
     <div class="modal-footer">
@@ -1453,9 +1521,10 @@ function showPayModal(rid, name, amount) {
 
 async function confirmPay(rid) {
   const method = document.getElementById('pay-method').value;
+  const handle = document.getElementById('pay-handle').value;
   const notes  = document.getElementById('pay-notes').value;
   try {
-    await api('POST', `/reimbursements/${rid}/pay`, {method, notes});
+    await api('POST', `/reimbursements/${rid}/pay`, {method, handle, notes});
     toast('Payment recorded!', 'success');
     closeModal();
     refreshBadges();
@@ -2428,6 +2497,456 @@ async function doDeleteProduction(pid) {
     closeModal();
     nav('productions');
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Statements ────────────────────────────────────────────────────────────────
+const REIMB_METHODS = ['Venmo','Cash App','Zelle','PayPal','Direct Check'];
+const REIMB_HANDLE_LABELS = {
+  'Venmo':'Venmo username (@...)',
+  'Cash App':'$Cashtag',
+  'Zelle':'Phone number or email',
+  'PayPal':'PayPal email',
+  'Direct Check':'Mailing address'
+};
+
+async function renderStatements() {
+  document.getElementById('tb-actions').innerHTML =
+    `<button class="btn btn-primary btn-sm" onclick="showNewStatementModal()">+ New statement</button>`;
+  try {
+    const [statements, prods] = await Promise.all([
+      api('GET', '/statements'),
+      api('GET', '/productions')
+    ]);
+    const statusBadgeMap = {
+      draft:    ['badge-pending','Draft'],
+      submitted:['badge-treasurer','Submitted'],
+      approved: ['badge-approved','Approved'],
+      denied:   ['badge-denied','Denied'],
+      needs_revision: ['badge-sap','Needs revision'],
+    };
+    if (statements.length === 0) {
+      document.getElementById('content').innerHTML = `
+        <div class="empty"><div class="empty-icon">📋</div><h3>No statements yet</h3>
+        <p>Create a statement to group multiple purchases together and submit them all at once.</p>
+        <button class="btn btn-primary mt-16" onclick="showNewStatementModal()">Create first statement</button></div>`;
+      return;
+    }
+    document.getElementById('content').innerHTML = statements.map(s => {
+      const [badgeCls, badgeLabel] = statusBadgeMap[s.status] || ['badge-pending', s.status];
+      const isDraft = s.status === 'draft';
+      const needsRevision = s.items.some(i => i.status === 'needs_revision');
+      const itemsApproved = s.items.filter(i => ['approved','reimbursed'].includes(i.status)).length;
+      return `<div class="card mb-12">
+        <div class="card-header">
+          <div>
+            <span class="card-title">${s.title}</span>
+            <div class="flex gap-8 mt-4 flex-wrap">
+              <span class="badge ${badgeCls}">${badgeLabel}</span>
+              ${s.production_name?`<span class="badge badge-treasurer">${s.production_name}</span>`:''}
+              ${s.budget_name?`<span class="text-xs text-muted">${s.budget_name}</span>`:''}
+              ${needsRevision?`<span class="badge badge-sap">⚠ Items need revision</span>`:''}
+            </div>
+          </div>
+          <div style="text-align:right">
+            <div class="fw-600">${fmtMoney(s.total)}</div>
+            <div class="text-xs text-muted">${s.items.length} item${s.items.length!==1?'s':''}${!isDraft?` · ${itemsApproved}/${s.items.length} approved`:''}
+</div>
+          </div>
+        </div>
+        <div class="card-body">
+          ${s.items.length === 0 ? `<div class="text-xs text-muted">No items yet — add items to this statement.</div>` :
+            s.items.map(item => {
+              const [iBadgeCls, iBadgeLabel] = statusBadgeMap[item.status] || ['badge-pending', item.status];
+              return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+                <div style="flex:1">
+                  <div class="text-sm fw-600">${item.title}</div>
+                  <div class="text-xs text-muted">${item.vendor||''}${item.purchase_method==='online'?' · 🌐':' · 🏪'}</div>
+                </div>
+                <div class="text-sm fw-600">${fmtMoney(item.actual_cost||item.estimated_cost)}</div>
+                <span class="badge ${iBadgeCls}" style="font-size:10px">${iBadgeLabel}</span>
+                ${item.status==='needs_revision'?`<span class="text-xs" style="color:var(--red)">↩ ${item.revision_note||''}</span>`:''}
+                ${isDraft?`<div class="flex gap-4">
+                  <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 6px" onclick="editStatementItem(${s.id},${JSON.stringify(item).replace(/"/g,'&quot;')})">Edit</button>
+                  <button class="btn btn-danger btn-sm" style="font-size:11px;padding:2px 6px" onclick="deleteStatementItem(${s.id},${item.id})">×</button>
+                </div>`:''}
+              </div>`;
+            }).join('')}
+          <div class="flex gap-8 mt-12 flex-wrap">
+            ${isDraft?`
+              <button class="btn btn-outline btn-sm" onclick="showAddStatementItemModal(${s.id})">+ Add item</button>
+              <button class="btn btn-primary btn-sm" onclick="submitStatement(${s.id})" ${s.items.length===0?'disabled':''}>Submit statement →</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteStatement(${s.id})">Delete draft</button>` : ''}
+            ${s.status==='needs_revision'||needsRevision?`
+              <button class="btn btn-outline btn-sm" onclick="showResubmitStatementModal(${s.id})">Fix &amp; resubmit</button>`:''
+            }
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+function showNewStatementModal() {
+  const html = `
+    <div class="modal-header"><span class="modal-title">New purchase statement</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm text-muted mb-16">A statement lets you group multiple purchases together and submit them all at once — useful for a whole production process.</p>
+      <div class="form-group"><label class="form-label">Statement title <span class="req">*</span></label>
+        <input type="text" id="st-title" class="form-input" placeholder="e.g. Spring Musical Costume Purchases"></div>
+      <div class="form-group"><label class="form-label">Description</label>
+        <textarea id="st-desc" class="form-textarea" placeholder="What is this statement for?"></textarea></div>
+      <div id="st-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createStatement()">Create statement</button>
+    </div>`;
+  showModal(html);
+}
+
+async function createStatement() {
+  const title = document.getElementById('st-title').value.trim();
+  const desc  = document.getElementById('st-desc').value.trim();
+  const errEl = document.getElementById('st-error');
+  errEl.classList.add('hidden');
+  if (!title) { errEl.textContent='Title is required'; errEl.classList.remove('hidden'); return; }
+  try {
+    await api('POST', '/statements', {title, description:desc});
+    toast('Statement created! Now add your items.','success');
+    closeModal();
+    renderStatements();
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+function showAddStatementItemModal(sid) {
+  const html = buildItemFormHTML(sid, null);
+  showModal(html, 'large');
+}
+
+function editStatementItem(sid, item) {
+  const html = buildItemFormHTML(sid, item);
+  showModal(html, 'large');
+}
+
+function buildItemFormHTML(sid, item) {
+  const isEdit = !!item;
+  const isSAP  = item?.type === 'sap';
+  const methodOpts = REIMB_METHODS.map(m =>
+    `<option value="${m}" ${item?.reimb_method===m?'selected':''}>${m}</option>`).join('');
+  return `
+    <div class="modal-header"><span class="modal-title">${isEdit?'Edit item':'Add item to statement'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="type-toggle" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+        <div class="type-opt ${!isSAP?'active-pre':''}" id="sitem-pre" onclick="setItemType('pre_approval')">
+          <div class="fw-600 text-sm">Pre-approval</div><div class="text-xs text-muted">Plan to buy</div></div>
+        <div class="type-opt ${isSAP?'active-sap':''}" id="sitem-sap" onclick="setItemType('sap')">
+          <div class="fw-600 text-sm">SAP</div><div class="text-xs text-muted">Already bought</div></div>
+      </div>
+      <input type="hidden" id="sitem-type" value="${item?.type||'pre_approval'}">
+      <div class="form-group"><label class="form-label">Item description <span class="req">*</span></label>
+        <input type="text" id="sitem-title" class="form-input" value="${item?.title||''}" placeholder="e.g. Fabric for Act 2 costumes"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Amount <span class="req">*</span></label>
+          <input type="number" id="sitem-cost" class="form-input" value="${item?.estimated_cost||''}" placeholder="0.00" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Vendor / store</label>
+          <input type="text" id="sitem-vendor" class="form-input" value="${item?.vendor||''}" placeholder="e.g. Joann Fabrics"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Purchase method</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="method-opt ${item?.purchase_method!=='online'?'active':''}" id="smethod-store" onclick="setItemMethod('in_store')">🏪 In-store</div>
+          <div class="method-opt ${item?.purchase_method==='online'?'active':''}" id="smethod-online" onclick="setItemMethod('online')">🌐 Online</div>
+        </div>
+      </div>
+      <input type="hidden" id="sitem-method" value="${item?.purchase_method||'in_store'}">
+      <div id="sitem-url-field" class="form-group ${item?.purchase_method==='online'?'':'hidden'}">
+        <label class="form-label">Item link</label>
+        <input type="url" id="sitem-url" class="form-input" value="${item?.item_url||''}" placeholder="https://..."></div>
+      <div id="sitem-sap-fields" class="${isSAP?'':'hidden'}">
+        <div class="form-group"><label class="form-label">Who authorized this purchase? <span class="req">*</span></label>
+          <input type="text" id="sitem-auth" class="form-input" value="${item?.authorized_by||''}" placeholder="e.g. Producer Sarah approved verbally"></div>
+      </div>
+      <hr class="divider">
+      <div class="text-xs text-muted fw-600 mb-8">REIMBURSEMENT PREFERENCE</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Preferred method</label>
+          <select id="sitem-reimb-method" class="form-select" onchange="updateReimbHandle(this.value,'sitem')">
+            <option value="">Use my profile default</option>
+            ${methodOpts}
+          </select></div>
+        <div class="form-group" id="sitem-handle-wrap">
+          <label class="form-label" id="sitem-handle-label">Account info</label>
+          <input type="text" id="sitem-reimb-handle" class="form-input" value="${item?.reimb_handle||''}" placeholder="Username or account info"></div>
+      </div>
+      <div id="sitem-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="${isEdit?`saveItemEdit(${sid},${item.id})`:`saveStatementItem(${sid})`}">${isEdit?'Save changes':'Add item'}</button>
+    </div>`;
+}
+
+function setItemType(type) {
+  document.getElementById('sitem-type').value = type;
+  const isSAP = type === 'sap';
+  document.getElementById('sitem-pre').className = 'type-opt' + (!isSAP?' active-pre':'');
+  document.getElementById('sitem-sap').className = 'type-opt' + (isSAP?' active-sap':'');
+  document.getElementById('sitem-sap-fields').className = isSAP ? '' : 'hidden';
+}
+
+function setItemMethod(method) {
+  document.getElementById('sitem-method').value = method;
+  const isOnline = method === 'online';
+  document.getElementById('smethod-store').className = 'method-opt' + (!isOnline?' active':'');
+  document.getElementById('smethod-online').className = 'method-opt' + (isOnline?' active':'');
+  document.getElementById('sitem-url-field').className = 'form-group' + (isOnline?'':' hidden');
+}
+
+function updateReimbHandle(method, prefix) {
+  const label = document.getElementById(`${prefix}-handle-label`);
+  const wrap  = document.getElementById(`${prefix}-handle-wrap`);
+  const input = document.getElementById(`${prefix}-reimb-handle`);
+  if (!method || method === 'Direct Check') {
+    if (label) label.textContent = method === 'Direct Check' ? 'Mailing address' : 'Account info';
+    if (input) input.placeholder = method === 'Direct Check' ? 'Street, City, State, ZIP' : '';
+  } else {
+    if (label) label.textContent = REIMB_HANDLE_LABELS[method] || 'Account info';
+    if (input) input.placeholder = REIMB_HANDLE_LABELS[method] || '';
+  }
+}
+
+function getItemFormData() {
+  const type   = document.getElementById('sitem-type').value;
+  const rawUrl = document.getElementById('sitem-url')?.value.trim()||'';
+  const itemUrl= rawUrl&&!rawUrl.match(/^https?:\/\//)?'https://'+rawUrl:rawUrl;
+  return {
+    type,
+    title:         document.getElementById('sitem-title').value.trim(),
+    estimated_cost:parseFloat(document.getElementById('sitem-cost').value||0),
+    vendor:        document.getElementById('sitem-vendor').value.trim(),
+    purchase_method:document.getElementById('sitem-method').value,
+    item_url:      itemUrl,
+    authorized_by: document.getElementById('sitem-auth')?.value.trim()||'',
+    reimb_method:  document.getElementById('sitem-reimb-method').value,
+    reimb_handle:  document.getElementById('sitem-reimb-handle').value.trim(),
+  };
+}
+
+async function saveStatementItem(sid) {
+  const data  = getItemFormData();
+  const errEl = document.getElementById('sitem-error');
+  errEl.classList.add('hidden');
+  if (!data.title) { errEl.textContent='Description is required'; errEl.classList.remove('hidden'); return; }
+  if (!data.estimated_cost) { errEl.textContent='Amount is required'; errEl.classList.remove('hidden'); return; }
+  if (data.type==='sap'&&!data.authorized_by) { errEl.textContent='Please specify who authorized this SAP'; errEl.classList.remove('hidden'); return; }
+  try {
+    await api('POST', `/statements/${sid}/items`, data);
+    toast('Item added!','success');
+    closeModal();
+    renderStatements();
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+async function saveItemEdit(sid, rid) {
+  const data = getItemFormData();
+  try {
+    await api('PATCH', `/statements/${sid}/items/${rid}`, data);
+    toast('Item updated!','success');
+    closeModal();
+    renderStatements();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function deleteStatementItem(sid, rid) {
+  try {
+    await api('DELETE', `/statements/${sid}/items/${rid}`);
+    toast('Item removed.','info');
+    renderStatements();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function submitStatement(sid) {
+  try {
+    await api('POST', `/statements/${sid}/submit`);
+    toast('Statement submitted! Items are now in the approval queue.','success');
+    renderStatements();
+    refreshBadges();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function deleteStatement(sid) {
+  try {
+    await api('DELETE', `/statements/${sid}`);
+    toast('Statement deleted.','info');
+    renderStatements();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── Send back / revision ──────────────────────────────────────────────────────
+function showSendBackModal(rid, title) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Send back for revision</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm mb-12">Tell <strong>${title}</strong>'s submitter what needs to be fixed before you can approve it.</p>
+      <div class="form-group"><label class="form-label">What needs to change? <span class="req">*</span></label>
+        <textarea id="sendback-note" class="form-textarea" placeholder="Be specific about what needs to be corrected or added..."></textarea></div>
+      <div id="sendback-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doSendBack(${rid})">Send back</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doSendBack(rid) {
+  const note  = document.getElementById('sendback-note').value.trim();
+  const errEl = document.getElementById('sendback-error');
+  errEl.classList.add('hidden');
+  if (!note) { errEl.textContent='Please explain what needs to change'; errEl.classList.remove('hidden'); return; }
+  try {
+    await api('POST', `/requests/${rid}/send-back`, {note});
+    toast('Sent back for revision.','info');
+    closeModal();
+    renderApprovals();
+    refreshBadges();
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+function showResubmitModal(rid, title, currentData) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Fix &amp; resubmit</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      ${currentData.revision_note?`<div class="panel mb-16" style="background:var(--red-bg);border-color:var(--red)">
+        <div class="text-xs fw-600 mb-4" style="color:var(--red)">CHANGES REQUESTED</div>
+        <div class="text-sm">${currentData.revision_note}</div>
+      </div>`:''}
+      <div class="form-group"><label class="form-label">Item description</label>
+        <input type="text" id="resub-title" class="form-input" value="${currentData.title||''}"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Amount</label>
+          <input type="number" id="resub-cost" class="form-input" value="${currentData.estimated_cost||''}" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Vendor</label>
+          <input type="text" id="resub-vendor" class="form-input" value="${currentData.vendor||''}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Description / notes</label>
+        <textarea id="resub-desc" class="form-textarea">${currentData.description||''}</textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doResubmit(${rid})">Resubmit for approval</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doResubmit(rid) {
+  const data = {
+    title:          document.getElementById('resub-title').value.trim(),
+    estimated_cost: parseFloat(document.getElementById('resub-cost').value||0),
+    vendor:         document.getElementById('resub-vendor').value.trim(),
+    description:    document.getElementById('resub-desc').value.trim(),
+  };
+  try {
+    await api('POST', `/requests/${rid}/resubmit`, data);
+    toast('Resubmitted for approval!','success');
+    closeModal();
+    renderMyRequests();
+    refreshBadges();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── Profile ───────────────────────────────────────────────────────────────────
+async function renderProfile() {
+  try {
+    const {user} = await api('GET', '/profile');
+    const methodOpts = ['', ...REIMB_METHODS].map(m =>
+      `<option value="${m}" ${user.reimb_method===m?'selected':''}>${m||'Not set'}</option>`).join('');
+    document.getElementById('content').innerHTML = `
+      <div style="max-width:560px">
+        <div class="card mb-16">
+          <div class="card-header"><span class="card-title">My information</span></div>
+          <div class="card-body">
+            <div class="flex flex-center gap-16 mb-16">
+              <div style="width:52px;height:52px;border-radius:50%;background:var(--teal);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;flex-shrink:0">${user.name.charAt(0).toUpperCase()}</div>
+              <div>
+                <div class="fw-600" style="font-size:17px">${user.name}</div>
+                <div class="text-sm text-muted">${user.email}</div>
+                <div class="text-xs text-muted mt-2" style="text-transform:capitalize">${user.role}</div>
+              </div>
+            </div>
+            <div class="panel" style="background:var(--teal3);border-color:var(--teal)">
+              <div class="text-xs fw-600 mb-2" style="color:var(--teal)">TRAINING STATUS</div>
+              <div class="text-sm">${user.training_complete
+                ? '✓ Training complete — you can submit purchase requests'
+                : '⚠ Training not yet complete'}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mb-16">
+          <div class="card-header"><span class="card-title">Reimbursement preference</span></div>
+          <div class="card-body">
+            <p class="text-sm text-muted mb-16">Set your preferred payment method and account info. This will pre-fill when you submit requests and when the treasurer processes your reimbursement.</p>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Preferred method</label>
+                <select id="prof-reimb-method" class="form-select" onchange="updateReimbHandle(this.value,'prof')">
+                  ${methodOpts}
+                </select></div>
+              <div class="form-group">
+                <label class="form-label" id="prof-handle-label">${REIMB_HANDLE_LABELS[user.reimb_method]||'Account info'}</label>
+                <input type="text" id="prof-reimb-handle" class="form-input" value="${user.reimb_handle||''}"
+                  placeholder="${REIMB_HANDLE_LABELS[user.reimb_method]||''}">
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="saveProfile()">Save preference</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-title">Change password</span></div>
+          <div class="card-body">
+            <div class="form-group"><label class="form-label">New password</label>
+              <input type="password" id="prof-pw" class="form-input" placeholder="Leave blank to keep current password"></div>
+            <div class="form-group"><label class="form-label">Confirm password</label>
+              <input type="password" id="prof-pw2" class="form-input" placeholder="Confirm new password"></div>
+            <div id="prof-pw-error" class="form-error hidden mb-8"></div>
+            <button class="btn btn-outline" onclick="savePassword()">Update password</button>
+          </div>
+        </div>
+      </div>`;
+  } catch(e) {
+    document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
+  }
+}
+
+async function saveProfile() {
+  const method = document.getElementById('prof-reimb-method').value;
+  const handle = document.getElementById('prof-reimb-handle').value.trim();
+  try {
+    await api('PATCH', '/profile', {reimb_method:method, reimb_handle:handle});
+    toast('Preference saved!','success');
+    // Update current user cache
+    currentUser.reimb_method = method;
+    currentUser.reimb_handle = handle;
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function savePassword() {
+  const pw   = document.getElementById('prof-pw').value;
+  const pw2  = document.getElementById('prof-pw2').value;
+  const errEl= document.getElementById('prof-pw-error');
+  errEl.classList.add('hidden');
+  if (!pw) return;
+  if (pw !== pw2) { errEl.textContent='Passwords do not match'; errEl.classList.remove('hidden'); return; }
+  if (pw.length < 6) { errEl.textContent='Password must be at least 6 characters'; errEl.classList.remove('hidden'); return; }
+  try {
+    await api('PATCH', '/profile', {password:pw});
+    toast('Password updated!','success');
+    document.getElementById('prof-pw').value='';
+    document.getElementById('prof-pw2').value='';
+  } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────
