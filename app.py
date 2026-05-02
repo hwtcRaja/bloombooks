@@ -1854,6 +1854,32 @@ def get_receipt_page_data(token):
     return jsonify({'user':u,'requests':[dict(r) for r in reqs],
                     'budgets':[dict(b) for b in budgets],'productions':[dict(p) for p in productions]})
 
+@app.route('/api/receipt/<token>/statements', methods=['GET'])
+def mobile_list_statements(token):
+    """Public endpoint — return statements for this user via their receipt token."""
+    conn = get_db()
+    u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    if not u:
+        conn.close(); return jsonify({'error':'Invalid or expired link'}),404
+    uid = u['id']
+    rows = conn.execute('''SELECT s.*,p.name as production_name,b.name as budget_name
+                           FROM bb_statements s
+                           LEFT JOIN bb_productions p ON s.production_id=p.id
+                           LEFT JOIN bb_budgets b ON s.budget_id=b.id
+                           WHERE s.created_by=%s ORDER BY s.updated_at DESC''',(uid,)).fetchall()
+    result = []
+    for row in rows:
+        s = dict(row)
+        items = conn.execute('''SELECT r.id,r.title,r.estimated_cost,r.actual_cost,r.status,r.type
+                                FROM bb_statement_items si
+                                JOIN bb_purchase_requests r ON si.request_id=r.id
+                                WHERE si.statement_id=%s''',(s['id'],)).fetchall()
+        s['items'] = [dict(i) for i in items]
+        s['total'] = sum(i.get('actual_cost') or i.get('estimated_cost',0) for i in s['items'])
+        result.append(s)
+    conn.close()
+    return jsonify(result)
+
 @app.route('/api/receipt/<token>/submit', methods=['POST'])
 def submit_receipt_mobile(token):
     conn = get_db()
