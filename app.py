@@ -1856,11 +1856,9 @@ def get_receipt_page_data(token):
 
 @app.route('/api/receipt/<token>/statements', methods=['GET'])
 def mobile_list_statements(token):
-    """Public endpoint — return statements for this user via their receipt token."""
     conn = get_db()
     u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
-    if not u:
-        conn.close(); return jsonify({'error':'Invalid or expired link'}),404
+    if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
     uid = u['id']
     rows = conn.execute('''SELECT s.*,p.name as production_name,b.name as budget_name
                            FROM bb_statements s
@@ -1879,6 +1877,97 @@ def mobile_list_statements(token):
         result.append(s)
     conn.close()
     return jsonify(result)
+
+@app.route('/api/receipt/<token>/statements', methods=['POST'])
+def mobile_create_statement(token):
+    conn = get_db()
+    u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
+    u = dict(u)
+    data = request.json
+    if not data.get('title'): return jsonify({'error':'Title is required'}),400
+    now = datetime.now().isoformat()
+    conn.execute('INSERT INTO bb_statements (title,description,created_by,updated_at) VALUES (%s,%s,%s,%s)',
+                 (data['title'], data.get('description',''), u['id'], now))
+    row = conn.execute('SELECT lastval() AS id').fetchone()
+    sid = row['id']
+    conn.commit(); conn.close()
+    return jsonify({'ok':True,'id':sid})
+
+@app.route('/api/receipt/<token>/statements/<int:sid>/items', methods=['POST'])
+def mobile_add_statement_item(token, sid):
+    conn = get_db()
+    u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
+    u = dict(u)
+    s = conn.execute('SELECT * FROM bb_statements WHERE id=%s AND created_by=%s',(sid,u['id'])).fetchone()
+    if not s: conn.close(); return jsonify({'error':'Statement not found'}),404
+    if dict(s)['status'] != 'draft': conn.close(); return jsonify({'error':'Statement already submitted'}),400
+
+    data = request.form if request.files else request.json or {}
+    title   = (data.get('title') or '').strip()
+    cost    = data.get('estimated_cost','')
+    budget_id = data.get('budget_id')
+    req_type  = data.get('type','pre_approval')
+    is_sap    = 1 if req_type == 'sap' else 0
+
+    if not title:     return jsonify({'error':'Title is required'}),400
+    if not cost:      return jsonify({'error':'Amount is required'}),400
+    if not budget_id: return jsonify({'error':'Please select a budget'}),400
+
+    now = datetime.now().isoformat()
+    conn.execute('''INSERT INTO bb_purchase_requests
+                    (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
+                     submitted_by,is_emergency,purchase_method,item_url,authorized_by,
+                     reimb_method,reimb_handle,statement_id,submitted_at,updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                 (req_type,'draft',title,data.get('description',''),data.get('vendor',''),
+                  float(cost),int(budget_id),
+                  int(data['production_id']) if data.get('production_id') else None,
+                  u['id'],is_sap,data.get('purchase_method','in_store'),
+                  data.get('item_url',''),data.get('authorized_by',''),
+                  data.get('reimb_method',''),data.get('reimb_handle',''),
+                  sid,now,now))
+    row = conn.execute('SELECT lastval() AS id').fetchone()
+    req_id = row['id']
+    conn.execute('INSERT INTO bb_statement_items (statement_id,request_id) VALUES (%s,%s)',(sid,req_id))
+    conn.execute('UPDATE bb_statements SET updated_at=%s WHERE id=%s',(now,sid))
+
+    # Upload receipt if provided
+    if is_sap and 'file' in request.files and request.files['file'].filename:
+        if cloudinary.config().cloud_name:
+            try:
+                result = cloudinary.uploader.upload(request.files['file'],folder='bloombooks/receipts',resource_type='auto')
+                conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
+                             (req_id,result['secure_url'],result['public_id']))
+            except Exception: pass
+
+    conn.commit(); conn.close()
+    return jsonify({'ok':True,'request_id':req_id})
+
+@app.route('/api/receipt/<token>/statements/<int:sid>/submit', methods=['POST'])
+def mobile_submit_statement(token, sid):
+    conn = get_db()
+    u = conn.execute('SELECT id,name,email FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
+    u = dict(u)
+    s = conn.execute('SELECT * FROM bb_statements WHERE id=%s AND created_by=%s',(sid,u['id'])).fetchone()
+    if not s: conn.close(); return jsonify({'error':'Not found'}),404
+    s = dict(s)
+    if s['status'] != 'draft': conn.close(); return jsonify({'error':'Already submitted'}),400
+    items = conn.execute('''SELECT r.* FROM bb_statement_items si
+                            JOIN bb_purchase_requests r ON si.request_id=r.id
+                            WHERE si.statement_id=%s''',(sid,)).fetchall()
+    if not items: conn.close(); return jsonify({'error':'Add at least one item first'}),400
+    now = datetime.now().isoformat()
+    prod_id = s.get('production_id')
+    item_status = 'pending_producer' if (prod_id and get_production_producers(prod_id)) else 'pending_treasurer'
+    for item in items:
+        conn.execute('UPDATE bb_purchase_requests SET status=%s,submitted_at=%s,updated_at=%s WHERE id=%s',
+                     (item_status,now,now,item['id']))
+    conn.execute("UPDATE bb_statements SET status='submitted',submitted_at=%s,updated_at=%s WHERE id=%s",(now,now,sid))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
 
 @app.route('/api/receipt/<token>/submit', methods=['POST'])
 def submit_receipt_mobile(token):
