@@ -1,0 +1,2190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>RoleCall — Horizon West Theater Company</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --teal:#1b708d;--teal-dark:#0d3d4d;--teal-mid:#145466;--teal-light:#E8F4F8;
+  --text:#1A1A17;--muted:#5F5E5A;--hint:#9B9B94;
+  --border:rgba(0,0,0,0.1);--surface:#fff;--bg:#F4F7F9;
+  --green:#2D9E6B;--green-light:#EAF6F1;
+  --red:#C0392B;--red-light:#FEF2F2;
+  --amber:#D4830A;--amber-light:#FEF8EC;
+  --purple:#6D28D9;--purple-light:#F3EEFF;
+  --orange:#C05621;--orange-light:#FFF7ED;
+  --radius:16px;--radius-lg:24px;
+  --shadow:0 4px 24px rgba(0,0,0,0.08);--shadow-lg:0 16px 56px rgba(0,0,0,0.16);
+}
+html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);overflow:hidden;-webkit-font-smoothing:antialiased}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;overflow-y:auto}
+.screen.hidden{display:none!important}
+.back-btn{position:absolute;top:20px;left:20px;background:rgba(255,255,255,0.9);border:2px solid var(--border);border-radius:var(--radius);padding:10px 16px;font-family:inherit;font-size:14px;font-weight:500;cursor:pointer;color:var(--text);display:flex;align-items:center;gap:6px;transition:all 0.15s;box-shadow:var(--shadow);z-index:10}
+.back-btn:hover{border-color:var(--teal);color:var(--teal)}
+.step-pill{position:absolute;top:24px;right:24px;background:rgba(255,255,255,0.85);padding:5px 12px;border-radius:20px;font-size:13px;font-weight:500;color:var(--muted);box-shadow:var(--shadow);z-index:10}
+.screen-heading{text-align:center;margin-bottom:28px}
+.screen-title{font-size:28px;font-weight:700;letter-spacing:-0.5px;color:var(--teal-dark)}
+.screen-sub{font-size:15px;color:var(--muted);margin-top:6px}
+.mw{width:100%;max-width:660px;display:flex;flex-direction:column;align-items:center}
+
+/* IDLE */
+#screen-idle{background:linear-gradient(155deg,var(--teal-dark) 0%,var(--teal) 60%,#2594b0 100%);cursor:pointer}
+.idle-logo{width:160px;height:160px;border-radius:28px;object-fit:cover;box-shadow:0 12px 48px rgba(0,0,0,0.35);margin-bottom:24px}
+.idle-title{font-size:48px;font-weight:800;color:#fff;letter-spacing:-1.5px;margin-bottom:6px}
+.idle-org{font-size:17px;color:rgba(255,255,255,0.6);margin-bottom:44px}
+.idle-btn{background:rgba(255,255,255,0.18);backdrop-filter:blur(12px);border:2px solid rgba(255,255,255,0.35);color:#fff;font-family:inherit;font-size:20px;font-weight:600;padding:20px 56px;border-radius:60px;cursor:pointer;transition:all 0.2s}
+.idle-btn:hover{background:rgba(255,255,255,0.28);transform:scale(1.02)}
+.idle-sub{color:rgba(255,255,255,0.45);font-size:13px;margin-top:12px}
+.idle-services{display:flex;gap:20px;margin-top:24px}
+.idle-svc{color:rgba(255,255,255,0.5);font-size:12px}
+.idle-clock{position:absolute;top:24px;right:28px;color:rgba(255,255,255,0.5);font-size:14px;font-weight:500;z-index:5}
+.admin-link{position:absolute;bottom:20px;right:24px;color:rgba(255,255,255,0.3);font-size:12px;text-decoration:none;z-index:5}
+.admin-link:hover{color:rgba(255,255,255,0.6)}
+
+/* WHO ARE YOU */
+#screen-role{background:var(--bg)}
+.role-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%;max-width:580px}
+.role-btn{background:var(--surface);border:2.5px solid var(--border);border-radius:var(--radius-lg);padding:36px 24px;text-align:center;cursor:pointer;font-family:inherit;transition:all 0.15s;box-shadow:var(--shadow);display:flex;flex-direction:column;align-items:center;gap:12px}
+.role-btn:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.role-btn.vol{border-color:var(--teal)}.role-btn.vol:hover{background:var(--teal-light)}
+.role-btn.elic{border-color:#C4B5FD;background:var(--purple-light)}.role-btn.elic:hover{background:#ede9fe}
+.role-icon{font-size:48px}.role-label{font-size:20px;font-weight:700}.role-desc{font-size:13px;color:var(--muted)}
+
+/* VOLUNTEER SEARCH */
+#screen-search{background:var(--bg)}
+.search-wrap{position:relative;width:100%;max-width:620px;margin-bottom:18px}
+.search-box{width:100%;padding:20px 24px 20px 64px;font-family:inherit;font-size:20px;font-weight:500;border:2.5px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);outline:none;transition:border-color 0.2s;box-shadow:var(--shadow)}
+.search-box:focus{border-color:var(--teal)}
+.search-icon{position:absolute;left:20px;top:50%;transform:translateY(-50%);font-size:24px;pointer-events:none}
+.vol-list{width:100%;max-width:620px;display:flex;flex-direction:column;gap:10px;max-height:380px;overflow-y:auto}
+.vol-card{background:var(--surface);border:2.5px solid var(--border);border-radius:var(--radius);padding:16px 20px;display:flex;align-items:center;gap:14px;cursor:pointer;transition:all 0.15s;box-shadow:var(--shadow)}
+.vol-card:hover{border-color:var(--teal);background:var(--teal-light);transform:translateY(-1px)}
+.vol-av{width:50px;height:50px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;flex-shrink:0}
+.vol-name{font-size:18px;font-weight:600}.vol-email{font-size:13px;color:var(--muted)}
+.hint-text{font-size:14px;color:var(--hint);margin-bottom:14px;text-align:center}
+
+/* ELIC PIN */
+#screen-pin{background:var(--bg)}
+.pin-card{background:var(--surface);border-radius:var(--radius-lg);padding:40px;max-width:400px;width:100%;box-shadow:var(--shadow-lg);text-align:center}
+.pin-display{font-size:56px;letter-spacing:16px;color:var(--teal-dark);font-weight:700;margin:16px 0;min-height:72px;font-variant-numeric:tabular-nums}
+.pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px}
+.pin-btn{background:var(--bg);border:2px solid var(--border);border-radius:14px;padding:18px;font-family:inherit;font-size:24px;font-weight:600;cursor:pointer;transition:all 0.15s;color:var(--text)}
+.pin-btn:hover{background:var(--teal-light);border-color:var(--teal)}
+.pin-btn.del{font-size:20px;color:var(--red)}.pin-btn.del:hover{background:var(--red-light);border-color:var(--red)}
+.pin-error{color:var(--red);font-size:14px;margin-top:10px;min-height:20px}
+
+/* WAIVER CHECK */
+#screen-waiver-check{background:var(--bg)}
+.waiver-issue{width:100%;max-width:620px;background:var(--surface);border:2px solid var(--border);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow);margin-bottom:14px}
+.wtag{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px}
+.wtag-exp{background:var(--red-light);color:var(--red)}.wtag-miss{background:var(--amber-light);color:var(--amber)}
+.wsign-btn{background:var(--teal);color:#fff;border:none;border-radius:var(--radius);padding:12px 24px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;margin-right:8px}
+.wskip-btn{background:none;border:none;color:var(--muted);font-family:inherit;font-size:14px;cursor:pointer;text-decoration:underline;padding:8px}
+.all-clear{background:var(--green-light);border:2px solid #86EFAD;border-radius:var(--radius-lg);padding:24px;text-align:center;width:100%;max-width:620px}
+
+/* WAIVER SIGN */
+#screen-waiver-sign{background:var(--bg)}
+.waiver-text{width:100%;max-width:620px;background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius);padding:20px;font-size:14px;line-height:1.8;color:var(--muted);white-space:pre-wrap;max-height:260px;overflow-y:auto;margin-bottom:20px;box-shadow:var(--shadow)}
+.sign-inp{width:100%;max-width:620px;padding:16px 20px;font-family:inherit;font-size:20px;font-weight:500;border:2.5px solid var(--border);border-radius:var(--radius);background:var(--surface);outline:none;text-align:center;box-shadow:var(--shadow);margin-bottom:14px}
+.sign-inp:focus{border-color:var(--teal)}
+.sign-btn{width:100%;max-width:620px;padding:18px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:18px;font-weight:700;cursor:pointer}
+.sign-btn:disabled{background:var(--hint);cursor:not-allowed}
+
+/* VOL MENU */
+#screen-vol-menu{background:var(--bg)}
+.sel-vol-bar{display:flex;align-items:center;gap:12px;background:var(--surface);border:2px solid var(--teal);border-radius:var(--radius);padding:12px 18px;margin-bottom:28px;width:100%;max-width:620px;box-shadow:var(--shadow)}
+.menu-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;width:100%;max-width:620px}
+.menu-btn{background:var(--surface);border:2.5px solid var(--border);border-radius:var(--radius-lg);padding:28px 20px;text-align:center;cursor:pointer;font-family:inherit;transition:all 0.15s;box-shadow:var(--shadow);display:flex;flex-direction:column;align-items:center;gap:10px}
+.menu-btn:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.menu-btn.t{border-color:var(--teal);background:var(--teal-light)}.menu-btn.g{border-color:#86EFAD;background:var(--green-light)}
+.menu-btn.p{border-color:#C4B5FD;background:var(--purple-light)}.menu-btn.a{border-color:#FCD34D;background:var(--amber-light)}
+.menu-icon{font-size:40px}.menu-label{font-size:17px;font-weight:700;color:var(--teal-dark)}.menu-desc{font-size:12px;color:var(--muted)}
+
+/* EVENT SELECT */
+#screen-event{background:var(--bg)}
+.event-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:620px;max-height:400px;overflow-y:auto}
+.event-btn{background:var(--surface);border:2.5px solid var(--border);border-radius:var(--radius);padding:18px;text-align:left;cursor:pointer;font-family:inherit;transition:all 0.15s;box-shadow:var(--shadow)}
+.event-btn:hover{border-color:var(--teal);background:var(--teal-light)}
+.event-name{font-size:16px;font-weight:600}.event-date{font-size:12px;color:var(--muted);margin-top:4px}
+
+/* HOURS */
+#screen-hours{background:var(--bg)}
+.hours-card{background:var(--surface);border-radius:var(--radius-lg);padding:40px;max-width:500px;width:100%;box-shadow:var(--shadow-lg);text-align:center}
+.h-ctx{font-size:14px;color:var(--muted);margin-bottom:24px}
+.h-ctx strong{color:var(--teal-dark)}
+.h-num{font-size:84px;font-weight:800;color:var(--teal);letter-spacing:-3px;line-height:1;font-variant-numeric:tabular-nums}
+.h-unit{font-size:16px;color:var(--muted);margin-bottom:28px;margin-top:4px}
+.h-btns{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:20px}
+.hbtn{background:var(--bg);border:2px solid var(--border);border-radius:var(--radius);padding:14px;font-family:inherit;font-size:18px;font-weight:600;cursor:pointer;transition:all 0.15s}
+.hbtn:hover{background:var(--teal-light);border-color:var(--teal);color:var(--teal-dark)}
+.hbtn.del{color:var(--red)}.hbtn.del:hover{background:var(--red-light);border-color:var(--red)}
+.role-inp{width:100%;padding:12px 16px;font-family:inherit;font-size:15px;border:2px solid var(--border);border-radius:var(--radius);margin-bottom:18px;outline:none;text-align:center}
+.role-inp:focus{border-color:var(--teal)}
+.sub-btn{width:100%;padding:18px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:18px;font-weight:700;cursor:pointer}
+.sub-btn:disabled{background:var(--hint);cursor:not-allowed}
+
+/* UPDATE INFO */
+#screen-update{background:var(--bg)}
+.upd-card{background:var(--surface);border-radius:var(--radius-lg);padding:36px;max-width:560px;width:100%;box-shadow:var(--shadow-lg)}
+.upd-sec{margin-bottom:24px;padding-bottom:24px;border-bottom:1px solid var(--border)}
+.upd-sec:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+.upd-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--hint);margin-bottom:8px}
+.upd-inp{width:100%;padding:12px 16px;font-family:inherit;font-size:17px;border:2px solid var(--border);border-radius:var(--radius);outline:none;transition:border-color 0.2s}
+.upd-inp:focus{border-color:var(--teal)}
+.int-grid{display:flex;flex-wrap:wrap;gap:8px}
+.int-chip{padding:9px 16px;border:2.5px solid var(--border);border-radius:30px;font-family:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.15s;background:var(--surface)}
+.int-chip.sel{border-color:var(--teal);background:var(--teal-light);color:var(--teal-dark);font-weight:600}
+.upd-submit{width:100%;padding:16px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:17px;font-weight:700;cursor:pointer;margin-top:20px}
+
+/* ELIC MENU */
+#screen-elic-menu{background:var(--bg)}
+#screen-elic-youth-signin{background:var(--bg)}
+#screen-eys-auth{background:var(--bg)}
+#screen-eys-new{background:var(--bg)}
+#screen-prod-signin{background:var(--bg)}
+#screen-prod-signout{background:var(--bg)}
+.elic-bar{background:linear-gradient(135deg,var(--teal-dark),var(--teal));border-radius:var(--radius);padding:16px 20px;width:100%;max-width:680px;display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;box-shadow:var(--shadow)}
+.elic-name{font-size:18px;font-weight:700;color:#fff}
+.elic-role{font-size:13px;color:rgba(255,255,255,0.65)}
+.elic-events{width:100%;max-width:680px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;padding-bottom:20px}
+.elic-event-card{background:var(--surface);border:2.5px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+.elic-event-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.elic-event-name{font-size:17px;font-weight:700}
+.elic-event-date{font-size:13px;color:var(--muted);margin-top:2px}
+.status-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700}
+.st-draft{background:var(--bg);color:var(--muted)}.st-open{background:var(--green-light);color:var(--green)}.st-closed{background:var(--bg);color:var(--hint)}
+.elic-actions{display:flex;gap:8px}
+.elic-open-btn{background:var(--green);color:#fff;border:none;border-radius:var(--radius);padding:12px 20px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s}
+.elic-open-btn:hover{background:#1e8a5c}
+.elic-close-btn{background:var(--orange-light);color:var(--orange);border:2px solid #FED7AA;border-radius:var(--radius);padding:12px 20px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s}
+.elic-close-btn:hover{background:#FEE2A0}
+
+/* CHECKLIST */
+#screen-checklist{background:var(--bg)}
+.cl-card{background:var(--surface);border-radius:var(--radius-lg);padding:32px;max-width:640px;width:100%;box-shadow:var(--shadow-lg);max-height:75vh;overflow-y:auto}
+.cl-event-name{font-size:18px;font-weight:700;color:var(--teal-dark);margin-bottom:4px}
+.cl-subtitle{font-size:14px;color:var(--muted);margin-bottom:24px}
+.cl-item{padding:16px 0;border-bottom:1px solid var(--border)}
+.cl-item:last-child{border-bottom:none}
+.cl-label{font-size:15px;font-weight:600;margin-bottom:4px}
+.cl-hint{font-size:12px;color:var(--hint);margin-bottom:10px}
+.cl-req{font-size:10px;font-weight:700;text-transform:uppercase;color:var(--red);letter-spacing:0.5px;margin-left:6px}
+.cl-check-btns{display:flex;gap:10px}
+.cl-yes{background:var(--green-light);border:2.5px solid #86EFAD;color:var(--green);border-radius:var(--radius);padding:10px 24px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;transition:all 0.15s;flex:1}
+.cl-yes:hover,.cl-yes.sel{background:var(--green);color:#fff;border-color:var(--green)}
+.cl-no{background:var(--red-light);border:2.5px solid #FCA5A5;color:var(--red);border-radius:var(--radius);padding:10px 24px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;transition:all 0.15s;flex:1}
+.cl-no:hover,.cl-no.sel{background:var(--red);color:#fff;border-color:var(--red)}
+.cl-textarea{width:100%;padding:12px 16px;font-family:inherit;font-size:15px;border:2px solid var(--border);border-radius:var(--radius);min-height:80px;resize:vertical;outline:none}
+.cl-textarea:focus{border-color:var(--teal)}
+.cl-rating{display:flex;gap:8px}
+.cl-star{background:var(--bg);border:2px solid var(--border);border-radius:var(--radius);padding:10px 16px;font-family:inherit;font-size:16px;cursor:pointer;transition:all 0.15s;flex:1;font-weight:600}
+.cl-star:hover,.cl-star.sel{background:var(--amber-light);border-color:var(--amber-200);color:var(--amber)}
+.cl-submit-btn{width:100%;padding:18px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:18px;font-weight:700;cursor:pointer;margin-top:20px;position:sticky;bottom:0}
+.cl-submit-btn:disabled{background:var(--hint);cursor:not-allowed}
+
+/* CONFIRM */
+#screen-confirm{background:var(--bg)}
+.conf-card{background:var(--surface);border-radius:var(--radius-lg);padding:52px 44px;max-width:460px;width:100%;box-shadow:var(--shadow-lg);text-align:center}
+.conf-icon{font-size:72px;margin-bottom:16px;line-height:1}
+.conf-title{font-size:30px;font-weight:800;color:var(--teal-dark);margin-bottom:8px;letter-spacing:-0.5px}
+.conf-sub{font-size:16px;color:var(--muted);margin-bottom:8px}
+.conf-note{font-size:13px;color:var(--hint);margin-bottom:36px}
+.conf-bar-wrap{width:100%;height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.conf-bar{height:100%;background:var(--teal);border-radius:3px;transition:width 0.1s linear}
+.conf-done{margin-top:16px;background:none;border:none;color:var(--muted);font-family:inherit;font-size:14px;cursor:pointer;text-decoration:underline}
+</style>
+</head>
+<body>
+
+<!-- IDLE -->
+<div class="screen" id="screen-idle" onclick="tapStart()">
+  <div id="idle-clock" class="idle-clock"></div>
+  <img src="/static/images/logo.jpg" alt="HWTC" class="idle-logo"/>
+  <div class="idle-title">RoleCall</div>
+  <div class="idle-org">Horizon West Theater Company</div>
+  <button class="idle-btn">Volunteer Check-In</button>
+  <div class="idle-sub">Tap anywhere to get started</div>
+  <div class="idle-services">
+    <div class="idle-svc">⏱ Log Hours</div>
+    <div class="idle-svc">📋 Sign Waivers</div>
+    <div class="idle-svc">👤 Update Info</div>
+    <div class="idle-svc">🎬 ELIC Login</div>
+  </div>
+  <a href="/" class="admin-link" onclick="event.stopPropagation()">Admin Login →</a>
+</div>
+
+<!-- WHO ARE YOU -->
+<div class="screen hidden" id="screen-role">
+  <button class="back-btn" onclick="goIdle()">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title">Welcome!</div>
+    <div class="screen-sub">How are you checking in today?</div>
+  </div>
+  <div class="role-grid">
+    <button class="role-btn vol" onclick="goVolSearch()">
+      <div class="role-icon">👋</div>
+      <div class="role-label">Volunteer</div>
+      <div class="role-desc">Log hours, sign waivers, update info</div>
+    </button>
+    <button class="role-btn elic" onclick="goElicPin()">
+      <div class="role-icon">🎬</div>
+      <div class="role-label">Event Lead</div>
+      <div class="role-desc">Open or close an event (ELIC)</div>
+    </button>
+  </div>
+</div>
+
+<!-- VOLUNTEER SEARCH -->
+<div class="screen hidden" id="screen-search">
+  <button class="back-btn" onclick="showScreen('screen-role')">← Back</button>
+  <div class="step-pill">Step 1 of 3</div>
+  <div class="screen-heading">
+    <div class="screen-title">Who are you?</div>
+    <div class="screen-sub">Type your name to find your profile</div>
+  </div>
+  <div class="search-wrap">
+    <span class="search-icon">🔍</span>
+    <input class="search-box" id="vol-search" type="text" placeholder="Start typing your name…" autocomplete="off" autocorrect="off" spellcheck="false" oninput="searchVols()"/>
+  </div>
+  <div class="hint-text" id="search-hint">Type at least 2 characters</div>
+  <div class="vol-list" id="vol-list"></div>
+</div>
+
+<!-- WAIVER CHECK -->
+<div class="screen hidden" id="screen-waiver-check">
+  <button class="back-btn" onclick="goVolSearch()">← Back</button>
+  <div class="step-pill">Step 2 of 3</div>
+  <div class="screen-heading">
+    <div class="screen-title" id="wc-title">Checking Waivers…</div>
+    <div class="screen-sub" id="wc-sub"></div>
+  </div>
+  <div id="wc-content" style="width:100%;max-width:620px;display:flex;flex-direction:column;align-items:center"></div>
+</div>
+
+<!-- WAIVER SIGN -->
+<div class="screen hidden" id="screen-waiver-sign">
+  <button class="back-btn" onclick="showScreen('screen-waiver-check')">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title" id="ws-name"></div>
+    <div class="screen-sub">Read carefully, then sign below</div>
+  </div>
+  <div class="waiver-text" id="ws-body"></div>
+  <input class="sign-inp" id="ws-sig" type="text" placeholder="Type your full legal name to sign" oninput="updSignBtn()"/>
+  <div style="font-size:12px;color:var(--hint);margin-bottom:14px;width:100%;max-width:620px;text-align:center">Today: <strong id="ws-date"></strong></div>
+  <button class="sign-btn" id="ws-btn" onclick="submitSign()" disabled>✍️ Sign Waiver</button>
+</div>
+
+<!-- VOLUNTEER MENU -->
+<div class="screen hidden" id="screen-vol-menu">
+  <button class="back-btn" onclick="goVolSearch()">← Change</button>
+  <div class="sel-vol-bar">
+    <div id="vm-av" style="width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:justify-content:center;font-size:15px;font-weight:700;flex-shrink:0"></div>
+    <div><div style="font-weight:700;font-size:16px;color:var(--teal-dark)" id="vm-name"></div><div style="font-size:12px;color:var(--muted)">What would you like to do?</div></div>
+  </div>
+  <!-- Active session banner -->
+  <div id="active-session-banner" style="display:none;background:linear-gradient(135deg,#166534,#16a34a);color:#fff;border-radius:var(--radius);padding:20px 24px;margin-bottom:14px">
+    <div style="font-size:14px;font-weight:700;margin-bottom:4px">🟢 Currently Volunteering</div>
+    <div style="font-size:13px;opacity:0.85" id="active-session-info">Session active</div>
+    <div style="font-size:52px;font-weight:900;margin:10px 0 6px;font-variant-numeric:tabular-nums;letter-spacing:-1px;text-align:center" id="active-session-timer">0:00:00</div>
+    <button onclick="goStopVolunteering()" style="background:#fff;color:#166534;border:none;border-radius:12px;padding:18px 24px;font-family:inherit;font-size:20px;font-weight:800;cursor:pointer;width:100%;letter-spacing:-0.3px">🔴 Stop Volunteering</button>
+  </div>
+  <div class="menu-grid" id="vol-menu-grid">
+    <button class="menu-btn" style="background:linear-gradient(135deg,#166534,#16a34a);color:#fff;grid-column:1/-1;padding:28px 20px" onclick="kioskAction(goBeginVolunteering)" id="begin-vol-btn">
+      <div class="menu-icon" style="font-size:40px">🟢</div>
+      <div class="menu-label" style="color:#fff;font-size:22px">Begin Volunteering</div>
+      <div class="menu-desc" style="color:rgba(255,255,255,0.85);font-size:15px">Tap here to start your session timer</div>
+    </button>
+    <button class="menu-btn t" onclick="kioskAction(goEventSelect)">
+      <div class="menu-icon">⏱</div>
+      <div class="menu-label">Log Hours</div>
+      <div class="menu-desc">Manually enter time for an event</div>
+    </button>
+    <button class="menu-btn g" id="waiver-menu-btn" onclick="kioskAction(()=>goWaiverCheck(true))">
+      <div class="menu-icon">📋</div>
+      <div class="menu-label">Sign Waivers</div>
+      <div class="menu-desc" id="waiver-menu-desc">Review your waivers</div>
+    </button>
+    <button class="menu-btn p" onclick="kioskAction(goUpdateInfo)">
+      <div class="menu-icon">👤</div>
+      <div class="menu-label">Update Info</div>
+      <div class="menu-desc">Phone, interests, emergency contact</div>
+    </button>
+    <button class="menu-btn a" onclick="goIdle()">
+      <div class="menu-icon">✓</div>
+      <div class="menu-label">Done</div>
+      <div class="menu-desc">Return to start screen</div>
+    </button>
+  </div>
+</div>
+
+<!-- EVENT SELECT -->
+<div class="screen hidden" id="screen-event">
+  <button class="back-btn" onclick="showScreen('screen-vol-menu')">← Back</button>
+  <div class="step-pill">Log Hours</div>
+  <div class="screen-heading">
+    <div class="screen-title">Which event?</div>
+    <div class="screen-sub">Only open events are shown</div>
+  </div>
+  <div class="event-grid" id="event-grid"></div>
+  <div id="no-events" class="hidden" style="text-align:center;padding:40px;color:var(--muted);max-width:440px">
+    <div style="font-size:40px;margin-bottom:12px">🔒</div>
+    <div style="font-weight:600;margin-bottom:6px">No open events</div>
+    <div>Events must be opened by an Event Lead before volunteers can log hours. Please see a staff member.</div>
+  </div>
+</div>
+
+<!-- HOURS INPUT -->
+<div class="screen hidden" id="screen-hours">
+  <button class="back-btn" onclick="showScreen('screen-event')">← Back</button>
+  <div class="hours-card">
+    <div class="h-ctx">Logging time for <strong id="h-ev-name"></strong></div>
+    <div class="h-num" id="h-num">0</div>
+    <div class="h-unit">hours</div>
+    <div class="h-btns">
+      <button class="hbtn" onclick="addH(0.5)">+½</button>
+      <button class="hbtn" onclick="addH(1)">+1</button>
+      <button class="hbtn" onclick="addH(2)">+2</button>
+      <button class="hbtn" onclick="addH(3)">+3</button>
+      <button class="hbtn" onclick="addH(4)">+4</button>
+      <button class="hbtn" onclick="addH(5)">+5</button>
+      <button class="hbtn" onclick="addH(6)">+6</button>
+      <button class="hbtn del" onclick="clearH()">Clear</button>
+    </div>
+    <input class="role-inp" id="h-role" type="text" placeholder="Your role (optional) — e.g. Usher, Set Crew"/>
+    <button class="sub-btn" id="h-sub" onclick="submitHours()" disabled>Submit Hours</button>
+  </div>
+</div>
+
+<!-- BEGIN VOLUNTEERING — event select + role -->
+<div class="screen hidden" id="screen-begin-vol">
+  <button class="back-btn" onclick="showScreen('screen-vol-menu')">← Back</button>
+  <div class="step-pill">Begin Volunteering</div>
+  <div class="screen-heading">
+    <div class="screen-title">Ready to volunteer?</div>
+    <div class="screen-sub">Select an event and your role, then tap Begin</div>
+  </div>
+  <div style="max-width:560px;width:100%;padding:0 16px">
+    <div style="margin-bottom:16px">
+      <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px">EVENT (optional)</div>
+      <div id="bv-event-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px"></div>
+      <button id="bv-no-event" onclick="toggleNoEventOverride()"
+        style="width:100%;padding:10px;border:2px dashed var(--border);border-radius:var(--radius);background:transparent;font-family:inherit;font-size:13px;color:var(--muted);cursor:pointer;margin-top:4px">
+        ⚙️ No event listed — request override
+      </button>
+      <div id="bv-override-panel" style="display:none;margin-top:10px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--radius);padding:12px">
+        <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px">Override reason (required)</div>
+        <input type="text" id="bv-override-reason" placeholder="e.g. Setup before event, Admin work, Special project…"
+          style="width:100%;padding:8px 10px;border:1.5px solid var(--border-md);border-radius:var(--radius);font-family:inherit;font-size:13px;box-sizing:border-box"
+          oninput="bvUpdateOverride()"/>
+        <div style="font-size:11px;color:var(--text-hint);margin-top:6px">Hours logged without an event will require admin review before approval.</div>
+      </div>
+    </div>
+    <div style="margin-bottom:20px">
+      <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px">YOUR ROLE (optional)</div>
+      <input type="text" id="bv-role" placeholder="e.g. Usher, Set Crew, Box Office…" style="width:100%;padding:12px 16px;border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:14px;outline:none;box-sizing:border-box"/>
+    </div>
+    <button id="bv-begin-btn" onclick="submitBeginVolunteering()" disabled
+      style="width:100%;padding:16px;background:linear-gradient(135deg,#166534,#16a34a);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:16px;font-weight:700;cursor:pointer;opacity:0.4"
+      title="Please select an event to begin">🟢 Begin Volunteering</button>
+    <div id="bv-event-hint" style="text-align:center;font-size:12px;color:var(--muted);margin-top:8px">
+      Please select an event above to begin tracking hours
+    </div>
+  </div>
+</div>
+
+<!-- UPDATE INFO -->
+<div class="screen hidden" id="screen-update">
+  <button class="back-btn" onclick="showScreen('screen-vol-menu')">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title">Update Your Info</div>
+    <div class="screen-sub">Changes go to admin for approval</div>
+  </div>
+  <div class="upd-card">
+    <div class="upd-sec">
+      <div class="upd-label">Phone Number</div>
+      <input class="upd-inp" id="u-phone" type="tel" placeholder="(555) 000-0000"/>
+    </div>
+    <div class="upd-sec">
+      <div class="upd-label">Interests</div>
+      <div class="int-grid" id="u-interests"></div>
+    </div>
+    <div class="upd-sec">
+      <div class="upd-label">Emergency Contact</div>
+      <input class="upd-inp" id="u-ec-name" type="text" placeholder="Contact name" style="margin-bottom:8px"/>
+      <input class="upd-inp" id="u-ec-rel" type="text" placeholder="Relationship" style="margin-bottom:8px"/>
+      <input class="upd-inp" id="u-ec-phone" type="tel" placeholder="Phone number"/>
+    </div>
+    <button class="upd-submit" onclick="submitUpdate()">Submit for Approval</button>
+  </div>
+</div>
+
+<!-- ELIC PIN -->
+<div class="screen hidden" id="screen-pin">
+  <button class="back-btn" onclick="showScreen('screen-role')">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title">ELIC Login</div>
+    <div class="screen-sub">Enter your 4-digit PIN</div>
+  </div>
+  <div class="pin-card">
+    <div style="font-size:14px;color:var(--muted);margin-bottom:8px">Your PIN</div>
+    <div class="pin-display" id="pin-display">____</div>
+    <div class="pin-error" id="pin-error"></div>
+    <div class="pin-grid">
+      <button class="pin-btn" onclick="addPin('1')">1</button>
+      <button class="pin-btn" onclick="addPin('2')">2</button>
+      <button class="pin-btn" onclick="addPin('3')">3</button>
+      <button class="pin-btn" onclick="addPin('4')">4</button>
+      <button class="pin-btn" onclick="addPin('5')">5</button>
+      <button class="pin-btn" onclick="addPin('6')">6</button>
+      <button class="pin-btn" onclick="addPin('7')">7</button>
+      <button class="pin-btn" onclick="addPin('8')">8</button>
+      <button class="pin-btn" onclick="addPin('9')">9</button>
+      <button class="pin-btn del" onclick="delPin()">⌫</button>
+      <button class="pin-btn" onclick="addPin('0')">0</button>
+      <button class="pin-btn del" onclick="clearPin()">✕</button>
+    </div>
+  </div>
+</div>
+
+<!-- ELIC MENU -->
+<div class="screen hidden" id="screen-elic-menu">
+  <button class="back-btn" onclick="goIdle()">← Exit</button>
+  <div class="screen-heading">
+    <div class="screen-title">Event Lead Dashboard</div>
+    <div class="screen-sub">Open or close your assigned events</div>
+  </div>
+  <div class="elic-bar">
+    <div><div class="elic-name" id="elic-name">—</div><div class="elic-role" id="elic-role">—</div></div>
+    <div style="font-size:32px">🎬</div>
+  </div>
+  <div class="elic-events" id="elic-events"></div>
+  <button onclick="goElicMasterView()" style="width:100%;max-width:600px;margin-top:16px;padding:16px;background:var(--surface);border:2px solid var(--teal);border-radius:var(--radius);font-family:inherit;font-size:15px;font-weight:700;color:var(--teal-dark);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px">
+    👥 Volunteer Overview — See who's here &amp; manage clocks
+  </button>
+</div>
+
+<!-- ELIC MASTER VIEW -->
+<div class="screen hidden" id="screen-elic-master">
+  <button class="back-btn" onclick="clearInterval(masterViewInterval);showScreen('screen-elic-menu')">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title">Volunteer Overview</div>
+    <div class="screen-sub" id="master-sub">All active volunteer sessions</div>
+  </div>
+  <div id="master-sessions" style="max-width:640px;width:100%;padding:0 16px"></div>
+</div>
+
+
+<!-- OPENING CHECKLIST -->
+<div class="screen hidden" id="screen-opening-checklist">
+  <button class="back-btn" onclick="showScreen('screen-elic-menu')">← Back</button>
+  <div class="screen-heading" style="margin-bottom:16px">
+    <div class="screen-title">Opening Checklist</div>
+    <div class="screen-sub" id="opening-cl-sub">Complete before opening the event</div>
+  </div>
+  <div class="cl-card" id="opening-cl-card">
+    <div class="cl-event-name" id="opening-cl-event-name"></div>
+    <div id="opening-cl-items"></div>
+    <button class="cl-submit-btn" id="opening-cl-submit" onclick="submitOpeningChecklist()" disabled>Open Event →</button>
+  </div>
+</div>
+
+<!-- CLOSING CHECKLIST -->
+<div class="screen hidden" id="screen-checklist">
+  <button class="back-btn" onclick="showScreen('screen-elic-menu')">← Back</button>
+  <div class="screen-heading" style="margin-bottom:16px">
+    <div class="screen-title">Closing Checklist</div>
+    <div class="screen-sub">Complete all required items before closing</div>
+  </div>
+  <div class="cl-card" id="cl-card">
+    <div class="cl-event-name" id="cl-event-name"></div>
+    <div class="cl-subtitle" id="cl-subtitle"></div>
+    <div id="cl-items"></div>
+    <button class="cl-submit-btn" id="cl-submit" onclick="submitChecklist()" disabled>Submit & Close Event</button>
+  </div>
+</div>
+
+<!-- CONFIRM -->
+<div class="screen hidden" id="screen-confirm">
+  <div class="conf-card">
+    <div class="conf-icon" id="conf-icon">✅</div>
+    <div class="conf-title" id="conf-title">Done!</div>
+    <div class="conf-sub" id="conf-sub"></div>
+    <div class="conf-note" id="conf-note"></div>
+    <div class="conf-bar-wrap"><div class="conf-bar" id="conf-bar" style="width:100%"></div></div>
+    <button class="conf-done" id="conf-back">← Back to menu</button>
+  </div>
+</div>
+
+<script>
+// ── STATE ──
+let pendingAction=null
+let selVol=null
+let psRoster=[]
+let psEventId=null
+let psSignOutTarget=null
+let eysEventId=null
+let eysEventData=null
+let eysRoster=[]
+let eysSignOutTarget=null
+let eysDropOffTarget=null
+let eysAuthPickups=[]
+let eysAuthAction='dropoff'
+let allYouthKiosk=[], selEvent=null, curHours=0
+let waiverIssues=[], signingWaiver=null
+let elicData=null, elicEventList=[], closingEvent=null, openingChecklistItems=[], openingClResponses={}
+let checklistItems=[], clResponses={}
+let allInterestTypes=[]
+let pinVal=''
+let resetTmt=null, idleTmt=null
+const RESET_MS=12000, IDLE_MS=120000
+
+// ── UTILS ──
+const AVC=[['#E8F4F8','#0d3d4d'],['#E6F1FB','#0C447C'],['#FAEEDA','#633806'],
+  ['#FBEAF0','#72243E'],['#EAF3DE','#27500A'],['#F3EEFF','#5B21B6'],['#FFF0F6','#BE185D'],['#FCEBEB','#791F1F']]
+function avc(n){return AVC[((n||'').charCodeAt(0)||0)%AVC.length]}
+function ini(n){return(n||'?').split(' ').map(p=>p[0]).join('').substring(0,2).toUpperCase()}
+function fmtDate(d){if(!d)return'';return new Date(d+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
+
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>{
+    s.classList.add('hidden')
+    s.style.display='none'
+  })
+  const target=document.getElementById(id)
+  if(target){
+    target.classList.remove('hidden')
+    target.style.display='flex'
+  }
+  resetIdle()
+}
+function resetIdle(){
+  clearTimeout(idleTmt)
+  // Only set idle timer when we're NOT on the idle screen
+  if(document.getElementById('screen-idle').classList.contains('hidden')){
+    idleTmt=setTimeout(goIdle,IDLE_MS)
+  }
+}
+document.addEventListener('touchstart',resetIdle,{passive:true})
+document.addEventListener('click',resetIdle)
+
+// ── CLOCK ──
+function tick(){
+  const n=new Date()
+  document.getElementById('idle-clock').textContent=n.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true})+'  ·  '+n.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})
+}
+setInterval(tick,1000);tick()
+
+// ── IDLE / ROLE ──
+function tapStart(){
+  selVol=null;selEvent=null;curHours=0;pinVal='';elicData=null
+  showScreen('screen-role')
+}
+function goIdle(){clearTimeout(resetTmt);showScreen('screen-idle');clearTimeout(idleTmt)}
+
+// ── BEGIN / STOP VOLUNTEERING ──
+let _bvSelectedEvent  = null
+let _bvTimerInterval  = null
+let _bvSessionStart   = null
+let _bvOverrideReason = ''
+
+function safeDate(str){
+  if(!str) return null
+  // Postgres timestamps: "2024-01-15 14:23:45.123456+00" → replace space with T for ISO parsing
+  const iso = String(str).replace(' ', 'T')
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? null : d
+}
+
+async function goBeginVolunteering(){
+  _bvSelectedEvent = null
+  _bvOverrideReason = ''
+  document.getElementById('bv-role').value = ''
+  // Reset override panel
+  const panel = document.getElementById('bv-override-panel')
+  if(panel) panel.style.display = 'none'
+  const overrideInput = document.getElementById('bv-override-reason')
+  if(overrideInput) overrideInput.value = ''
+  // Reset no-event button styling
+  const noEvtBtn = document.getElementById('bv-no-event')
+  if(noEvtBtn){ noEvtBtn.style.background='transparent'; noEvtBtn.style.borderColor='var(--border)' }
+  // Disable begin button until selection made
+  bvUpdateBeginBtn()
+  // Load open events
+  const grid = document.getElementById('bv-event-grid')
+  grid.innerHTML = '<div style="color:var(--muted);font-size:13px">Loading events…</div>'
+  try {
+    const r = await fetch('/api/kiosk/events')
+    const events = await r.json()
+    if(!events.length){
+      grid.innerHTML = '<div style="font-size:12px;color:var(--muted);grid-column:1/-1">No events scheduled for today</div>'
+    } else {
+      grid.innerHTML = events.map(e=>{
+        const isOpen = e.status === 'open'
+        const autoLog = !!e.auto_log_hours
+        const badge = autoLog && isOpen ? '<div style="font-size:10px;font-weight:700;background:#166534;color:#fff;padding:2px 6px;border-radius:20px;margin-top:4px;display:inline-block">⚡ Auto-Log Full Hours</div>' : ''
+        const statusBadge = !isOpen ? `<div style="font-size:10px;font-weight:700;background:var(--bg);color:var(--muted);padding:2px 6px;border-radius:20px;margin-top:4px;display:inline-block">🔒 Not open yet</div>` : ''
+        if(!isOpen){
+          // Show but greyed out and non-clickable
+          return `<div id="bv-evt-${e.id}" style="padding:10px 12px;border:2px solid var(--border);border-radius:var(--radius);background:var(--bg);font-family:inherit;font-size:13px;font-weight:600;text-align:left;opacity:0.5;cursor:not-allowed">
+            <div style="color:var(--muted)">${e.name}</div>
+            ${e.event_date?`<div style="font-size:11px;color:var(--hint);margin-top:2px">${fmtDate(e.event_date)}</div>`:''}
+            ${statusBadge}
+          </div>`
+        }
+        return '<button id="bv-evt-'+e.id+'" onclick="bvSelectEvent('+JSON.stringify(e).replace(/"/g,'&quot;')+')" style="padding:10px 12px;border:2px solid var(--border);border-radius:var(--radius);background:var(--surface);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;text-align:left">'
+          +'<div>'+e.name+'</div>'
+          +(e.event_date?'<div style="font-size:11px;color:var(--muted);margin-top:2px">'+fmtDate(e.event_date)+'</div>':'')
+          +badge
+          +'</button>'
+      }).join('')
+    }
+  } catch(err){ grid.innerHTML = '<div style="font-size:12px;color:var(--muted);grid-column:1/-1">Could not load events</div>' }
+  showScreen('screen-begin-vol')
+  bvUpdateBeginBtn()
+}
+
+function toggleNoEventOverride(){
+  const panel = document.getElementById('bv-override-panel')
+  const btn   = document.getElementById('bv-no-event')
+  const showing = panel.style.display !== 'none'
+  panel.style.display = showing ? 'none' : ''
+  if(showing){
+    // Closing override panel — clear selection
+    _bvSelectedEvent = null
+    _bvOverrideReason = ''
+    btn.style.background = 'transparent'
+    btn.style.borderColor = 'var(--border)'
+  } else {
+    // Opening — deselect any event
+    document.querySelectorAll('#bv-event-grid button').forEach(b=>{
+      b.style.background='var(--surface)'; b.style.borderColor='var(--border)'
+    })
+    _bvSelectedEvent = null
+    setTimeout(()=>document.getElementById('bv-override-reason')?.focus(), 50)
+  }
+  bvUpdateBeginBtn()
+}
+
+function bvUpdateOverride(){
+  _bvOverrideReason = document.getElementById('bv-override-reason')?.value.trim() || ''
+  const btn = document.getElementById('bv-no-event')
+  if(_bvOverrideReason){
+    btn.style.background = 'var(--orange-light)'
+    btn.style.borderColor = 'var(--orange, #f97316)'
+  } else {
+    btn.style.background = 'transparent'
+    btn.style.borderColor = 'var(--border)'
+  }
+  bvUpdateBeginBtn()
+}
+
+function bvUpdateBeginBtn(){
+  const beginBtn = document.getElementById('bv-begin-btn')
+  const hint     = document.getElementById('bv-event-hint')
+  if(!beginBtn) return
+  const hasEvent    = !!_bvSelectedEvent
+  const hasOverride = !!_bvOverrideReason
+  const canBegin    = hasEvent || hasOverride
+  beginBtn.disabled     = !canBegin
+  beginBtn.style.opacity = canBegin ? '1' : '0.4'
+  beginBtn.style.cursor  = canBegin ? 'pointer' : 'not-allowed'
+  if(hint) hint.style.display = canBegin ? 'none' : ''
+  if(!canBegin)       beginBtn.title = 'Select an event above to begin'
+  else if(hasOverride) beginBtn.title = 'Begin without event (override — requires admin approval)'
+  else                beginBtn.title = ''
+}
+
+function bvSelectEvent(evt){
+  _bvSelectedEvent = evt
+  // Close override panel if open
+  const panel = document.getElementById('bv-override-panel')
+  if(panel) panel.style.display = 'none'
+  if(document.getElementById('bv-override-reason'))
+    document.getElementById('bv-override-reason').value = ''
+  _bvOverrideReason = ''
+  // Highlight selected event
+  document.querySelectorAll('#bv-event-grid button, #bv-no-event').forEach(b=>{
+    b.style.background='var(--surface)'; b.style.borderColor='var(--border)'
+  })
+  if(evt){
+    const btn = document.getElementById('bv-evt-'+evt.id)
+    if(btn){ btn.style.background='var(--teal-light)'; btn.style.borderColor='var(--teal)' }
+  }
+  document.getElementById('bv-no-event').style.background = 'transparent'
+  document.getElementById('bv-no-event').style.borderColor = 'var(--border)'
+  bvUpdateBeginBtn()
+}
+
+async function submitBeginVolunteering(){
+  const btn = document.getElementById('bv-begin-btn')
+  btn.disabled = true; btn.textContent = 'Starting…'
+  const role = document.getElementById('bv-role').value.trim()
+
+  // Block if neither event nor override reason
+  if(!_bvSelectedEvent && !_bvOverrideReason){
+    alert('Please select an event or provide an override reason.')
+    btn.disabled=false; btn.textContent='🟢 Begin Volunteering'
+    return
+  }
+
+  // Auto-log: credit full event hours immediately, no timer
+  if(_bvSelectedEvent && _bvSelectedEvent.auto_log_hours){
+    try {
+      const r = await fetch('/api/kiosk/log-full-event', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({volunteer_id: selVol.id, event_id: _bvSelectedEvent.id, role})
+      })
+      const d = await r.json()
+      btn.disabled=false; btn.textContent='🟢 Begin Volunteering'
+      if(d.error){ alert(d.error); return }
+      showConfirm('⚡','Hours Logged!',
+        (d.hours&&!isNaN(d.hours)?parseFloat(d.hours).toFixed(2):d.hours||'?')+'h submitted for "'+d.event+'".',
+        'You\'ve been credited for the full event. Thanks for volunteering!',
+        ()=>showScreen('screen-vol-menu'))
+    } catch(err){ alert('Error: '+err.message); btn.disabled=false; btn.textContent='🟢 Begin Volunteering' }
+    return
+  }
+
+  // Normal flow: start a live timer session
+  try {
+    const r = await fetch('/api/kiosk/session/begin', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        volunteer_id: selVol.id,
+        event_id:   _bvSelectedEvent ? _bvSelectedEvent.id : null,
+        event_name: _bvSelectedEvent ? _bvSelectedEvent.name : (_bvOverrideReason || 'General Volunteering'),
+        role,
+        override_reason: _bvOverrideReason || null
+      })
+    })
+    const d = await r.json()
+    if(d.error){ alert(d.error); btn.disabled=false; btn.textContent='🟢 Begin Volunteering'; return }
+    _bvSessionStart = safeDate(d.started_at)
+    showScreen('screen-vol-menu')
+    showActiveSessionBanner(role)
+    if(_bvOverrideReason){
+      // Remind volunteer their hours need review
+      setTimeout(()=>showConfirm('⚠️','Override Active',
+        'Hours logged without an event require admin review.',
+        'Your hours will appear as pending until approved.',
+        ()=>{}), 500)
+    }
+    btn.disabled=false; btn.textContent='🟢 Begin Volunteering'
+  } catch(err){ alert('Error starting session. Please try again.'); btn.disabled=false; btn.textContent='🟢 Begin Volunteering' }
+}
+
+async function goStopVolunteering(){
+  const role = document.getElementById('bv-role')?.value.trim() || ''
+  if(!confirm('Stop volunteering and submit your hours?')) return
+  try {
+    const r = await fetch('/api/kiosk/session/stop', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({volunteer_id: selVol.id, role})
+    })
+    const d = await r.json()
+    if(d.error){ alert('Error: ' + d.error); return }
+    hideActiveSessionBanner()
+    const hoursDisplay = (d.hours && !isNaN(d.hours)) ? parseFloat(d.hours).toFixed(2) : '?'
+    showConfirm('✅','Thank You!',
+      hoursDisplay+'h submitted for approval.',
+      'Your time has been recorded. Thanks for volunteering!',
+      ()=>showScreen('screen-vol-menu'))
+  } catch(err){ alert('Network error stopping session: ' + err.message) }
+}
+
+function showActiveSessionBanner(role){
+  const banner = document.getElementById('active-session-banner')
+  const info   = document.getElementById('active-session-info')
+  const beginBtn = document.getElementById('begin-vol-btn')
+  if(!banner) return
+  const evtName = _bvSelectedEvent ? _bvSelectedEvent.name : 'General volunteering'
+  info.textContent = evtName + (role ? ' · ' + role : '')
+  banner.style.display = 'block'
+  if(beginBtn){ beginBtn.style.display='none' }
+  // Start elapsed timer
+  if(_bvTimerInterval) clearInterval(_bvTimerInterval)
+  _bvTimerInterval = setInterval(function(){
+    const el = document.getElementById('active-session-timer')
+    if(!el || !_bvSessionStart){ clearInterval(_bvTimerInterval); return }
+    const diff = Date.now() - _bvSessionStart.getTime()
+    if(isNaN(diff) || diff < 0){ el.textContent = '0:00:00'; return }
+    const secs = Math.floor(diff / 1000)
+    const h = Math.floor(secs/3600), m = Math.floor((secs%3600)/60), s = secs%60
+    el.textContent = h+':'+(m<10?'0':'')+m+':'+(s<10?'0':'')+s
+  }, 1000)
+}
+
+function hideActiveSessionBanner(){
+  const banner = document.getElementById('active-session-banner')
+  const beginBtn = document.getElementById('begin-vol-btn')
+  if(banner) banner.style.display = 'none'
+  if(beginBtn) beginBtn.style.display = ''
+  if(_bvTimerInterval){ clearInterval(_bvTimerInterval); _bvTimerInterval=null }
+  _bvSessionStart = null
+}
+
+async function checkActiveSession(){
+  if(!selVol) return
+  try {
+    const r = await fetch('/api/kiosk/session/active/'+selVol.id)
+    const d = await r.json()
+    if(d.active){
+      _bvSessionStart = safeDate(d.started_at)
+      showActiveSessionBanner('')
+    }
+  } catch(err){}
+}
+
+// ── TAP LOCK: prevents double-firing async kiosk actions ──
+let _kioskBusy = false
+function kioskAction(fn){
+  if(_kioskBusy) return
+  _kioskBusy = true
+  // Auto-release after 3s in case promise never resolves
+  const timer = setTimeout(()=>{ _kioskBusy=false }, 3000)
+  Promise.resolve(fn()).finally(()=>{ clearTimeout(timer); _kioskBusy=false })
+}
+
+// ── VOLUNTEER FLOW ──
+function goVolSearch(){
+  showScreen('screen-search')
+  document.getElementById('vol-search').value=''
+  document.getElementById('vol-list').innerHTML=''
+  document.getElementById('search-hint').textContent='Type at least 2 characters'
+  setTimeout(()=>document.getElementById('vol-search').focus(),300)
+}
+
+let sTmt=null
+function searchVols(){
+  const q=document.getElementById('vol-search').value.trim()
+  clearTimeout(sTmt)
+  if(q.length<2){document.getElementById('search-hint').textContent='Type at least 2 characters';document.getElementById('vol-list').innerHTML='';return}
+  document.getElementById('search-hint').textContent='Searching…'
+  sTmt=setTimeout(async()=>{
+    const r=await fetch(`/api/kiosk/volunteers?q=${encodeURIComponent(q)}`)
+    const vols=await r.json()
+    const list=document.getElementById('vol-list')
+    if(!vols.length){document.getElementById('search-hint').textContent='No volunteers found';list.innerHTML='<div style="text-align:center;padding:24px;color:var(--muted)">No one found. Please see a staff member.</div>';return}
+    document.getElementById('search-hint').textContent=`${vols.length} found — tap your name`
+    list.innerHTML=vols.map(v=>{
+      const[bg,col]=avc(v.name)
+      return`<div class="vol-card" onclick='selectVol(${JSON.stringify(v)})'>
+        <div class="vol-av" style="background:${bg};color:${col}">${ini(v.name)}</div>
+        <div><div class="vol-name">${v.name}</div>${v.email?`<div class="vol-email">${v.email}</div>`:''}</div>
+        <div style="margin-left:auto;font-size:20px;color:var(--hint)">→</div>
+      </div>`
+    }).join('')
+  },250)
+}
+
+async function selectVol(vol){
+  selVol=vol
+  const ir=await fetch('/api/kiosk/interest-types')
+  allInterestTypes=await ir.json()
+  await goWaiverCheck(false)
+}
+
+async function goWaiverCheck(fromMenu=false){
+  showScreen('screen-waiver-check')
+  document.getElementById('wc-title').textContent='Checking Waivers…'
+  document.getElementById('wc-sub').textContent=''
+  document.getElementById('wc-content').innerHTML='<div style="font-size:36px;text-align:center;padding:40px">⏳</div>'
+  try {
+    const r=await fetch(`/api/kiosk/waiver-check?volunteer_id=${selVol.id}`)
+    const data=await r.json()
+    waiverIssues=data.issues||[]
+    renderWaiverCheck(fromMenu,data.all_clear)
+  } catch(e) {
+    // If waiver check fails, let them continue anyway
+    waiverIssues=[]
+    renderWaiverCheck(fromMenu, true)
+  }
+}
+
+function renderWaiverCheck(fromMenu,allClear){
+  const content=document.getElementById('wc-content')
+  if(allClear){
+    updateWaiverMenuBtn(0)
+    if(!fromMenu){
+      // Skip all-clear screen entirely — go straight to volunteer menu
+      goVolMenu()
+    } else {
+      document.getElementById('wc-title').textContent='Your Waivers'
+      document.getElementById('wc-sub').textContent='All waivers are current'
+      content.innerHTML=`<div class="all-clear">
+        <div style="font-size:44px;margin-bottom:10px">✅</div>
+        <div style="font-size:18px;font-weight:700;color:var(--green);margin-bottom:4px">All Waivers Current</div>
+        <div style="font-size:14px;color:var(--muted);margin-bottom:18px">No action needed</div>
+        <button onclick="showScreen('screen-vol-menu')" style="background:var(--teal);color:#fff;border:none;border-radius:var(--radius);padding:12px 28px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">← Back to Menu</button>
+      </div>`
+    }
+    return
+  }
+  document.getElementById('wc-title').textContent=`${waiverIssues.length} Waiver${waiverIssues.length>1?'s':''} Need Attention`
+  document.getElementById('wc-sub').textContent=fromMenu?'Tap to sign any waiver':'These waivers are required before volunteering'
+  updateWaiverMenuBtn(waiverIssues.length)
+  content.innerHTML=waiverIssues.map((w,i)=>`
+    <div class="waiver-issue">
+      <div class="wtag ${w.status==='expired'?'wtag-exp':'wtag-miss'}">${w.status==='expired'?'❌ Expired':'⚠️ Missing'}</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:4px">${w.name}</div>
+      ${w.description?`<div style="font-size:13px;color:var(--muted);margin-bottom:12px">${w.description}</div>`:''}
+      ${w.can_sign_online
+        ?`<button class="wsign-btn" onclick="startSign(${i})">✍️ Sign Now</button>`
+        :`<div style="font-size:13px;color:var(--muted)">This waiver requires an uploaded document. See an administrator.</div>`}
+    </div>`).join('')+
+  (fromMenu
+    ? `<button onclick="showScreen('screen-vol-menu')" style="background:var(--teal);color:#fff;border:none;border-radius:var(--radius);padding:14px 28px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;width:100%;max-width:620px;margin-top:4px">← Back to Menu</button>`
+    : `<div style="background:var(--red-light);border:2px solid #FCA5A5;border-radius:var(--radius);padding:14px;text-align:center;max-width:620px;width:100%;margin-top:8px">
+        <div style="font-size:14px;font-weight:700;color:var(--red);margin-bottom:8px">⚠️ Waivers required to volunteer</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">Please sign the waivers above, or see an administrator for documents that require uploading.</div>
+        <button onclick="showScreen('screen-search')" style="background:none;border:none;color:var(--muted);font-family:inherit;font-size:13px;cursor:pointer;text-decoration:underline">← Go Back</button>
+      </div>`
+  )
+}
+
+function updateWaiverMenuBtn(count){
+  const btn=document.getElementById('waiver-menu-btn')
+  const desc=document.getElementById('waiver-menu-desc')
+  if(!btn)return
+  if(count>0){btn.style.borderColor='#FCA5A5';btn.style.background='var(--red-light)';if(desc)desc.textContent=`${count} waiver${count>1?'s':''} need attention`}
+  else{btn.style.borderColor='#86EFAD';btn.style.background='var(--green-light)';if(desc)desc.textContent='All waivers current'}
+}
+
+function startSign(idx){
+  signingWaiver=waiverIssues[idx]
+  document.getElementById('ws-name').textContent=signingWaiver.name
+  document.getElementById('ws-body').textContent=signingWaiver.template_body||'No waiver text on file.'
+  document.getElementById('ws-sig').value=selVol.name
+  document.getElementById('ws-date').textContent=new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
+  updSignBtn()
+  showScreen('screen-waiver-sign')
+}
+function updSignBtn(){document.getElementById('ws-btn').disabled=document.getElementById('ws-sig').value.trim().length<2}
+async function submitSign(){
+  const name=document.getElementById('ws-sig').value.trim()
+  if(!name)return
+  const btn=document.getElementById('ws-btn')
+  btn.disabled=true;btn.textContent='Signing…'
+  const r=await fetch('/api/kiosk/sign-waiver',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volunteer_id:selVol.id,waiver_type_id:signingWaiver.waiver_type_id,signed_name:name})})
+  const d=await r.json()
+  btn.textContent='✍️ Sign Waiver'
+  if(d.error){btn.disabled=false;alert(d.error);return}
+  waiverIssues=waiverIssues.filter(w=>w.waiver_type_id!==signingWaiver.waiver_type_id)
+  showConfirm('📋','Waiver Signed!',`${signingWaiver.name} signed successfully.`,'',()=>showScreen('screen-waiver-check'))
+}
+
+function goVolMenu(){
+  const[bg,col]=avc(selVol.name)
+  document.getElementById('vm-av').style.background=bg
+  document.getElementById('vm-av').style.color=col
+  document.getElementById('vm-av').textContent=ini(selVol.name)
+  document.getElementById('vm-name').textContent=selVol.name
+  updateWaiverMenuBtn(waiverIssues.length)
+  hideActiveSessionBanner()
+  showScreen('screen-vol-menu')
+  checkActiveSession()
+}
+
+async function goEventSelect(){
+  showScreen('screen-event')
+  const r=await fetch('/api/kiosk/events')
+  const events=await r.json()
+  const grid=document.getElementById('event-grid')
+  const noEvt=document.getElementById('no-events')
+  if(!events.length){grid.innerHTML='';grid.style.display='none';noEvt.classList.remove('hidden');return}
+  noEvt.classList.add('hidden');grid.style.display='grid'
+  grid.innerHTML=events.map(e=>`
+    <button class="event-btn" onclick='selectEvent(${JSON.stringify(e)})'>
+      <div class="event-name">${e.name}</div>
+      ${e.event_date?`<div class="event-date">📅 ${fmtDate(e.event_date)}</div>`:'<div class="event-date" style="color:var(--teal)">● Ongoing</div>'}
+      ${e.status==='open'?'<div style="font-size:11px;background:var(--green-light);color:var(--green);padding:2px 8px;border-radius:10px;font-weight:700;margin-top:4px;display:inline-block">● Open</div>':'<div style="font-size:11px;background:var(--teal-light);color:var(--teal);padding:2px 8px;border-radius:10px;font-weight:700;margin-top:4px;display:inline-block">📅 Scheduled</div>'}
+    </button>`).join('')
+}
+
+function selectEvent(evt){
+  selEvent=evt
+  document.getElementById('h-ev-name').textContent=evt.name
+  curHours=0;updH()
+  document.getElementById('h-role').value=''
+  showScreen('screen-hours')
+}
+function addH(n){curHours=Math.min(24,Math.round((curHours+n)*2)/2);updH()}
+function clearH(){curHours=0;updH()}
+function updH(){
+  document.getElementById('h-num').textContent=curHours%1===0?curHours:curHours.toFixed(1)
+  document.getElementById('h-sub').disabled=curHours<=0
+}
+async function submitHours(){
+  const btn=document.getElementById('h-sub')
+  btn.disabled=true;btn.textContent='Submitting…'
+  const r=await fetch('/api/kiosk/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volunteer_id:selVol.id,event:selEvent.name,event_id:selEvent.id,hours:curHours,role:document.getElementById('h-role').value.trim()})})
+  const d=await r.json()
+  btn.textContent='Submit Hours'
+  if(d.error){btn.disabled=false;alert(d.error);return}
+  showConfirm('✅','Hours Submitted!',`${curHours}h for "${selEvent.name}" submitted for approval.`,'',()=>showScreen('screen-vol-menu'))
+}
+
+async function goUpdateInfo(){
+  const r=await fetch(`/api/kiosk/volunteer-profile/${selVol.id}`)
+  const vol=await r.json()
+  document.getElementById('u-phone').value=vol.phone||''
+  let selInts=[];try{selInts=JSON.parse(vol.interests||'[]')}catch{}
+  document.getElementById('u-interests').innerHTML=allInterestTypes.map(it=>`<div class="int-chip ${selInts.includes(it.name)?'sel':''}" onclick="this.classList.toggle('sel')">${it.name}</div>`).join('')
+  const ec=vol.emergency_contact||{}
+  document.getElementById('u-ec-name').value=ec.name||''
+  document.getElementById('u-ec-rel').value=ec.relationship||''
+  document.getElementById('u-ec-phone').value=ec.phone||''
+  showScreen('screen-update')
+}
+async function submitUpdate(){
+  const updates=[]
+  const phone=document.getElementById('u-phone').value.trim()
+  const ints=[...document.querySelectorAll('#u-interests .int-chip.sel')].map(el=>el.textContent.trim())
+  const ecName=document.getElementById('u-ec-name').value.trim()
+  const ecRel=document.getElementById('u-ec-rel').value.trim()
+  const ecPhone=document.getElementById('u-ec-phone').value.trim()
+  if(phone) updates.push({field_name:'phone',new_value:phone})
+  if(ints.length) updates.push({field_name:'interests',new_value:JSON.stringify(ints)})
+  if(ecName&&ecPhone) updates.push({field_name:'emergency_contact',new_value:JSON.stringify({name:ecName,relationship:ecRel,phone:ecPhone})})
+  if(!updates.length){alert('No changes to submit.');return}
+  const r=await fetch('/api/kiosk/update-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volunteer_id:selVol.id,updates})})
+  const d=await r.json()
+  if(d.error){alert(d.error);return}
+  showConfirm('👤','Updates Submitted!',`${updates.length} update${updates.length>1?'s':''} submitted for review.`,'An admin will review and apply your changes.',()=>showScreen('screen-vol-menu'))
+}
+
+// ── ELIC FLOW ──
+function goElicPin(){
+  pinVal=''
+  document.getElementById('pin-display').textContent='____'
+  document.getElementById('pin-error').textContent=''
+  showScreen('screen-pin')
+}
+
+function addPin(d){
+  if(pinVal.length>=4)return
+  pinVal+=d
+  updatePinDisplay()
+  if(pinVal.length===4) setTimeout(submitPin,150)
+}
+function delPin(){pinVal=pinVal.slice(0,-1);updatePinDisplay()}
+function clearPin(){pinVal='';updatePinDisplay()}
+function updatePinDisplay(){
+  const masked='●'.repeat(pinVal.length)+'_'.repeat(4-pinVal.length)
+  document.getElementById('pin-display').textContent=masked
+}
+
+async function submitPin(){
+  document.getElementById('pin-error').textContent=''
+  const r=await fetch('/api/kiosk/elic-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pinVal})})
+  const d=await r.json()
+  if(d.error){
+    document.getElementById('pin-error').textContent=d.error
+    pinVal=''
+    document.getElementById('pin-display').textContent='____'
+    return
+  }
+  elicData=d.elic
+  const raw=d.events||[]
+  const today=new Date().toISOString().split('T')[0]
+  // Sort: open events first, then today, then upcoming, then past, then no date
+  elicEventList=raw.sort((a,b)=>{
+    const aOpen=(a.current_status==='open'||a.status==='open')?0:1
+    const bOpen=(b.current_status==='open'||b.status==='open')?0:1
+    if(aOpen!==bOpen) return aOpen-bOpen
+    const aDate=a.event_date||'9999'
+    const bDate=b.event_date||'9999'
+    // Today's events float to top
+    const aToday=aDate===today?0:1
+    const bToday=bDate===today?0:1
+    if(aToday!==bToday) return aToday-bToday
+    return aDate.localeCompare(bDate)
+  })
+  renderElicMenu()
+  showScreen('screen-elic-menu')
+}
+
+
+function renderOpeningChecklist(){
+  const {evname} = pendingAction
+  document.getElementById('opening-cl-event-name').textContent = evname
+  document.getElementById('opening-cl-sub').textContent = 'Complete before opening: ' + evname
+  const container = document.getElementById('opening-cl-items')
+  container.innerHTML = openingChecklistItems.map(item=>`
+    <div class="cl-item" id="ocl-item-${item.id}">
+      <div class="cl-label">${item.label}${item.required?'<span class="cl-req">Required</span>':''}</div>
+      ${item.hint?`<div class="cl-hint">${item.hint}</div>`:''}
+      ${item.item_type==='checkbox'?`
+        <div class="cl-check-btns">
+          <button class="cl-yes" id="ocl-y-${item.id}" onclick="setOpeningClResponse('${item.id}','true','${item.item_type}')">✅ Done</button>
+          <button class="cl-no" id="ocl-n-${item.id}" onclick="setOpeningClResponse('${item.id}','false','${item.item_type}')">❌ Not Done</button>
+        </div>`:
+      `<textarea class="cl-textarea" id="ocl-t-${item.id}" placeholder="${item.hint||'Enter notes…'}" oninput="setOpeningClResponse('${item.id}',this.value,'${item.item_type}')"></textarea>`}
+    </div>`).join('')
+  updateOpeningClBtn()
+}
+
+function setOpeningClResponse(id, val, type){
+  openingClResponses[id] = val
+  if(type==='checkbox'){
+    document.getElementById(`ocl-y-${id}`)?.classList.toggle('sel', val==='true')
+    document.getElementById(`ocl-n-${id}`)?.classList.toggle('sel', val==='false')
+  }
+  updateOpeningClBtn()
+}
+
+function updateOpeningClBtn(){
+  const allDone = openingChecklistItems.filter(i=>i.required).every(i=>openingClResponses[i.id]!==undefined&&openingClResponses[i.id]!=='')
+  document.getElementById('opening-cl-submit').disabled = !allDone
+}
+
+async function submitOpeningChecklist(){
+  // Save opening checklist responses then open the event
+  const responses = openingChecklistItems.map(item=>({
+    item_id: item.id, label: item.label, item_type: item.item_type,
+    response: openingClResponses[item.id]||''
+  }))
+  // Store responses with open event call
+  pendingAction.openingResponses = responses
+  await doOpenEvent()
+}
+
+let masterViewInterval = null
+
+async function goElicMasterView(){
+  showScreen('screen-elic-master')
+  await refreshMasterView()
+  // Auto-refresh every 10s
+  clearInterval(masterViewInterval)
+  masterViewInterval = setInterval(refreshMasterView, 10000)
+}
+
+async function refreshMasterView(){
+  const el = document.getElementById('master-sessions')
+  if(!el) return
+  try {
+    const r = await fetch('/api/kiosk/active-sessions')
+    const sessions = await r.json()
+    const sub = document.getElementById('master-sub')
+
+    if(!sessions.length){
+      if(sub) sub.textContent = 'No active sessions right now'
+      el.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted)">
+        <div style="font-size:40px;margin-bottom:12px">🕐</div>
+        <div style="font-weight:600">No one is currently clocked in</div>
+      </div>`
+      return
+    }
+
+    if(sub) sub.textContent = sessions.length + ' volunteer' + (sessions.length>1?'s':'') + ' currently active'
+
+    el.innerHTML = sessions.map(s=>{
+      const secs = Math.floor(parseFloat(s.elapsed_secs||0))
+      const h = Math.floor(secs/3600), m = Math.floor((secs%3600)/60), sec = secs%60
+      const elapsed = h+':'+(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec
+      const hrs = (secs/3600).toFixed(2)
+      const init = (s.volunteer_name||'?').split(' ').map(w=>w[0]).join('').substring(0,2).toUpperCase()
+      return `<div style="background:var(--surface);border:2px solid #86efad;border-radius:var(--radius);padding:16px 18px;margin-bottom:10px;display:flex;align-items:center;gap:14px">
+        <div style="width:44px;height:44px;border-radius:50%;background:#166534;color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;flex-shrink:0">${init}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:16px">${s.volunteer_name}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${s.event_name||'General volunteering'}${s.role?' · '+s.role:''}</div>
+          <div style="font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;color:#166534;margin-top:4px">${elapsed}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:13px;color:var(--muted);margin-bottom:8px">${hrs}h so far</div>
+          <button onclick="elicStopSession('${s.id}','${s.volunteer_name.replace(/'/g,"\\'")}')" style="background:#dc2626;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">🔴 Stop Clock</button>
+        </div>
+      </div>`
+    }).join('')
+  } catch(e){
+    document.getElementById('master-sessions').innerHTML = '<div style="color:var(--muted);text-align:center;padding:32px">Could not load sessions</div>'
+  }
+}
+
+async function elicStopSession(sessionId, name){
+  if(!confirm('Stop '+name+'\'s clock and submit their hours?')) return
+  try {
+    const r = await fetch('/api/kiosk/session/stop-by-id', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id: sessionId})
+    })
+    const d = await r.json()
+    if(d.error){ alert('Error: '+d.error); return }
+    await refreshMasterView()
+  } catch(e){ alert('Network error: '+e.message) }
+}
+
+function renderElicMenu(){
+  document.getElementById('elic-name').textContent=elicData.volunteer_name
+  document.getElementById('elic-role').textContent=elicData.is_master?'Master ELIC — All Events':'Event Lead'
+  const container=document.getElementById('elic-events')
+  if(!elicEventList.length){
+    container.innerHTML='<div style="text-align:center;padding:32px;color:var(--muted)">No events assigned to you. Contact an administrator.</div>'
+    return
+  }
+
+  const now=new Date()
+  const today=now.toISOString().split('T')[0]
+
+  function getStatus(e){ return e.current_status==='open'?'open':e.current_status==='close'?'closed':(e.status||'draft') }
+
+  // Partition events into sections
+  const openNow    = elicEventList.filter(e=>getStatus(e)==='open')
+  const todaySched = elicEventList.filter(e=>e.event_date===today&&getStatus(e)!=='open'&&getStatus(e)!=='closed')
+  const todayClosed= elicEventList.filter(e=>e.event_date===today&&getStatus(e)==='closed')
+  const upcoming   = elicEventList.filter(e=>e.event_date&&e.event_date>today&&getStatus(e)!=='closed')
+  const pastClosed = elicEventList.filter(e=>(e.event_date&&e.event_date<today)||(!e.event_date&&getStatus(e)==='closed'))
+  const undated    = elicEventList.filter(e=>!e.event_date&&getStatus(e)!=='open'&&getStatus(e)!=='closed')
+
+  // Sort today by start_time
+  const byTime=(a,b)=>(a.start_time||'99:99').localeCompare(b.start_time||'99:99')
+  todaySched.sort(byTime); openNow.sort(byTime); todayClosed.sort(byTime)
+  upcoming.sort((a,b)=>a.event_date.localeCompare(b.event_date)||byTime(a,b))
+
+  function minsUntilOpen(e){
+    if(!e.start_time||!e.event_date) return null
+    try{
+      const parts=e.start_time.toString().split(':')
+      const start=new Date(e.event_date+'T'+parts[0].padStart(2,'0')+':'+parts[1].padStart(2,'0')+':00')
+      return (start-now)/60000
+    }catch(ex){ return null }
+  }
+
+  function fmtCountdown(mins){
+    if(mins<=0) return null
+    const h=Math.floor(mins/60), m=Math.floor(mins%60), s=Math.floor((mins*60)%60)
+    if(h>0) return h+'h '+String(m).padStart(2,'0')+'m'
+    return String(m).padStart(2,'0')+'m '+String(s).padStart(2,'0')+'s'
+  }
+
+  function buildCard(e, idx){
+    const status=getStatus(e)
+    const isRS=e.stage==='rising_stars'
+    const rsBadge=isRS?'<span style="font-size:11px;background:#F3EEFF;color:#6D28D9;padding:2px 8px;border-radius:10px;font-weight:700;margin-left:6px">⭐ RS</span>':''
+    const statusColors={open:'#16A34A',closed:'#6B7280',draft:'#1D4ED8'}
+    const statusLabels={open:'🟢 Open',closed:'✓ Closed',draft:'Scheduled'}
+    const statusTag='<span style="font-size:12px;font-weight:700;color:'+( statusColors[status]||statusColors.draft)+'">'+(statusLabels[status]||status)+'</span>'
+    const timeStr=e.start_time?(e.end_time?fmtTime(e.start_time)+' – '+fmtTime(e.end_time):fmtTime(e.start_time)):''
+    const todayBadge=e.event_date===today?'<span style="background:#FCD34D;color:#78350F;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:800;margin-right:6px">TODAY</span>':''
+    const dateStr=e.event_date?fmtDate(e.event_date):'No date set'
+
+    // Determine if open button is locked
+    const mins=minsUntilOpen(e)
+    let actionArea=''
+    if(status==='open'){
+      const hasYouth = (e.production_id && isRS) || e.program_id
+      actionArea='<div style="display:flex;gap:8px;flex-wrap:wrap">'
+        +'<button class="elic-close-btn" onclick="handleElicCloseIdx('+idx+')">🔒 Close Event</button>'
+        +(e.production_id?'<button style="background:var(--purple-light);color:var(--purple);border:2px solid #C4B5FD;border-radius:var(--radius);padding:12px 20px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer" onclick="handleProdSignInIdx('+idx+')">🎭 Production Sign-In</button>':'')
+        +(hasYouth?'<button style="background:var(--green-light);color:var(--green);border:2px solid #86EFAD;border-radius:var(--radius);padding:12px 20px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer" onclick="handleYouthSignInIdx('+idx+')">👶 Youth Sign-In</button>':'')
+        +'</div>'
+    } else if(status==='closed'){
+      actionArea='<div style="font-size:13px;color:var(--hint);padding:6px 0">Event closed ✓</div>'
+    } else if(mins!==null && mins>60){
+      // Locked — show countdown
+      actionArea='<div style="display:flex;align-items:center;gap:12px">'
+        +(function(){var parts=e.start_time.toString().split(':');var startMs=new Date(e.event_date+'T'+parts[0].padStart(2,'0')+':'+parts[1].padStart(2,'0')+':00').getTime();var unlockMs=startMs-60*60*1000;var ud=new Date(unlockMs);var uh=ud.getHours(),um=ud.getMinutes();var ampm=uh>=12?'pm':'am',hr12=uh%12||12;var timeStr=hr12+':'+(um<10?'0':'')+um+ampm;var dateStr=(ud.getMonth()+1)+'/'+(ud.getDate())+'/'+(String(ud.getFullYear()).slice(-2));return '<button disabled style="background:#f3f4f6;color:#9ca3af;border:2px solid #e5e7eb;border-radius:var(--radius);padding:12px 20px;font-family:inherit;font-size:14px;font-weight:600;cursor:not-allowed">&#x1F512; Opens at '+timeStr+' on '+dateStr+'</button>';})()
+        +'<div id="cd-'+e.id+'" style="font-size:20px;font-weight:800;color:var(--teal);font-variant-numeric:tabular-nums">—</div>'
+        +'</div>'
+    } else {
+      actionArea='<button class="elic-open-btn" onclick="handleElicOpenIdx('+idx+')">🟢 Open Event</button>'
+    }
+
+    const cardBorder=status==='open'?'border:2px solid #86EFAD;':status==='closed'?'border:1px solid var(--border);opacity:0.7;':mins!==null&&mins>60?'border:2px dashed #d1d5db;':'border:2px solid var(--border);'
+    const cardBg=status==='open'?'background:#f0fdf4;':status==='closed'?'background:var(--bg);':'background:var(--surface);'
+    return '<div class="elic-event-card" style="'+cardBg+cardBorder+'border-radius:var(--radius);padding:16px 20px;margin-bottom:10px">'
+      +'<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px">'
+      +'<div>'
+      +'<div style="font-size:17px;font-weight:700;margin-bottom:4px">'+e.name+rsBadge+'</div>'
+      +'<div style="font-size:13px;color:var(--muted)">'+todayBadge+dateStr+(timeStr?' · '+timeStr:'')+'</div>'
+      +'</div>'
+      +statusTag
+      +'</div>'
+      +actionArea
+      +'</div>'
+  }
+
+  function section(label, icon, events, color){
+    if(!events.length) return ''
+    return '<div style="margin-bottom:20px">'
+      +'<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;color:'+color+';margin-bottom:8px;display:flex;align-items:center;gap:6px">'+icon+' '+label+'</div>'
+      +events.map((e)=>buildCard(e, elicEventList.indexOf(e))).join('')
+      +'</div>'
+  }
+
+  container.innerHTML=''
+    +section('Currently Open','🟢',openNow,'#16A34A')
+    +section("Today's Events",'📅',todaySched,'#1D4ED8')
+    +section("Closed Today",'✓',todayClosed,'#6B7280')
+    +(upcoming.length?'<details style="margin-bottom:20px"><summary style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;color:#6B7280;cursor:pointer;margin-bottom:8px;list-style:none;display:flex;align-items:center;gap:6px">📆 Upcoming Events ('+upcoming.length+')</summary><div style="margin-top:8px">'+upcoming.map(e=>buildCard(e,elicEventList.indexOf(e))).join('')+'</div></details>':'')
+    +(undated.length?section('No Date Set','❓',undated,'#9CA3AF'):'')
+    +(pastClosed.length?'<details style="margin-bottom:20px"><summary style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;color:#9CA3AF;cursor:pointer;margin-bottom:8px;list-style:none;display:flex;align-items:center;gap:6px">🗂 Past / Closed ('+pastClosed.length+')</summary><div style="margin-top:8px">'+pastClosed.map(e=>buildCard(e,elicEventList.indexOf(e))).join('')+'</div></details>':'')
+
+  // Start countdown timer for any locked events
+  startCountdownTimers()
+}
+
+let _countdownTimer=null
+function startCountdownTimers(){
+  if(_countdownTimer) clearInterval(_countdownTimer)
+  _countdownTimer=setInterval(function(){
+    const now=new Date()
+    elicEventList.forEach(function(e){
+      const el=document.getElementById('cd-'+e.id)
+      if(!el) return
+      if(!e.start_time||!e.event_date) return
+      try{
+        const parts=e.start_time.toString().split(':')
+        const start=new Date(e.event_date+'T'+parts[0].padStart(2,'0')+':'+parts[1].padStart(2,'0')+':00')
+        const mins=(start-now)/60000
+        if(mins<=60){
+          // Crossed the threshold — re-render to show the Open button
+          clearInterval(_countdownTimer)
+          renderElicMenu()
+          return
+        }
+        const totalSecs=Math.max(0,Math.round((start-now)/1000))
+        const d=Math.floor(totalSecs/86400)
+        const h=Math.floor((totalSecs%86400)/3600)
+        const m=Math.floor((totalSecs%3600)/60)
+        const s=totalSecs%60
+        el.textContent=(d>0?d+'d ':'')+String(h).padStart(2,'0')+'h '+String(m).padStart(2,'0')+'m '+String(s).padStart(2,'0')+'s'
+      }catch(ex){}
+    })
+  },1000)
+}
+
+function fmtTime(t){
+  if(!t)return''
+  try{const[h,m]=t.split(':');const hr=parseInt(h);return`${hr>12?hr-12:hr||12}:${m}${hr>=12?'pm':'am'}`}catch{return t}
+}
+
+async function openEvent(evid,evname){
+  pendingAction={type:'open',evid,evname}
+  // Load opening checklist items
+  try{
+    const r=await fetch('/api/opening-checklist-items')
+    openingChecklistItems=await r.json()
+  }catch(e){
+    openingChecklistItems=[]
+  }
+  openingClResponses={}
+  if(openingChecklistItems.length){
+    renderOpeningChecklist()
+    showScreen('screen-opening-checklist')
+  } else {
+    // No opening checklist — open directly
+    doOpenEvent()
+  }
+}
+function handleElicOpenIdx(idx){
+  const e=elicEventList[idx]
+  if(e) openEvent(e.id,e.name)
+}
+function handleElicCloseIdx(idx){
+  const e=elicEventList[idx]
+  if(e) startClose(e.id,e.name)
+}
+// Legacy btn-based handlers kept for safety
+function handleElicOpen(btn){
+  const idx=parseInt(btn.getAttribute('data-eidx'))
+  handleElicOpenIdx(idx)
+}
+function handleElicClose(btn){
+  const idx=parseInt(btn.getAttribute('data-eidx'))
+  handleElicCloseIdx(idx)
+}
+function handleProdSignInIdx(idx){
+  const btn={getAttribute:()=>idx}
+  handleProdSignIn({getAttribute:()=>String(idx)})
+}
+function handleYouthSignInIdx(idx){
+  handleYouthSignIn({getAttribute:()=>String(idx)})
+}
+async function doOpenEvent(){
+  const {evid,evname,openingResponses}=pendingAction
+  const r=await fetch('/api/kiosk/open-event-checklist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({elic_id:elicData.id,event_id:evid,responses:openingResponses||[]})})
+  const d=await r.json()
+  if(d.error){alert(d.error);return}
+  elicEventList=elicEventList.map(e=>e.id===evid?{...e,current_status:'open',status:'open'}:e)
+  renderElicMenu()
+  showConfirm('🟢','Event Opened!',`"${evname}" is now open for hour logging.`,'Volunteers can now log their hours.',()=>{renderElicMenu();showScreen('screen-elic-menu')})
+}
+
+async function startClose(evid,evname){
+  closingEvent={id:evid,name:evname}
+  try {
+    const r=await fetch('/api/checklist-items')
+    const data=await r.json()
+    checklistItems=Array.isArray(data)?data:[]
+    if(!Array.isArray(data)) console.error('checklist-items returned non-array:',data)
+  } catch(e) {
+    checklistItems=[]
+    console.error('Failed to load checklist items:',e)
+  }
+  clResponses={}
+  renderChecklist()
+  showScreen('screen-checklist')
+}
+
+function renderChecklist(){
+  document.getElementById('cl-event-name').textContent=closingEvent.name
+  document.getElementById('cl-subtitle').textContent='Complete the closing checklist before locking up'
+  const container=document.getElementById('cl-items')
+  container.innerHTML=checklistItems.map(item=>`
+    <div class="cl-item" id="cl-item-${item.id}">
+      <div class="cl-label">${item.label}${item.required?'<span class="cl-req">Required</span>':''}</div>
+      ${item.hint?`<div class="cl-hint">${item.hint}</div>`:''}
+      ${item.item_type==='checkbox'?`
+        <div class="cl-check-btns">
+          <button class="cl-yes" id="cl-y-${item.id}" onclick="setClResponse('${item.id}','true','${item.item_type}')">✅ Done</button>
+          <button class="cl-no" id="cl-n-${item.id}" onclick="setClResponse('${item.id}','false','${item.item_type}')">❌ Not Done</button>
+        </div>`:
+      item.item_type==='rating'?`
+        <div class="cl-rating">
+          ${[1,2,3,4,5].map(n=>`<button class="cl-star" id="cl-r-${item.id}-${n}" onclick="setClResponse('${item.id}','${n}','${item.item_type}')">${n}</button>`).join('')}
+        </div>`:
+      `<textarea class="cl-textarea" id="cl-t-${item.id}" placeholder="${item.hint||'Enter your notes here…'}" oninput="setClResponse('${item.id}',this.value,'${item.item_type}')"></textarea>`}
+    </div>`).join('')
+  updateClSubmitBtn()
+}
+
+function setClResponse(id,val,type){
+  clResponses[id]=val
+  if(type==='checkbox'){
+    document.getElementById(`cl-y-${id}`)?.classList.toggle('sel',val==='true')
+    document.getElementById(`cl-n-${id}`)?.classList.toggle('sel',val==='false')
+  } else if(type==='rating'){
+    for(let n=1;n<=5;n++) document.getElementById(`cl-r-${id}-${n}`)?.classList.toggle('sel',String(n)===String(val))
+  }
+  updateClSubmitBtn()
+}
+
+function updateClSubmitBtn(){
+  const allReqDone=checklistItems.filter(i=>i.required).every(i=>clResponses[i.id]!==undefined&&clResponses[i.id]!=='')
+  document.getElementById('cl-submit').disabled=!allReqDone
+}
+
+async function submitChecklist(){
+  const responses=checklistItems.map(item=>({
+    item_id:item.id,label:item.label,item_type:item.item_type,
+    response:clResponses[item.id]||''
+  }))
+  try {
+    const r=await fetch('/api/kiosk/close-event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({elic_id:elicData.id,event_id:closingEvent.id,responses})})
+    let d
+    try { d=await r.json() } catch(e){ alert('Server error closing event ('+r.status+'). Please try again.'); return }
+    if(d.error){alert(d.error);return}
+    elicEventList=elicEventList.map(e=>e.id===closingEvent.id?{...e,current_status:'close',status:'closed'}:e)
+    showConfirm('🔒','Event Closed!',`"${closingEvent.name}" has been closed.`,'Checklist submitted to admin portal.',()=>{renderElicMenu();showScreen('screen-elic-menu')})
+  } catch(err) {
+    alert('Network error: '+err.message+'. Please check connection and try again.')
+  }
+}
+
+
+
+// ── ELIC YOUTH SIGN-IN (Rising Stars) ──
+function handleYouthSignIn(btn){
+  const idx=parseInt(btn.getAttribute('data-eidx'))
+  const e=elicEventList[idx]
+  if(e) openEysSignIn(e)
+}
+
+async function openEysSignIn(evt){
+  eysEventId=evt.id
+  eysEventData=evt
+  const isProgram = !evt.production_id && evt.program_id
+  document.getElementById('eys-prod-name').textContent = evt.production_name || evt.program_name || evt.name
+  document.getElementById('eys-event-name').textContent = (isProgram ? '📚 ' : '⭐ Rising Stars · ') + evt.name
+  document.getElementById('eys-roster').innerHTML='<div style="text-align:center;padding:32px;color:var(--muted)">Loading…</div>'
+  showScreen('screen-elic-youth-signin')
+
+  // Load youth — use event-specific list if available, otherwise all active youth
+  try {
+    const r = await fetch(`/api/kiosk/youth-for-event/${evt.id}`)
+    const d = await r.json()
+    allYouthKiosk = Array.isArray(d) && d.length > 0 ? d : []
+    // If no enrolled youth found, fall back to all active youth
+    if(!allYouthKiosk.length){
+      const r2 = await fetch('/api/kiosk/youth')
+      const d2 = await r2.json()
+      allYouthKiosk = Array.isArray(d2) ? d2 : []
+    }
+  } catch(e){
+    const r2 = await fetch('/api/kiosk/youth')
+    const d2 = await r2.json()
+    allYouthKiosk = Array.isArray(d2) ? d2 : []
+  }
+
+  // Load current sign-ins for this event
+  const sr = await fetch(`/api/youth-sign-ins?event_id=${evt.id}`)
+  eysRoster = await sr.json()
+  renderEysRoster()
+}
+
+function renderEysRoster(){
+  const signedIn=eysRoster.filter(r=>!r.signed_out_at)
+  const signedOut=eysRoster.filter(r=>r.signed_out_at)
+  document.getElementById('eys-stats').textContent=`${signedIn.length} present · ${signedOut.length} signed out`
+  document.getElementById('eys-search').value=''
+  filterEysRoster()
+}
+
+let eysCurrentTab = 'roster'
+let eysCarpools = []
+
+function setEysTab(tab){
+  eysCurrentTab = tab
+  document.getElementById('eys-panel-roster').style.display   = tab==='roster'   ? '' : 'none'
+  document.getElementById('eys-panel-carpools').style.display = tab==='carpools' ? '' : 'none'
+  const rBtn = document.getElementById('eys-tab-roster')
+  const cBtn = document.getElementById('eys-tab-carpools')
+  if(rBtn){ rBtn.style.borderBottomColor = tab==='roster'   ? 'var(--teal)' : 'transparent'; rBtn.style.color = tab==='roster'   ? 'var(--teal-dark)' : 'var(--muted)' }
+  if(cBtn){ cBtn.style.borderBottomColor = tab==='carpools' ? 'var(--teal)' : 'transparent'; cBtn.style.color = tab==='carpools' ? 'var(--teal-dark)' : 'var(--muted)' }
+  if(tab==='carpools') loadEysCarpools()
+}
+
+async function loadEysCarpools(){
+  const el = document.getElementById('eys-carpools-list')
+  if(!el) return
+  el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted)">Loading carpools…</div>'
+  try {
+    const r = await fetch(`/api/carpools?event_id=${eysEventId}`)
+    eysCarpools = await r.json()
+    if(!Array.isArray(eysCarpools)) eysCarpools = []
+  } catch(e) {
+    eysCarpools = []
+  }
+  renderEysCarpools()
+}
+
+function renderEysCarpools(){
+  const el = document.getElementById('eys-carpools-list')
+  if(!el) return
+  if(!eysCarpools.length){
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)"><div style="font-size:32px;margin-bottom:10px">🚗</div><div>No carpools for this event</div></div>'
+    return
+  }
+  el.innerHTML = eysCarpools.map(cp=>{
+    const members = cp.members || []
+    const presentIds = new Set(eysRoster.filter(r=>!r.signed_out_at).map(r=>r.youth_id))
+    const present = members.filter(m=>presentIds.has(m.youth_id||m.id))
+    const notHere  = members.filter(m=>!presentIds.has(m.youth_id||m.id))
+    return `<div style="background:var(--surface);border:2px solid var(--border);border-left:4px solid #3b82f6;border-radius:var(--radius-lg);padding:18px;margin-bottom:12px;box-shadow:var(--shadow)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="flex:1">
+          <div style="font-size:17px;font-weight:700;color:var(--teal-dark);margin-bottom:4px">🚗 ${cp.name}</div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
+            Driver: <strong style="color:var(--text)">${cp.driver_name}</strong>
+            ${cp.driver_phone?` · ${cp.driver_phone}`:''}
+            <span style="margin-left:8px;font-weight:600;color:${present.length?'var(--green)':'var(--hint)'}">
+              ${present.length}/${members.length} here
+            </span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+            ${members.map(m=>{
+              const here = presentIds.has(m.youth_id||m.id)
+              return `<span style="background:${here?'var(--green-light)':'var(--bg)'};border:1.5px solid ${here?'#86EFAD':'var(--border)'};border-radius:20px;padding:5px 12px;font-size:13px;font-weight:600;color:${here?'var(--green)':'var(--muted)'}">
+                ${here?'✓ ':''}${m.first_name} ${(m.last_name||'')[0]||''}.
+              </span>`
+            }).join('')}
+          </div>
+        </div>
+        ${present.length > 0 ? `
+          <button onclick="eysSignOutCarpool('${cp.id}','${cp.name.replace(/'/g,"\\'")}')"
+            style="background:var(--orange-light);color:var(--orange);border:2px solid #FED7AA;border-radius:var(--radius);padding:12px 18px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;flex-shrink:0;white-space:nowrap">
+            Pick Up All
+          </button>` : `
+          <span style="font-size:12px;color:var(--hint);padding:12px">Not here yet</span>`}
+      </div>
+    </div>`
+  }).join('')
+}
+
+async function eysSignOutCarpool(carpoolId, carpoolName){
+  if(!confirm(`Sign out everyone in ${carpoolName}?`)) return
+  const r = await fetch('/api/pickup/carpool-signout',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({carpool_id:carpoolId, event_id:eysEventId, signed_out_by:'ELIC'})
+  })
+  const d = await r.json()
+  if(d.error){ alert(d.error); return }
+  // Refresh roster and carpools
+  const sr = await fetch(`/api/youth-sign-ins?event_id=${eysEventId}`)
+  eysRoster = await sr.json()
+  renderEysRoster()
+  renderEysCarpools()
+}
+
+let eysView='card'
+function setEysView(v){
+  eysView=v
+  filterEysRoster()
+}
+
+function filterEysRoster(){
+  const q=document.getElementById('eys-search')?.value.toLowerCase()||''
+  const container=document.getElementById('eys-roster')
+  const activeSignIn={}
+  eysRoster.forEach(r=>{ if(!r.signed_out_at) activeSignIn[r.youth_id]=r })
+
+  let roster=[...allYouthKiosk]
+  eysRoster.forEach(r=>{
+    if(!roster.find(y=>y.id===r.youth_id))
+      roster.push({id:r.youth_id,first_name:r.first_name||'?',last_name:r.last_name||''})
+  })
+  if(q) roster=roster.filter(y=>(y.first_name+' '+y.last_name).toLowerCase().includes(q))
+
+  const stats=document.getElementById('eys-stats')
+  const present=Object.keys(activeSignIn).length
+  if(stats) stats.textContent=roster.length+' participants · '+present+' currently here'
+
+  if(eysView==='card'){
+    const cards=roster.map(y=>{
+      const rec=activeSignIn[y.id]
+      const isIn=!!rec
+      const bg=isIn?'var(--green-light)':'var(--surface)'
+      const border=isIn?'#86EFAD':'var(--border)'
+      const sinceStr=isIn?'Here since '+new Date(rec.signed_in_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}):'Not here'
+      const sinceColor=isIn?'var(--green)':'var(--hint)'
+      const initials=(y.first_name||'?')[0]+(y.last_name||'?')[0]
+      let card='<div style="background:'+bg+';border:2.5px solid '+border+';border-radius:var(--radius-lg);padding:16px;display:flex;flex-direction:column;gap:10px">'
+      card+='<div style="display:flex;align-items:center;gap:10px">'
+      card+='<div style="width:42px;height:42px;border-radius:50%;background:'+(isIn?'var(--green)':'var(--hint)')+';color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;flex-shrink:0">'+initials+'</div>'
+      card+='<div style="flex:1"><div style="font-weight:700;font-size:15px">'+y.first_name+' '+y.last_name+'</div>'
+      card+='<div style="font-size:11px;color:'+sinceColor+'">'+sinceStr+'</div></div>'
+      card+='<div style="font-size:12px;font-weight:700;color:'+(isIn?'var(--green)':'var(--hint)')+'">'+( isIn?'✅ IN':'◯')+'</div>'
+      card+='</div>'
+      card+='<div style="display:flex;gap:8px">'
+      if(!isIn) card+='<button style="flex:1;padding:10px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:14px;font-weight:600;cursor:pointer" data-yid="'+y.id+'" data-yname="'+y.first_name+' '+y.last_name+'" onclick="eysStartDropOff(this)">Drop Off</button>'
+      if(isIn) card+='<button style="flex:1;padding:10px;background:var(--orange-light);color:var(--orange);border:2px solid #FED7AA;border-radius:var(--radius);font-family:inherit;font-size:14px;font-weight:600;cursor:pointer" data-rid="'+rec.id+'" data-yid="'+y.id+'" data-yname="'+y.first_name+' '+y.last_name+'" onclick="eysStartPickUp(this)">Pick Up</button>'
+      card+='</div></div>'
+      return card
+    }).join('')
+    container.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'+(cards||'<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--muted)">No participants</div>')+'</div>'
+  } else {
+    const rows=roster.map(y=>{
+      const rec=activeSignIn[y.id]
+      const isIn=!!rec
+      const initials=(y.first_name||'?')[0]+(y.last_name||'?')[0]
+      let row='<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)'+(isIn?';background:var(--teal-light);border-radius:8px;padding-left:8px':'')+'">'
+      row+='<div style="width:36px;height:36px;border-radius:50%;background:'+(isIn?'var(--green)':'var(--hint)')+';color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">'+initials+'</div>'
+      row+='<div style="flex:1"><div style="font-weight:600;font-size:15px">'+y.first_name+' '+y.last_name+'</div>'
+      if(isIn) row+='<div style="font-size:11px;color:var(--green)">Dropped off by '+(rec.signed_in_by||'—')+'</div>'
+      row+='</div>'
+      if(!isIn) row+='<button style="padding:8px 14px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer" data-yid="'+y.id+'" data-yname="'+y.first_name+' '+y.last_name+'" onclick="eysStartDropOff(this)">Drop Off</button>'
+      if(isIn) row+='<button style="padding:8px 14px;background:var(--orange-light);color:var(--orange);border:2px solid #FED7AA;border-radius:var(--radius);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer" data-rid="'+rec.id+'" data-yid="'+y.id+'" data-yname="'+y.first_name+' '+y.last_name+'" onclick="eysStartPickUp(this)">Pick Up</button>'
+      row+='</div>'
+      return row
+    }).join('')
+    container.innerHTML='<div>'+rows+'</div>'
+  }
+}
+
+
+async function eysStartDropOff(btn){
+  const yid=btn.getAttribute('data-yid')
+  const yname=btn.getAttribute('data-yname')
+  eysDropOffTarget={yid,yname}
+  // Load authorized pickups
+  const r=await fetch(`/api/kiosk/authorized-pickups/${yid}`)
+  eysAuthPickups=await r.json()
+  eysAuthAction='dropoff'
+  document.getElementById('eys-auth-title').textContent=`Drop Off: ${yname}`
+  document.getElementById('eys-auth-label').textContent='Dropped Off By'
+  document.getElementById('eys-auth-name').value=''
+  renderEysAuthList()
+  showScreen('screen-eys-auth')
+}
+
+async function eysStartPickUp(btn){
+  const rid=btn.getAttribute('data-rid')
+  const yid=btn.getAttribute('data-yid')
+  const yname=btn.getAttribute('data-yname')
+  eysSignOutTarget=rid
+  eysDropOffTarget={yid,yname}
+  const r=await fetch(`/api/kiosk/authorized-pickups/${yid}`)
+  eysAuthPickups=await r.json()
+  eysAuthAction='pickup'
+  document.getElementById('eys-auth-title').textContent=`Pick Up: ${yname}`
+  document.getElementById('eys-auth-label').textContent='Picked Up By'
+  document.getElementById('eys-auth-name').value=''
+  renderEysAuthList()
+  showScreen('screen-eys-auth')
+}
+
+// eysSignInNew replaced by card-button approach
+
+function renderEysAuthList(){
+  const container=document.getElementById('eys-auth-list')
+  if(!eysAuthPickups.length){container.innerHTML='';return}
+  container.innerHTML=`<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--hint);margin-bottom:8px">AUTHORIZED LIST</div>`+
+    eysAuthPickups.map(p=>`<div onclick="document.getElementById('eys-auth-name').value='${p.name}';checkEysAuth()" style="background:var(--bg);border:2px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:6px;cursor:pointer;transition:all 0.15s" onmouseenter="this.style.borderColor='var(--teal)'" onmouseleave="this.style.borderColor='var(--border)'">
+      <div style="font-weight:600;font-size:15px">${p.name}</div>
+      <div style="font-size:12px;color:var(--muted)">${p.relationship||''}${p.phone?' · '+p.phone:''}</div>
+    </div>`).join('')+
+    `<div style="margin:10px 0;text-align:center;font-size:12px;color:var(--hint)">— or enter manually —</div>`
+}
+
+function checkEysAuth(){
+  const name=document.getElementById('eys-auth-name').value.trim()
+  const isAuth=eysAuthPickups.some(p=>p.name.toLowerCase()===name.toLowerCase())
+  const warn=document.getElementById('eys-auth-warn')
+  if(warn) warn.style.display=name&&!isAuth&&eysAuthPickups.length?'block':'none'
+}
+
+async function eysConfirmPerson(){
+  const name=document.getElementById('eys-auth-name').value.trim()
+  if(!name){alert('Please enter a name');return}
+  const isAuth=eysAuthPickups.some(p=>p.name.toLowerCase()===name.toLowerCase())
+  if(!isAuth&&eysAuthPickups.length){
+    // Notify admin
+    fetch('/api/kiosk/unauthorized-pickup-notify',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({youth_id:eysDropOffTarget.yid,pickup_name:name,action:eysAuthAction})})
+  }
+  if(eysAuthAction==='dropoff'){
+    await eysDoSignInWithName(name)
+  } else {
+    await eysDoSignOutWithName(name)
+  }
+}
+
+async function eysDoSignInWithName(parentName){
+  const r=await fetch('/api/youth-sign-ins',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({youth_id:eysDropOffTarget.yid,event_id:eysEventId,signed_in_by:parentName})
+  })
+  const d=await r.json()
+  if(d.error){alert(d.error);return}
+  // Update roster — remove old entry for this youth and add new one
+  eysRoster=eysRoster.filter(e=>e.youth_id!==eysDropOffTarget.yid)
+  eysRoster.push(d)
+  filterEysRoster()
+  showScreen('screen-elic-youth-signin')
+}
+
+async function eysDoSignOutWithName(parentName){
+  const r=await fetch(`/api/youth-sign-ins/${eysSignOutTarget}/sign-out`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({signed_out_by:parentName})
+  })
+  const d=await r.json()
+  if(d.error){alert(d.error);return}
+  // Update roster entry with signed_out_at
+  eysRoster=eysRoster.map(e=>e.id===eysSignOutTarget?{...e,...d,signed_out_at:d.signed_out_at||new Date().toISOString()}:e)
+  eysSignOutTarget=null
+  filterEysRoster()
+  showScreen('screen-elic-youth-signin')
+}
+
+async function eysDoSignIn(){
+  const youthId=document.getElementById('eys-new-youth').value
+  const parent=document.getElementById('eys-new-parent').value.trim()
+  if(!youthId){alert('Please select a participant.');return}
+  const r=await fetch('/api/youth-sign-ins',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({youth_id:youthId,event_id:eysEventId,signed_in_by:parent})
+  })
+  const d=await r.json()
+  if(d.error){alert(d.error);return}
+  eysRoster.push(d)
+  renderEysRoster()
+  showScreen('screen-elic-youth-signin')
+}
+
+async function eysDoSignOut(){
+  const parent=document.getElementById('eys-out-parent').value.trim()
+  const r=await fetch(`/api/youth-sign-ins/${eysSignOutTarget}/sign-out`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({signed_out_by:parent})
+  })
+  const d=await r.json()
+  if(d.error){alert(d.error);return}
+  eysRoster=eysRoster.map(r=>r.id===eysSignOutTarget?d:r)
+  eysSignOutTarget=null
+  renderEysRoster()
+  showScreen('screen-elic-youth-signin')
+}
+
+// ── PRODUCTION SIGN-IN ──
+function handleProdSignIn(btn){
+  const idx=parseInt(btn.getAttribute('data-eidx'))
+  const e=elicEventList[idx]
+  if(e) openProdSignIn(e)
+}
+
+let psConflicts=[]
+async function openProdSignIn(evt){
+  psEventId=evt.id
+  document.getElementById('ps-prod-name').textContent=evt.production_name||'Production Sign-In'
+  document.getElementById('ps-event-name').textContent=evt.name+(evt.event_date?' · '+fmtDate(evt.event_date):'')
+  document.getElementById('ps-roster').innerHTML='<div style="text-align:center;padding:32px;color:var(--muted)">Loading roster…</div>'
+  showScreen('screen-prod-signin')
+
+  const prodId=evt.production_id||''
+  const [rosterResp, conflictsResp]=await Promise.all([
+    fetch(`/api/kiosk/production-roster/${evt.id}`).then(r=>r.json()).catch(()=>({members:[]})),
+    prodId?fetch(`/api/productions/${prodId}/conflicts`).then(r=>r.json()).catch(()=>[]):Promise.resolve([])
+  ])
+  if(rosterResp.error){document.getElementById('ps-roster').innerHTML=`<div style="text-align:center;padding:32px;color:var(--muted)">${rosterResp.error}</div>`;return}
+  psRoster=rosterResp.members||[]
+  // Keep only today's approved conflicts
+  const today=new Date().toISOString().split('T')[0]
+  psConflicts=(Array.isArray(conflictsResp)?conflictsResp:[]).filter(c=>c.approved&&(!c.event_date||c.event_date===today))
+  renderPsRoster()
+}
+
+function renderPsRoster(){
+  const signedIn=psRoster.filter(m=>m.signed_in).length
+  document.getElementById('ps-stats').textContent=`${psRoster.length} members · ${signedIn} signed in`
+  document.getElementById('ps-search').value=''
+  filterPsRoster()
+}
+
+function filterPsRoster(){
+  const q=document.getElementById('ps-search').value.toLowerCase()
+  const filtered=q?psRoster.filter(m=>m.volunteer_name.toLowerCase().includes(q)):psRoster
+  const container=document.getElementById('ps-roster')
+  if(!filtered.length){container.innerHTML='<div style="text-align:center;padding:24px;color:var(--muted)">No members found</div>';return}
+
+  const conflictStyles={absent:{bg:'#fef2f2',border:'#fca5a5',badge:'🔴 Absent',badgeBg:'#dc2626'},
+    sick:{bg:'#fef2f2',border:'#fca5a5',badge:'🤒 Sick',badgeBg:'#dc2626'},
+    late:{bg:'#fffbeb',border:'#fcd34d',badge:'🟡 Late',badgeBg:'#d97706'},
+    leaving_early:{bg:'#fffbeb',border:'#fcd34d',badge:'🟠 Leaving Early',badgeBg:'#d97706'}}
+
+  // Build conflict lookup by volunteer_id
+  const conflictByVol={}
+  psConflicts.forEach(c=>{if(c.volunteer_id)conflictByVol[c.volunteer_id]=c})
+
+  // Group by department
+  const byDept={}
+  filtered.forEach(m=>{const d=m.department||'General';if(!byDept[d])byDept[d]=[];byDept[d].push(m)})
+
+  container.innerHTML=Object.entries(byDept).map(([dept,members])=>`
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--hint);margin-bottom:6px">${dept}</div>
+      ${members.map(m=>{
+        const[bg,col]=avc(m.volunteer_name)
+        const isIn=m.signed_in
+        const conflict=conflictByVol[m.volunteer_id]
+        const cs=conflict?conflictStyles[conflict.status]||conflictStyles.absent:null
+        const rowBg=cs?cs.bg:isIn?'var(--green-light)':'var(--surface)'
+        const rowBorder=cs?cs.border:isIn?'#86EFAD':'var(--border)'
+        return`<div style="background:${rowBg};border:2px solid ${rowBorder};border-radius:var(--radius);padding:14px 18px;display:flex;align-items:center;gap:14px;cursor:pointer;transition:all 0.15s;margin-bottom:6px"
+          onclick="psMemberTap('${m.volunteer_id}','${m.member_id}','${m.attendance_id||''}',${isIn&&!conflict},'${m.volunteer_name}','${m.role||''}')">
+          <div style="width:42px;height:42px;border-radius:50%;background:${bg};color:${col};display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;flex-shrink:0">${ini(m.volunteer_name)}</div>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:16px">${m.volunteer_name}</div>
+            <div style="font-size:13px;color:var(--muted)">${m.role||''}${m.department?' · '+m.department:''}</div>
+            ${conflict?`<div style="font-size:12px;font-weight:600;color:${cs.badgeBg};margin-top:3px">${cs.badge}${conflict.notes?' — '+conflict.notes:''} ${conflict.source==='portal'?'(self-reported)':'(staff entered)'}</div>`:''}
+          </div>
+          <div style="font-size:13px;font-weight:700;color:${cs?cs.badgeBg:isIn?'var(--green)':'var(--hint)'}">
+            ${cs?cs.badge.split(' ')[0]:isIn?'✅ IN':'◯ OUT'}
+          </div>
+        </div>`
+      }).join('')}
+    </div>`).join('')
+}
+
+function psMemberTap(volId, memberId, attId, isIn, name, role){
+  if(isIn){
+    // Show sign-out confirmation
+    psSignOutTarget={volId,attId,name,role,eventId:psEventId}
+    document.getElementById('pso-name').textContent=name
+    document.getElementById('pso-role').textContent=role||'Cast/Crew'
+    const m=psRoster.find(r=>r.volunteer_id===volId)
+    const sinceStr=m?.signed_in_at?'Signed in '+new Date(m.signed_in_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}):''
+    document.getElementById('pso-time').textContent=sinceStr
+    // Show full event hours
+    const evt=elicEventList.find(e=>e.id===psEventId)
+    let hoursStr='—'
+    if(evt?.start_time&&evt?.end_time){
+      const[sh,sm]=evt.start_time.toString().split(':').map(Number)
+      const[eh,em]=evt.end_time.toString().split(':').map(Number)
+      const hrs=((eh*60+em)-(sh*60+sm))/60
+      if(hrs>0) hoursStr=hrs.toFixed(1)+'h'
+    }
+    const hoursEl=document.getElementById('pso-hours')
+    if(hoursEl) hoursEl.textContent=hoursStr
+    showScreen('screen-prod-signout')
+  } else {
+    // Sign in immediately
+    psMemberSignIn(volId,psEventId,name)
+  }
+}
+
+async function psMemberSignIn(volId,eventId,name){
+  const r=await fetch('/api/kiosk/production-signin',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({volunteer_id:volId,event_id:eventId})
+  })
+  const d=await r.json()
+  if(d.error){
+    if(d.error==='Already signed in'){
+      // Just refresh
+      const evt=elicEventList.find(e=>e.id===eventId)
+      if(evt) openProdSignIn(evt)
+    } else {
+      alert(d.error)
+    }
+    return
+  }
+  // Update local roster
+  const m=psRoster.find(m=>m.volunteer_id===volId)
+  if(m){m.signed_in=true;m.attendance_id=d.attendance_id;m.signed_in_at=new Date().toISOString()}
+  renderPsRoster()
+}
+
+async function confirmProdSignOut(){
+  if(!psSignOutTarget) return
+  const{volId,attId,name,role,eventId}=psSignOutTarget
+  const r=await fetch('/api/kiosk/production-signout',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({attendance_id:attId,volunteer_id:volId,event_id:eventId,role})
+  })
+  const d=await r.json()
+  if(d.error){alert(d.error);return}
+  // Update local roster
+  const m=psRoster.find(m=>m.volunteer_id===volId)
+  if(m){m.signed_in=false;m.attendance_id=null}
+  psSignOutTarget=null
+  renderPsRoster()
+  showScreen('screen-prod-signin')
+  const stats=document.getElementById('ps-stats')
+  if(stats) stats.textContent=`${name} signed out · ${d.hours}h credited (full event)`
+}
+
+// ── KIOSK CONFIRM DIALOG ──
+function showKioskConfirm(title, body, btnLabel, onConfirm, onCancel){
+  const el=document.getElementById('kiosk-confirm')
+  document.getElementById('kc-title').textContent=title
+  document.getElementById('kc-body').textContent=body
+  document.getElementById('kc-btn').textContent=btnLabel
+  document.getElementById('kc-btn').onclick=()=>{el.style.display='none';onConfirm()}
+  document.getElementById('kc-cancel').onclick=()=>{el.style.display='none';if(onCancel)onCancel()}
+  el.style.display='flex'
+}
+function cancelKioskConfirm(){pendingAction=null}
+
+// ── CONFIRM ──
+function showConfirm(icon,title,sub,note,onBack){
+  document.getElementById('conf-icon').textContent=icon
+  document.getElementById('conf-title').textContent=title
+  document.getElementById('conf-sub').textContent=sub
+  document.getElementById('conf-note').textContent=note
+  const bar=document.getElementById('conf-bar')
+  bar.style.transition='none';bar.style.width='100%'
+  requestAnimationFrame(()=>{bar.style.transition=`width ${RESET_MS}ms linear`;bar.style.width='0%'})
+  document.getElementById('conf-back').onclick=onBack||(()=>showScreen('screen-vol-menu'))
+  showScreen('screen-confirm')
+  clearTimeout(resetTmt)
+  resetTmt=setTimeout(()=>{if(onBack)onBack();else showScreen('screen-vol-menu')},RESET_MS)
+}
+</script>
+
+
+
+<!-- YOUTH AUTH PERSON SELECTION -->
+<div class="screen hidden" id="screen-eys-auth">
+  <button class="back-btn" onclick="showScreen('screen-elic-youth-signin')">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title" id="eys-auth-title">Drop Off</div>
+    <div class="screen-sub">Select from authorized list or enter manually</div>
+  </div>
+  <div style="background:var(--surface);border-radius:var(--radius-lg);padding:32px;max-width:520px;width:100%;box-shadow:var(--shadow-lg)">
+    <div id="eys-auth-list" style="margin-bottom:16px"></div>
+    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--hint);margin-bottom:8px" id="eys-auth-label">Dropped Off By</div>
+    <input type="text" id="eys-auth-name" placeholder="Name" style="width:100%;padding:14px 16px;border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:18px;outline:none;margin-bottom:16px"/>
+    <div id="eys-auth-warn" style="font-size:13px;color:var(--amber-600);margin-bottom:16px;display:none">⚠️ Not on authorized list. Admin will be notified to update.</div>
+    <button onclick="eysConfirmPerson()" style="width:100%;padding:18px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:18px;font-weight:700;cursor:pointer">Confirm</button>
+  </div>
+</div>
+<!-- YOUTH SIGN-IN (ELIC kiosk) -->
+<div class="screen hidden" id="screen-elic-youth-signin">
+  <button class="back-btn" onclick="showScreen('screen-elic-menu')">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title" id="eys-prod-name">Youth Sign-In</div>
+    <div class="screen-sub" id="eys-event-name">⭐ Rising Stars</div>
+  </div>
+  <div style="width:100%;max-width:720px">
+    <!-- Tabs -->
+    <div style="display:flex;border-bottom:2px solid var(--border);margin-bottom:16px">
+      <button id="eys-tab-roster" onclick="setEysTab('roster')"
+        style="padding:10px 20px;font-size:14px;font-weight:700;border:none;background:none;cursor:pointer;font-family:inherit;color:var(--teal-dark);border-bottom:3px solid var(--teal);margin-bottom:-2px">
+        👶 Participants
+      </button>
+      <button id="eys-tab-carpools" onclick="setEysTab('carpools')"
+        style="padding:10px 20px;font-size:14px;font-weight:700;border:none;background:none;cursor:pointer;font-family:inherit;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-2px">
+        🚗 Carpools
+      </button>
+    </div>
+
+    <!-- Roster tab -->
+    <div id="eys-panel-roster">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div id="eys-stats" style="font-size:14px;color:var(--muted)"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="eys-search" placeholder="Search…" oninput="filterEysRoster()"
+            style="padding:10px 14px;border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:14px;outline:none;width:160px;background:var(--surface);color:var(--text)"/>
+          <div style="display:flex;gap:2px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--radius);padding:2px">
+            <button id="eys-view-card" onclick="setEysView('card')" style="padding:8px 12px;background:var(--surface);border:none;border-radius:10px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;color:var(--text)">⊞</button>
+            <button id="eys-view-list" onclick="setEysView('list')" style="padding:8px 12px;background:transparent;border:none;border-radius:10px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted)">☰</button>
+          </div>
+        </div>
+      </div>
+      <div id="eys-roster" style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto"></div>
+    </div>
+
+    <!-- Carpools tab -->
+    <div id="eys-panel-carpools" style="display:none">
+      <div id="eys-carpools-list" style="max-height:60vh;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- YOUTH SIGN-IN NEW (parent name entry) -->
+<div class="screen hidden" id="screen-eys-new">
+  <button class="back-btn" onclick="showScreen('screen-elic-youth-signin')">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title">Drop Off</div>
+    <div class="screen-sub">Select participant and enter parent name</div>
+  </div>
+  <div style="background:var(--surface);border-radius:var(--radius-lg);padding:36px;max-width:520px;width:100%;box-shadow:var(--shadow-lg)">
+    <div style="margin-bottom:18px">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--hint);margin-bottom:8px">Participant</div>
+      <select id="eys-new-youth" style="width:100%;padding:14px 16px;border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:18px;outline:none">
+        <option value="">— Select participant —</option>
+      </select>
+    </div>
+    <div style="margin-bottom:24px">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--hint);margin-bottom:8px">Dropped Off By</div>
+      <input type="text" id="eys-new-parent" placeholder="Parent / Guardian name"
+        style="width:100%;padding:14px 16px;border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:18px;outline:none"/>
+    </div>
+    <button onclick="eysDoSignIn()" style="width:100%;padding:18px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:18px;font-weight:700;cursor:pointer">Sign In</button>
+  </div>
+</div>
+
+<!-- YOUTH SIGN-OUT CONFIRM -->
+<div class="screen hidden" id="screen-eys-out">
+  <button class="back-btn" onclick="showScreen('screen-elic-youth-signin')">← Back</button>
+  <div style="background:var(--surface);border-radius:var(--radius-lg);padding:44px;max-width:460px;width:100%;box-shadow:var(--shadow-lg);text-align:center">
+    <div style="font-size:56px;margin-bottom:16px">👋</div>
+    <div style="font-size:24px;font-weight:800;color:var(--teal-dark);margin-bottom:6px" id="eys-out-name"></div>
+    <div style="font-size:14px;color:var(--muted);margin-bottom:24px" id="eys-out-since"></div>
+    <div style="margin-bottom:18px">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--hint);margin-bottom:8px">Picked Up By</div>
+      <input type="text" id="eys-out-parent" placeholder="Parent / Guardian name"
+        style="width:100%;padding:14px 16px;border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:18px;outline:none;text-align:center"/>
+    </div>
+    <div style="display:flex;gap:12px">
+      <button onclick="showScreen('screen-elic-youth-signin')" style="flex:1;padding:16px;background:var(--bg);border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:16px;font-weight:600;cursor:pointer">Cancel</button>
+      <button onclick="eysDoSignOut()" style="flex:1;padding:16px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:16px;font-weight:700;cursor:pointer">Sign Out</button>
+    </div>
+  </div>
+</div>
+<!-- PRODUCTION SIGN-IN ROSTER -->
+<div class="screen hidden" id="screen-prod-signin">
+  <button class="back-btn" onclick="showScreen('screen-elic-menu')">← Back</button>
+  <div class="screen-heading">
+    <div class="screen-title" id="ps-prod-name">Production Sign-In</div>
+    <div class="screen-sub" id="ps-event-name"></div>
+  </div>
+  <div style="width:100%;max-width:700px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div id="ps-stats" style="font-size:14px;color:var(--muted)"></div>
+      <input type="text" id="ps-search" placeholder="Search name…" oninput="filterPsRoster()"
+        style="padding:10px 16px;border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:15px;outline:none;width:220px"/>
+    </div>
+    <div id="ps-roster" style="display:flex;flex-direction:column;gap:8px;max-height:55vh;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- PRODUCTION CONFIRM SIGN-OUT -->
+<div class="screen hidden" id="screen-prod-signout">
+  <button class="back-btn" onclick="showScreen('screen-prod-signin')">← Back</button>
+  <div style="background:var(--surface);border-radius:var(--radius-lg);padding:44px;max-width:460px;width:100%;box-shadow:var(--shadow-lg);text-align:center">
+    <div style="font-size:56px;margin-bottom:16px">👋</div>
+    <div style="font-size:24px;font-weight:800;color:var(--teal-dark);margin-bottom:8px" id="pso-name"></div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:4px" id="pso-role"></div>
+    <div style="font-size:13px;color:var(--hint);margin-bottom:28px" id="pso-time"></div>
+    <div style="background:var(--teal-light);border-radius:var(--radius);padding:16px;margin-bottom:28px">
+      <div style="font-size:22px;font-weight:800;color:var(--teal-dark)" id="pso-hours"></div>
+      <div style="font-size:13px;color:var(--teal-dark);font-weight:600;margin-top:4px">Full event hours will be credited</div>
+    </div>
+    <div style="display:flex;gap:12px">
+      <button onclick="showScreen('screen-prod-signin')" style="flex:1;padding:16px;background:var(--bg);border:2px solid var(--border);border-radius:var(--radius);font-family:inherit;font-size:16px;font-weight:600;cursor:pointer">Cancel</button>
+      <button onclick="confirmProdSignOut()" style="flex:1;padding:16px;background:var(--teal);color:#fff;border:none;border-radius:var(--radius);font-family:inherit;font-size:16px;font-weight:700;cursor:pointer">✓ Sign Out</button>
+    </div>
+  </div>
+</div>
+<!-- Kiosk Confirm Dialog -->
+<div id="kiosk-confirm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;padding:24px">
+  <div style="background:#fff;border-radius:24px;padding:40px;max-width:400px;width:100%;text-align:center;box-shadow:0 24px 80px rgba(0,0,0,0.3)">
+    <div style="font-size:40px;margin-bottom:16px" id="kc-icon">❓</div>
+    <div style="font-size:22px;font-weight:700;color:#0d3d4d;margin-bottom:8px" id="kc-title"></div>
+    <div style="font-size:15px;color:#5F5E5A;margin-bottom:32px" id="kc-body"></div>
+    <div style="display:flex;gap:12px">
+      <button id="kc-cancel" style="flex:1;padding:16px;background:#EFEFEC;border:none;border-radius:14px;font-family:inherit;font-size:16px;font-weight:600;cursor:pointer;color:#5F5E5A">Cancel</button>
+      <button id="kc-btn" style="flex:1;padding:16px;background:#1b708d;border:none;border-radius:14px;font-family:inherit;font-size:16px;font-weight:700;cursor:pointer;color:#fff" id="kc-confirm"></button>
+    </div>
+  </div>
+</div>
+<div style="position:fixed;bottom:4px;right:8px;font-size:9px;color:rgba(0,0,0,0.2);pointer-events:none;z-index:1">v2025-04-14c</div>
+
+<!-- NFC Welcome overlay -->
+<div id="nfc-welcome" style="display:none;position:fixed;inset:0;background:linear-gradient(155deg,#0d3d4d,#145466);z-index:9999;flex-direction:column;align-items:center;justify-content:center;color:#fff;text-align:center">
+  <div style="font-size:64px;margin-bottom:20px">👋</div>
+  <div style="font-size:36px;font-weight:900;letter-spacing:-0.5px;margin-bottom:8px" id="nfc-welcome-name">Welcome!</div>
+  <div style="font-size:18px;opacity:0.8">Loading your profile…</div>
+  <div style="margin-top:32px;width:48px;height:4px;border-radius:2px;background:rgba(255,255,255,0.3);overflow:hidden">
+    <div style="height:100%;background:#fff;border-radius:2px;animation:nfc-bar 1.2s ease-in-out infinite"></div>
+  </div>
+</div>
+<style>
+@keyframes nfc-bar{0%{width:0;margin-left:0}50%{width:100%;margin-left:0}100%{width:0;margin-left:100%}}
+</style>
+
+<script>
+// ── NFC / URL param auto-login ──
+(async function checkNFCParam(){
+  const params = new URLSearchParams(window.location.search)
+  const volId = params.get('vol')
+  if(!volId) return
+
+  // Show welcome overlay while fetching
+  const overlay = document.getElementById('nfc-welcome')
+  overlay.style.display = 'flex'
+
+  try {
+    const r = await fetch('/api/kiosk/volunteer-profile/'+volId)
+    if(!r.ok) throw new Error('Not found')
+    const vol = await r.json()
+    if(vol.error) throw new Error(vol.error)
+
+    // Show name briefly
+    document.getElementById('nfc-welcome-name').textContent = 'Welcome, '+vol.name.split(' ')[0]+'!'
+    await new Promise(res=>setTimeout(res, 1200))
+
+    // Hide overlay and load volunteer
+    overlay.style.display = 'none'
+    // Clean URL so Back button works cleanly
+    history.replaceState(null, '', window.location.pathname)
+    // Load interest types then go through normal waiver check flow
+    const ir = await fetch('/api/kiosk/interest-types')
+    allInterestTypes = await ir.json()
+    selVol = vol
+    await goWaiverCheck(false)
+  } catch(e){
+    overlay.style.display = 'none'
+    // Fall through to normal idle screen
+  }
+})()
+</script>
+</body>
+</html>
