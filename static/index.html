@@ -175,7 +175,7 @@ tbody td{padding:12px 20px;font-size:13px;vertical-align:middle}
 .hours-item{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
 .hours-item:last-child{border-bottom:none}
 .event-name{font-weight:500;font-size:13px}.event-date{font-size:12px;color:var(--text-muted)}
-.event-hours{font-weight:600;color:var(--teal-600);margin-left:auto;font-size:13px}
+.event-hours{font-weight:600;color:var(--teal-600);font-size:13px;flex-shrink:0}
 
 /* TIMELINE */
 .timeline{padding-left:16px;border-left:2px solid var(--border)}
@@ -3236,10 +3236,10 @@ async function openProfile(volId){
               ${!(v.hours||[]).length?'<div style="color:var(--text-muted);font-size:13px">No time logged yet</div>':
                 (v.hours||[]).map(h=>`
                 <div class="hours-item">
-                  <span style="font-size:18px">🎭</span>
-                  <div><div class="event-name">${h.event}</div><div class="event-date">${formatDate(h.date)}${h.role?' · '+h.role:''}</div></div>
-                  <div class="event-hours">${h.hours}h</div>
-                  ${isAdmin?`<div style="display:flex;gap:4px">
+                  <span style="font-size:18px;flex-shrink:0">🎭</span>
+                  <div style="flex:1;min-width:0"><div class="event-name">${h.event}</div><div class="event-date">${formatDate(h.date)}${h.role?' · '+h.role:''}</div></div>
+                  <div class="event-hours" style="flex-shrink:0">${h.hours}h</div>
+                  ${isAdmin?`<div style="display:flex;gap:4px;flex-shrink:0">
                     <button class="btn btn-secondary btn-sm" style="padding:3px 7px;font-size:11px" onclick="editApprovedHours('${h.id}',${h.hours},'${escHtml(h.notes||'')}','${v.id}')">✏️</button>
                     <button class="btn btn-danger btn-sm" style="padding:3px 7px;font-size:11px" onclick="deleteHours('${h.id}','${v.id}')">✕</button>
                   </div>`:''}
