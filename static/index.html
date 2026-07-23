@@ -393,6 +393,13 @@ tr:hover td{background:var(--cream)}
           <span class="sb-badge" id="sb-reimb-badge" style="display:none">0</span>
         </button>
       </div>
+      <div class="sb-section" id="sb-planning-section">
+        <div class="sb-section-label">Planning</div>
+        <button class="sb-item" data-page="pricing-calc" onclick="nav('pricing-calc')">
+          <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M2 10a8 8 0 1116 0 8 8 0 01-16 0zm7-4a1 1 0 112 0v3.586l2.293 2.293a1 1 0 01-1.414 1.414l-2.586-2.586A1 1 0 019 10V6z" clip-rule="evenodd"/></svg>
+          Pricing Calculator
+        </button>
+      </div>
       <div class="sb-section" id="sb-admin-section">
         <div class="sb-section-label">Admin</div>
         <button class="sb-item" data-page="productions" onclick="nav('productions')">
@@ -574,6 +581,7 @@ function showApp() {
   const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
   const isProducer = currentUser.role === 'producer' || isAdmin;
   document.getElementById('sb-admin-section').style.display = isProducer ? '' : 'none';
+  document.getElementById('sb-planning-section').style.display = isAdmin ? '' : 'none';
   document.getElementById('sb-training-admin').style.display = currentUser.role === 'admin' ? '' : 'none';
   loadBudgets();
   refreshBadges();
@@ -590,7 +598,7 @@ function nav(page) {
     reimbursements: 'Reimbursements', approvals: 'Approval Queue', 'all-requests': 'All Requests',
     budgets: 'Budget Tracker', users: 'Users', training: 'Purchasing Training',
     'training-admin': 'Manage Training', productions: 'Productions',
-    statements: 'Purchase Statements', profile: 'My Profile'
+    statements: 'Purchase Statements', profile: 'My Profile', 'pricing-calc': 'Pricing Calculator'
   };
   document.getElementById('tb-title').textContent = titles[page] || page;
   document.getElementById('tb-actions').innerHTML = '';
@@ -604,7 +612,8 @@ function nav(page) {
     'training': renderTraining, 'training-admin': renderTrainingAdmin,
     'productions': renderProductions,
     'statements': renderStatements,
-    'profile': renderProfile
+    'profile': renderProfile,
+    'pricing-calc': renderPricingCalc
   };
   if (pages[page]) pages[page]();
 }
@@ -2877,6 +2886,304 @@ async function doResubmit(rid) {
     renderMyRequests();
     refreshBadges();
   } catch(e) { toast(e.message,'error'); }
+}
+
+// ── Pricing Calculator ────────────────────────────────────────────────────────
+const PC_DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+let pcCapacity = [];
+let pcSettings = {};
+let pcFacilityCost = {};
+let pcOrgBudgets = [];
+let pcProductions = [];
+let pcMode = 'price';
+
+function pcDollars(n) {
+  return '$' + (Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+async function renderPricingCalc() {
+  const content = document.getElementById('content');
+  content.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div><p>Loading...</p></div>';
+  try {
+    const [capacity, settings, facilityCost, productions] = await Promise.all([
+      api('GET','/space-capacity-hours'),
+      api('GET','/pricing-settings'),
+      api('GET','/pricing-calc/facility-cost'),
+      api('GET','/productions')
+    ]);
+    pcCapacity = capacity;
+    pcSettings = settings;
+    pcFacilityCost = facilityCost;
+    pcProductions = productions;
+    pcOrgBudgets = allBudgets.filter(b => !b.production_id && b.is_active);
+    pcRenderPage();
+  } catch(e) {
+    content.innerHTML = `<div class="empty"><p>Could not load the pricing calculator: ${e.message}</p></div>`;
+  }
+}
+
+function pcRenderPage() {
+  const content = document.getElementById('content');
+  const capByDow = {};
+  pcCapacity.forEach(c => capByDow[c.day_of_week] = c);
+
+  const capRows = PC_DAY_NAMES.map((name, idx) => {
+    const c = capByDow[idx] || {open_time:'08:00', close_time:'22:00', closed:0};
+    return `<div style="display:grid;grid-template-columns:110px 1fr 1fr 90px;gap:10px;align-items:center;margin-bottom:8px">
+      <div style="font-size:13px;font-weight:600">${name}</div>
+      <input type="time" id="pc-open-${idx}" value="${c.open_time}" class="form-input" ${c.closed?'disabled':''}/>
+      <input type="time" id="pc-close-${idx}" value="${c.close_time}" class="form-input" ${c.closed?'disabled':''}/>
+      <label style="font-size:12px;display:flex;align-items:center;gap:5px"><input type="checkbox" id="pc-closed-${idx}" onchange="pcToggleDayClosed(${idx})" ${c.closed?'checked':''}/> Closed</label>
+    </div>`;
+  }).join('');
+
+  const budgetOpts = `<option value="">— None selected —</option>` + pcOrgBudgets.map(b =>
+    `<option value="${b.id}" ${pcSettings.facility_budget_id==b.id?'selected':''}>${b.name}${b.area?' ('+b.area+')':''}</option>`
+  ).join('');
+
+  const facilityCard = `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><div class="card-title">Facility Cost Basis</div></div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--ink3);margin-bottom:14px">Pick the org-wide budget that represents rent, utilities, insurance, etc. Real budgeted and actual-spent totals come straight from the Budgets module — no separate data entry.</p>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:14px">
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Facility Budget</label>
+            <select id="pc-facility-budget" class="form-select">${budgetOpts}</select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Season Length (weeks)</label>
+            <input type="number" id="pc-season-weeks" class="form-input" value="${pcSettings.season_weeks||36}" min="1"/>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="pcSaveSettings()">Save</button>
+        <span id="pc-settings-status" style="font-size:12px;color:var(--teal);margin-left:8px"></span>
+        <div style="margin-top:16px;padding:14px 16px;background:var(--cream2);border-radius:var(--r-sm)">
+          ${pcFacilityCost.facility_budget_id ? `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:10px">
+              <div><div style="font-size:11px;text-transform:uppercase;color:var(--ink3);font-weight:700">Budgeted (${pcFacilityCost.budget_name||''})</div><div style="font-size:20px;font-weight:800">${pcDollars(pcFacilityCost.budgeted_total)}</div></div>
+              <div><div style="font-size:11px;text-transform:uppercase;color:var(--ink3);font-weight:700">Spent So Far</div><div style="font-size:20px;font-weight:800">${pcDollars(pcFacilityCost.spent_total)}</div></div>
+            </div>
+            <div style="font-size:12px;color:var(--ink3)">Weekly hours: <strong>${pcFacilityCost.weekly_hours}</strong> × ${pcFacilityCost.season_weeks} weeks = <strong>${pcFacilityCost.total_possible_hours}</strong> total hours this season</div>
+            <div style="font-size:13px;font-weight:600;margin-top:6px">Cost per hour (budgeted): $${pcFacilityCost.cost_per_hour_budgeted ?? '—'}${pcFacilityCost.cost_per_hour_spent ? ` · Cost per hour (actual spent): $${pcFacilityCost.cost_per_hour_spent}` : ''}</div>
+          ` : `<div style="font-size:13px;color:var(--ink3);font-style:italic">Select a facility budget above to see real cost-per-hour figures.</div>`}
+        </div>
+      </div>
+    </div>`;
+
+  const capacityCard = `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><div class="card-title">Space Capacity Hours</div></div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--ink3);margin-bottom:14px">When the space could be in use at all — your programming, rentals, anything.</p>
+        ${capRows}
+        <button class="btn btn-primary btn-sm" style="margin-top:6px" onclick="pcSaveCapacityHours()">Save Hours</button>
+        <span id="pc-capacity-status" style="font-size:12px;color:var(--teal);margin-left:8px"></span>
+      </div>
+    </div>`;
+
+  const defaultCostPerHour = pcFacilityCost.cost_per_hour_spent || pcFacilityCost.cost_per_hour_budgeted || 0;
+
+  const prodOpts = `<option value="">— None —</option>` + pcProductions.map(p =>
+    `<option value="${p.id}">${p.name}${p.season?' ('+p.season+')':''}</option>`
+  ).join('');
+
+  const pricingCard = `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><div class="card-title">Program Pricing Calculator</div></div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--ink3);margin-bottom:12px">For a dance class, workshop, or a whole run like Rising Stars.</p>
+        <div style="display:flex;gap:0;margin-bottom:14px;border:1px solid var(--border2);border-radius:var(--r-sm);overflow:hidden;width:fit-content">
+          <button type="button" id="pc-mode-price" class="btn btn-sm" style="border-radius:0" onclick="pcSetMode('price')">Solve for Price per Student</button>
+          <button type="button" id="pc-mode-budget" class="btn btn-sm" style="border-radius:0" onclick="pcSetMode('budget')">Solve for Space Budget</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div class="form-group" style="margin:0"><label class="form-label">Number of Sessions</label><input type="number" id="pc-sessions" class="form-input" value="1" min="0"/></div>
+          <div class="form-group" style="margin:0"><label class="form-label">Hours per Session</label><input type="number" id="pc-hours-per-session" class="form-input" value="1" min="0" step="0.5"/></div>
+          <div class="form-group" style="margin:0"><label class="form-label">Expected Enrollment</label><input type="number" id="pc-enrollment" class="form-input" value="10" min="0"/></div>
+          <div class="form-group" style="margin:0"><label class="form-label">Target Profit Margin %</label><input type="number" id="pc-margin" class="form-input" value="20" min="0"/></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Total Program Hours <span style="font-weight:400">(auto-fills from sessions × hours/session — override for irregular schedules, e.g. Rising Stars: 1hr Thursdays + 4hr Saturdays)</span></label>
+          <input type="number" id="pc-total-hours-override" class="form-input" style="max-width:180px" step="0.5" placeholder="auto"/>
+        </div>
+        <div id="pc-price-input-wrap" style="display:none">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div class="form-group" style="margin:0"><label class="form-label">Price per Student ($)</label><input type="number" id="pc-price-per-student" class="form-input" value="500" min="0"/></div>
+            <div class="form-group" style="margin:0"><label class="form-label">Other Program Costs ($) <span style="font-weight:400">(instructors, materials, etc.)</span></label><input type="number" id="pc-other-costs" class="form-input" value="0" min="0"/></div>
+          </div>
+        </div>
+        <div id="pc-cost-input-wrap" class="form-group">
+          <label class="form-label">Cost per Hour to Run the Space <span style="font-weight:400">(from Facility Cost Basis above — override to test scenarios)</span></label>
+          <input type="number" id="pc-cost-per-hour" class="form-input" style="max-width:180px" value="${defaultCostPerHour}" step="0.01"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Cross-Check Against a Production <span style="font-weight:400">(optional)</span></label>
+          <select id="pc-link-production" class="form-select" onchange="pcRenderProductionCheck()">${prodOpts}</select>
+          <div id="pc-production-check" style="margin-top:8px"></div>
+        </div>
+        <div id="pc-result" style="margin-top:12px"></div>
+      </div>
+    </div>`;
+
+  const rentalCard = `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><div class="card-title">External Rental Rate Calculator</div></div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--ink3);margin-bottom:12px">Suggests an hourly rate for renting the space out to a partner or outside group.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div class="form-group" style="margin:0"><label class="form-label">Hours Requested</label><input type="number" id="rc-hours" class="form-input" value="3" min="0"/></div>
+          <div class="form-group" style="margin:0"><label class="form-label">Target Profit Margin %</label><input type="number" id="rc-margin" class="form-input" value="30" min="0"/></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Cost per Hour to Run the Space</label>
+          <input type="number" id="rc-cost-per-hour" class="form-input" style="max-width:180px" value="${defaultCostPerHour}" step="0.01"/>
+        </div>
+        <div id="rc-result" style="margin-top:12px"></div>
+      </div>
+    </div>`;
+
+  content.innerHTML = facilityCard + capacityCard + pricingCard + rentalCard;
+
+  ['pc-sessions','pc-hours-per-session','pc-enrollment','pc-margin','pc-total-hours-override','pc-price-per-student','pc-other-costs','pc-cost-per-hour'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.oninput = pcCalcProgramPricing;
+  });
+  ['rc-hours','rc-margin','rc-cost-per-hour'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.oninput = pcCalcRentalRate;
+  });
+  pcSetMode(pcMode);
+  pcCalcRentalRate();
+}
+
+function pcToggleDayClosed(idx) {
+  const closed = document.getElementById(`pc-closed-${idx}`).checked;
+  document.getElementById(`pc-open-${idx}`).disabled = closed;
+  document.getElementById(`pc-close-${idx}`).disabled = closed;
+}
+
+async function pcSaveCapacityHours() {
+  const hours = PC_DAY_NAMES.map((name, idx) => ({
+    day_of_week: idx,
+    open_time: document.getElementById(`pc-open-${idx}`).value || '08:00',
+    close_time: document.getElementById(`pc-close-${idx}`).value || '22:00',
+    closed: document.getElementById(`pc-closed-${idx}`).checked
+  }));
+  try {
+    await api('PUT','/space-capacity-hours',{hours});
+    document.getElementById('pc-capacity-status').textContent = '✓ Saved';
+    await renderPricingCalc();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function pcSaveSettings() {
+  const facility_budget_id = document.getElementById('pc-facility-budget').value || null;
+  const season_weeks = parseInt(document.getElementById('pc-season-weeks').value) || 36;
+  try {
+    await api('PUT','/pricing-settings',{facility_budget_id, season_weeks});
+    document.getElementById('pc-settings-status').textContent = '✓ Saved';
+    await renderPricingCalc();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function pcSetMode(mode) {
+  pcMode = mode;
+  const priceBtn = document.getElementById('pc-mode-price'), budgetBtn = document.getElementById('pc-mode-budget');
+  priceBtn.className = 'btn btn-sm ' + (mode==='price' ? 'btn-primary' : 'btn-outline');
+  budgetBtn.className = 'btn btn-sm ' + (mode==='budget' ? 'btn-primary' : 'btn-outline');
+  priceBtn.style.borderRadius = '0'; budgetBtn.style.borderRadius = '0';
+  document.getElementById('pc-price-input-wrap').style.display = mode==='budget' ? '' : 'none';
+  document.getElementById('pc-cost-input-wrap').style.display = mode==='budget' ? 'none' : '';
+  pcCalcProgramPricing();
+}
+
+function pcRenderProductionCheck() {
+  const pid = document.getElementById('pc-link-production').value;
+  const el = document.getElementById('pc-production-check');
+  if (!pid) { el.innerHTML = ''; return; }
+  const p = pcProductions.find(p => String(p.id) === pid);
+  if (!p) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div style="font-size:12px;color:var(--ink3);background:var(--cream2);border-radius:var(--r-sm);padding:10px 12px">
+    Real numbers for <strong>${p.name}</strong>: revenue (actual) ${pcDollars(p.total_revenue_actual)} · spent ${pcDollars(p.total_spent)} · net ${pcDollars(p.net_cost)}
+  </div>`;
+}
+
+function pcCalcProgramPricing() {
+  const el = document.getElementById('pc-result');
+  if (!el) return;
+  const sessions = parseFloat(document.getElementById('pc-sessions').value) || 0;
+  const hoursPerSession = parseFloat(document.getElementById('pc-hours-per-session').value) || 0;
+  const enrollment = parseFloat(document.getElementById('pc-enrollment').value) || 0;
+  const marginPct = parseFloat(document.getElementById('pc-margin').value) || 0;
+  const hoursOverride = parseFloat(document.getElementById('pc-total-hours-override').value);
+  const totalHours = hoursOverride > 0 ? hoursOverride : sessions * hoursPerSession;
+
+  if (pcMode === 'budget') {
+    const pricePerStudent = parseFloat(document.getElementById('pc-price-per-student').value) || 0;
+    const otherCosts = parseFloat(document.getElementById('pc-other-costs').value) || 0;
+    if (enrollment<=0 || pricePerStudent<=0 || totalHours<=0) {
+      el.innerHTML = '<p style="font-size:13px;color:var(--ink3);font-style:italic">Fill in the numbers above to see the space budget.</p>';
+      return;
+    }
+    const totalRevenue = pricePerStudent * enrollment;
+    const targetProfit = totalRevenue * (marginPct/100);
+    const spaceBudget = totalRevenue - targetProfit - otherCosts;
+    const affordableCostPerHour = spaceBudget / totalHours;
+    const snapshotCostPerHour = pcFacilityCost.cost_per_hour_spent || pcFacilityCost.cost_per_hour_budgeted || null;
+    let comparisonHtml = '';
+    if (snapshotCostPerHour) {
+      const diff = affordableCostPerHour - snapshotCostPerHour;
+      const diffColor = diff >= 0 ? 'var(--green)' : 'var(--red)';
+      const diffLabel = diff >= 0
+        ? `That's $${diff.toFixed(2)}/hr more than your real cost of $${snapshotCostPerHour}/hr — you have room to spare.`
+        : `That's $${Math.abs(diff).toFixed(2)}/hr less than your real cost of $${snapshotCostPerHour}/hr — this pricing falls short.`;
+      comparisonHtml = `<div style="font-size:12px;font-weight:600;color:${diffColor};margin-top:8px">${diffLabel}</div>`;
+    }
+    const negativeWarning = spaceBudget < 0
+      ? '<div style="font-size:12px;font-weight:600;color:var(--red);margin-top:8px">Other costs and target profit alone already exceed total revenue — there\'s nothing left for space at this price.</div>'
+      : '';
+    el.innerHTML = `<div style="border:1px solid var(--teal);border-radius:var(--r-sm);padding:14px 16px;background:var(--cream2)">
+      <div style="font-size:11px;font-weight:700;color:var(--teal2);text-transform:uppercase">Budget Available for Space</div>
+      <div style="font-size:26px;font-weight:800;color:var(--teal2)">${pcDollars(spaceBudget)} <span style="font-size:14px;font-weight:600">($${affordableCostPerHour.toFixed(2)}/hr over ${totalHours} hrs)</span></div>
+      <div style="font-size:12px;color:var(--ink3);margin-top:8px">Total revenue: ${pcDollars(totalRevenue)} (${enrollment} students × ${pcDollars(pricePerStudent)}) · Target profit (${marginPct}%): ${pcDollars(targetProfit)} · Other program costs: ${pcDollars(otherCosts)}</div>
+      ${comparisonHtml}${negativeWarning}
+    </div>`;
+    return;
+  }
+
+  const costPerHour = parseFloat(document.getElementById('pc-cost-per-hour').value) || 0;
+  const totalCost = totalHours * costPerHour;
+  if (enrollment<=0 || totalCost<=0) {
+    el.innerHTML = '<p style="font-size:13px;color:var(--ink3);font-style:italic">Fill in the numbers above to see a suggested price.</p>';
+    return;
+  }
+  const costPerStudent = totalCost / enrollment;
+  const suggestedPrice = costPerStudent / (1 - (marginPct/100));
+  const totalRevenue = suggestedPrice * enrollment;
+  const profit = totalRevenue - totalCost;
+  el.innerHTML = `<div style="border:1px solid var(--teal);border-radius:var(--r-sm);padding:14px 16px;background:var(--cream2)">
+    <div style="font-size:11px;font-weight:700;color:var(--teal2);text-transform:uppercase">Suggested Price per Student</div>
+    <div style="font-size:26px;font-weight:800;color:var(--teal2)">$${suggestedPrice.toFixed(2)}</div>
+    <div style="font-size:12px;color:var(--ink3);margin-top:8px">Total hours: ${totalHours} · Cost to run: ${pcDollars(totalCost)} · Projected revenue: ${pcDollars(totalRevenue)} · Projected profit: ${pcDollars(profit)}</div>
+  </div>`;
+}
+
+function pcCalcRentalRate() {
+  const el = document.getElementById('rc-result');
+  if (!el) return;
+  const hours = parseFloat(document.getElementById('rc-hours').value) || 0;
+  const marginPct = parseFloat(document.getElementById('rc-margin').value) || 0;
+  const costPerHour = parseFloat(document.getElementById('rc-cost-per-hour').value) || 0;
+  if (hours<=0 || costPerHour<=0) {
+    el.innerHTML = '<p style="font-size:13px;color:var(--ink3);font-style:italic">Fill in the numbers above to see a suggested rate.</p>';
+    return;
+  }
+  const suggestedHourlyRate = costPerHour / (1 - (marginPct/100));
+  const suggestedTotal = suggestedHourlyRate * hours;
+  el.innerHTML = `<div style="border:1px solid var(--teal);border-radius:var(--r-sm);padding:14px 16px;background:var(--cream2)">
+    <div style="font-size:11px;font-weight:700;color:var(--teal2);text-transform:uppercase">Suggested Hourly Rate</div>
+    <div style="font-size:26px;font-weight:800;color:var(--teal2)">$${suggestedHourlyRate.toFixed(2)}/hr</div>
+    <div style="font-size:12px;color:var(--ink3);margin-top:8px">For ${hours} hours: ${pcDollars(suggestedTotal)} total</div>
+  </div>`;
 }
 
 // ── Profile ───────────────────────────────────────────────────────────────────
