@@ -581,7 +581,7 @@ function showApp() {
   const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
   const isProducer = currentUser.role === 'producer' || isAdmin;
   document.getElementById('sb-admin-section').style.display = isProducer ? '' : 'none';
-  document.getElementById('sb-planning-section').style.display = isAdmin ? '' : 'none';
+  document.getElementById('sb-planning-section').style.display = (isAdmin || isProducer) ? '' : 'none';
   document.getElementById('sb-training-admin').style.display = currentUser.role === 'admin' ? '' : 'none';
   loadBudgets();
   refreshBadges();
