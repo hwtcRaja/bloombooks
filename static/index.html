@@ -2037,8 +2037,9 @@ function renderProdTab() {
         ${producers.map(m=>`<div class="card mb-8"><div class="card-body" style="padding:12px 16px">
           <div class="flex flex-center gap-12">
             <div style="width:34px;height:34px;border-radius:50%;background:var(--teal3);color:var(--teal);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
-            <div><div class="fw-600">${m.name}</div><div class="text-xs text-muted">${m.email}</div></div>
+            <div><div class="fw-600">${m.name}${m.display_title ? ` <span class="text-xs text-muted fw-500">— ${m.display_title}</span>` : ''}</div><div class="text-xs text-muted">${m.email}</div></div>
             <span class="badge badge-approved" style="margin-left:auto">Producer</span>
+            ${canManage?`<button class="btn btn-outline btn-sm" onclick="showEditProdMemberTitleModal(${p.id},${m.user_id},'${m.name.replace(/'/g,"\\'")}','${(m.display_title||'').replace(/'/g,"\\'")}')">Title</button>`:''}
             ${canManage?`<button class="btn btn-danger btn-sm" onclick="removeProdMember(${p.id},${m.user_id})">Remove</button>`:''}
           </div>
         </div></div>`).join('')}
@@ -2048,8 +2049,9 @@ function renderProdTab() {
         ${members.map(m=>`<div class="card mb-8"><div class="card-body" style="padding:12px 16px">
           <div class="flex flex-center gap-12">
             <div style="width:34px;height:34px;border-radius:50%;background:var(--cream2);color:var(--ink2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
-            <div><div class="fw-600">${m.name}</div><div class="text-xs text-muted">${m.email}</div></div>
-            ${canManage?`<button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="removeProdMember(${p.id},${m.user_id})">Remove</button>`:''}
+            <div><div class="fw-600">${m.name}${m.display_title ? ` <span class="text-xs text-muted fw-500">— ${m.display_title}</span>` : ''}</div><div class="text-xs text-muted">${m.email}</div></div>
+            ${canManage?`<button class="btn btn-outline btn-sm" style="margin-left:auto" onclick="showEditProdMemberTitleModal(${p.id},${m.user_id},'${m.name.replace(/'/g,"\\'")}','${(m.display_title||'').replace(/'/g,"\\'")}')">Title</button>`:''}
+            ${canManage?`<button class="btn btn-danger btn-sm" onclick="removeProdMember(${p.id},${m.user_id})">Remove</button>`:''}
           </div>
         </div></div>`).join('')}` : ''}
       ${producers.length===0&&members.length===0?'<div class="empty"><h3>No team members yet</h3><p>Add team members to give them access to this production.</p></div>':''}`;
@@ -2437,6 +2439,8 @@ function showAddProdMemberModal() {
           <option value="member">Team member</option>
           <option value="producer">Producer</option>
         </select></div>
+      <div class="form-group"><label class="form-label">Display Title <span class="text-xs text-muted">(optional — e.g. Stage Manager, Set Designer)</span></label>
+        <input type="text" id="add-pm-title" class="form-input" placeholder="e.g. Stage Manager"/></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -2448,9 +2452,37 @@ function showAddProdMemberModal() {
 async function doAddProdMember(pid) {
   const user_id     = parseInt(document.getElementById('add-pm-user').value);
   const member_role = document.getElementById('add-pm-role').value;
+  const display_title = document.getElementById('add-pm-title').value.trim();
   try {
-    await api('POST', `/productions/${pid}/members`, {user_id, member_role});
+    await api('POST', `/productions/${pid}/members`, {user_id, member_role, display_title});
     toast('Member added!','success');
+    closeModal();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===pid);
+    renderProdTab();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function showEditProdMemberTitleModal(pid, uid, name, currentTitle) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Edit title — ${name}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Display Title <span class="text-xs text-muted">(e.g. Stage Manager, Set Designer)</span></label>
+        <input type="text" id="edit-pm-title" class="form-input" value="${(currentTitle||'').replace(/"/g,'&quot;')}" placeholder="e.g. Stage Manager"/></div>
+      <p class="text-xs text-muted">This is just a label for tracking who's doing what — it doesn't change their permissions on this production.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doEditProdMemberTitle(${pid},${uid})">Save</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doEditProdMemberTitle(pid, uid) {
+  const display_title = document.getElementById('edit-pm-title').value.trim();
+  try {
+    await api('PATCH', `/productions/${pid}/members/${uid}`, {display_title});
+    toast('Title updated!','success');
     closeModal();
     const prods = await api('GET', '/productions');
     _currentProd = prods.find(p=>p.id===pid);
