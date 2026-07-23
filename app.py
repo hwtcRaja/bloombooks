@@ -195,6 +195,20 @@ def init_db():
         UNIQUE(statement_id, request_id)
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_space_capacity_hours (
+        day_of_week INTEGER PRIMARY KEY,
+        open_time   TEXT DEFAULT '08:00',
+        close_time  TEXT DEFAULT '22:00',
+        closed      INTEGER DEFAULT 0
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_pricing_settings (
+        id               SERIAL PRIMARY KEY,
+        facility_budget_id INTEGER REFERENCES bb_budgets(id) ON DELETE SET NULL,
+        season_weeks     INTEGER DEFAULT 36,
+        updated_at       TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
     # Seed admin users
     def hash_pw(pw):
         return hashlib.sha256(pw.encode()).hexdigest()
@@ -2064,6 +2078,130 @@ def mobile_new_request(token):
 @app.route('/receipt/<token>')
 def mobile_receipt_page(token):
     return send_from_directory(app.static_folder, 'receipt.html')
+
+# ─── Pricing Calculator ───────────────────────────────────────────────────────
+# Figures out what to charge for programming (classes, workshops, Rising
+# Stars) and external rentals, using real facility costs from the Budgets
+# module rather than separately re-entered numbers.
+
+PC_DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+
+def _pc_hours_between(start_time, end_time):
+    try:
+        sh, sm = [int(x) for x in start_time.split(':')]
+        eh, em = [int(x) for x in end_time.split(':')]
+        mins = (eh*60+em) - (sh*60+sm)
+        return max(0, mins)/60.0
+    except Exception:
+        return 0.0
+
+@app.route('/api/space-capacity-hours', methods=['GET'])
+def get_space_capacity_hours():
+    err = require_auth()
+    if err: return err
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM bb_space_capacity_hours ORDER BY day_of_week').fetchall()
+    rows = [dict(r) for r in rows]
+    if len(rows) < 7:
+        existing = {r['day_of_week'] for r in rows}
+        for dow in range(7):
+            if dow not in existing:
+                conn.execute('''INSERT INTO bb_space_capacity_hours (day_of_week, open_time, close_time, closed)
+                    VALUES (%s,'08:00','22:00',0) ON CONFLICT (day_of_week) DO NOTHING''', (dow,))
+        conn.commit()
+        rows = [dict(r) for r in conn.execute('SELECT * FROM bb_space_capacity_hours ORDER BY day_of_week').fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+@app.route('/api/space-capacity-hours', methods=['PUT'])
+def update_space_capacity_hours():
+    err = require_auth(roles=['admin','treasurer','president'])
+    if err: return err
+    data = request.json or {}
+    conn = get_db()
+    for h in data.get('hours', []):
+        conn.execute('''INSERT INTO bb_space_capacity_hours (day_of_week, open_time, close_time, closed)
+            VALUES (%s,%s,%s,%s)
+            ON CONFLICT (day_of_week) DO UPDATE SET open_time=EXCLUDED.open_time,
+                close_time=EXCLUDED.close_time, closed=EXCLUDED.closed''',
+            (int(h['day_of_week']), h.get('open_time','08:00'), h.get('close_time','22:00'), 1 if h.get('closed') else 0))
+    conn.commit(); conn.close()
+    return jsonify({'ok': True})
+
+@app.route('/api/pricing-settings', methods=['GET'])
+def get_pricing_settings():
+    err = require_auth()
+    if err: return err
+    conn = get_db()
+    row = conn.execute('SELECT * FROM bb_pricing_settings ORDER BY id LIMIT 1').fetchone()
+    if not row:
+        conn.execute('INSERT INTO bb_pricing_settings (season_weeks) VALUES (36)')
+        conn.commit()
+        row = conn.execute('SELECT * FROM bb_pricing_settings ORDER BY id LIMIT 1').fetchone()
+    conn.close()
+    return jsonify(dict(row))
+
+@app.route('/api/pricing-settings', methods=['PUT'])
+def update_pricing_settings():
+    err = require_auth(roles=['admin','treasurer','president'])
+    if err: return err
+    data = request.json or {}
+    conn = get_db()
+    row = conn.execute('SELECT id FROM bb_pricing_settings ORDER BY id LIMIT 1').fetchone()
+    facility_budget_id = data.get('facility_budget_id') or None
+    season_weeks = int(data.get('season_weeks', 36))
+    if row:
+        conn.execute('''UPDATE bb_pricing_settings SET facility_budget_id=%s, season_weeks=%s,
+            updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS') WHERE id=%s''',
+            (facility_budget_id, season_weeks, row['id']))
+    else:
+        conn.execute('INSERT INTO bb_pricing_settings (facility_budget_id, season_weeks) VALUES (%s,%s)',
+            (facility_budget_id, season_weeks))
+    conn.commit(); conn.close()
+    return jsonify({'ok': True})
+
+@app.route('/api/pricing-calc/facility-cost', methods=['GET'])
+def get_facility_cost():
+    err = require_auth()
+    if err: return err
+    conn = get_db()
+
+    settings = conn.execute('SELECT * FROM bb_pricing_settings ORDER BY id LIMIT 1').fetchone()
+    settings = dict(settings) if settings else {'facility_budget_id': None, 'season_weeks': 36}
+    season_weeks = settings.get('season_weeks') or 36
+
+    cap_rows = [dict(r) for r in conn.execute('SELECT * FROM bb_space_capacity_hours').fetchall()]
+    weekly_hours = sum(_pc_hours_between(r['open_time'], r['close_time']) for r in cap_rows if not r['closed'])
+    total_possible_hours = weekly_hours * season_weeks
+
+    result = {
+        'facility_budget_id': settings.get('facility_budget_id'),
+        'budget_name': None,
+        'budgeted_total': 0,
+        'spent_total': 0,
+        'season_weeks': season_weeks,
+        'weekly_hours': round(weekly_hours, 1),
+        'total_possible_hours': round(total_possible_hours, 1),
+        'cost_per_hour_budgeted': None,
+        'cost_per_hour_spent': None,
+    }
+
+    bid = settings.get('facility_budget_id')
+    if bid:
+        budget = conn.execute('SELECT * FROM bb_budgets WHERE id=%s', (bid,)).fetchone()
+        if budget:
+            budget = dict(budget)
+            rollup = conn.execute('''SELECT COALESCE(SUM(total_amount),0) AS budgeted, COALESCE(SUM(spent),0) AS spent
+                FROM bb_budgets WHERE id=%s OR parent_id=%s''', (bid, bid)).fetchone()
+            result['budget_name'] = budget['name']
+            result['budgeted_total'] = rollup['budgeted']
+            result['spent_total'] = rollup['spent']
+            if total_possible_hours > 0:
+                result['cost_per_hour_budgeted'] = round(rollup['budgeted']/total_possible_hours, 2)
+                if rollup['spent'] > 0:
+                    result['cost_per_hour_spent'] = round(rollup['spent']/total_possible_hours, 2)
+    conn.close()
+    return jsonify(result)
 
 # ─── Static ───────────────────────────────────────────────────────────────────
 @app.route('/', defaults={'path': ''})
