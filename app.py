@@ -1192,7 +1192,7 @@ def stats():
     else:
         my_requests  = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE submitted_by=%s", (u['id'],)).fetchone()['count']
         my_approved  = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE submitted_by=%s AND status IN ('approved','reimbursed')", (u['id'],)).fetchone()['count']
-        my_pending   = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE submitted_by=%s AND status LIKE 'pending%'", (u['id'],)).fetchone()['count']
+        my_pending   = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE submitted_by=%s AND status LIKE %s", (u['id'], 'pending%')).fetchone()['count']
         my_owed      = conn.execute("SELECT COALESCE(SUM(amount),0) as count FROM bb_reimbursements WHERE user_id=%s AND status='pending'", (u['id'],)).fetchone()['count']
         result = {
             'my_requests': my_requests,
@@ -2115,7 +2115,7 @@ def get_space_capacity_hours():
 
 @app.route('/api/space-capacity-hours', methods=['PUT'])
 def update_space_capacity_hours():
-    err = require_auth(roles=['admin','treasurer','president'])
+    err = require_auth(roles=['admin','treasurer','president','producer'])
     if err: return err
     data = request.json or {}
     conn = get_db()
@@ -2143,7 +2143,7 @@ def get_pricing_settings():
 
 @app.route('/api/pricing-settings', methods=['PUT'])
 def update_pricing_settings():
-    err = require_auth(roles=['admin','treasurer','president'])
+    err = require_auth(roles=['admin','treasurer','president','producer'])
     if err: return err
     data = request.json or {}
     conn = get_db()
