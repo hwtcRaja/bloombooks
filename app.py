@@ -209,6 +209,8 @@ def init_db():
         updated_at       TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
 
+    c.execute("ALTER TABLE bb_production_members ADD COLUMN IF NOT EXISTS display_title TEXT DEFAULT ''")
+
     # Seed admin users
     def hash_pw(pw):
         return hashlib.sha256(pw.encode()).hexdigest()
@@ -1253,7 +1255,7 @@ def list_productions():
     result = []
     for p in prods:
         prod = dict(p)
-        members = conn.execute('''SELECT u.id AS user_id,u.name,u.email,u.role,m.member_role
+        members = conn.execute('''SELECT u.id AS user_id,u.name,u.email,u.role,m.member_role,m.display_title
                                   FROM bb_production_members m JOIN bb_users u ON m.user_id=u.id
                                   WHERE m.production_id=%s ORDER BY m.member_role,u.name''',(prod['id'],)).fetchall()
         prod['members'] = [dict(m) for m in members]
@@ -1333,11 +1335,24 @@ def add_production_member(pid):
     data = request.json
     conn = get_db()
     try:
-        conn.execute('INSERT INTO bb_production_members (production_id,user_id,member_role) VALUES (%s,%s,%s)',
-                     (pid,data['user_id'],data.get('member_role','member')))
+        conn.execute('INSERT INTO bb_production_members (production_id,user_id,member_role,display_title) VALUES (%s,%s,%s,%s)',
+                     (pid,data['user_id'],data.get('member_role','member'),data.get('display_title','').strip()))
         conn.commit(); conn.close(); return jsonify({'ok':True})
     except psycopg2.IntegrityError:
         conn.close(); return jsonify({'error':'Person already a member'}),409
+
+@app.route('/api/productions/<int:pid>/members/<int:uid>', methods=['PATCH'])
+def update_production_member(pid, uid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'],pid):
+        return jsonify({'error':'Insufficient permissions'}),403
+    data = request.json or {}
+    conn = get_db()
+    conn.execute('UPDATE bb_production_members SET display_title=%s WHERE production_id=%s AND user_id=%s',
+                 (data.get('display_title','').strip(), pid, uid))
+    conn.commit(); conn.close()
+    return jsonify({'ok':True})
 
 @app.route('/api/productions/<int:pid>/members/<int:uid>', methods=['DELETE'])
 def remove_production_member(pid, uid):
