@@ -335,6 +335,72 @@ def require_auth(roles=None):
         return jsonify({'error': 'Insufficient permissions'}), 403
     return None
 
+# ─── Production / budget permission helpers ───────────────────────────────────
+ORG_APPROVER_ROLES = ('admin', 'treasurer', 'president')
+
+def get_production_producers(pid):
+    """Return the list of producer users (id/name/email) for a production."""
+    if not pid:
+        return []
+    conn = get_db()
+    rows = conn.execute('''SELECT u.id, u.name, u.email
+                           FROM bb_production_members m
+                           JOIN bb_users u ON m.user_id = u.id
+                           WHERE m.production_id=%s AND m.member_role=%s''',
+                        (pid, 'producer')).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def is_producer_of(uid, pid):
+    """True if the user is a producer on the given production."""
+    if not uid or not pid:
+        return False
+    conn = get_db()
+    row = conn.execute('''SELECT 1 FROM bb_production_members
+                          WHERE user_id=%s AND production_id=%s AND member_role=%s''',
+                       (uid, pid, 'producer')).fetchone()
+    conn.close()
+    return bool(row)
+
+def user_owned_budget_ids(uid):
+    """IDs of budgets this user is an assigned owner of (via bb_budget_members)."""
+    if not uid:
+        return []
+    conn = get_db()
+    rows = conn.execute('SELECT budget_id FROM bb_budget_members WHERE user_id=%s', (uid,)).fetchall()
+    conn.close()
+    return [r['budget_id'] for r in rows]
+
+def user_can_use_budget(u, budget_id):
+    """
+    Can this user submit a purchase request against this budget?
+      • Org approvers (admin/treasurer/president): any budget.
+      • Anyone: a budget they personally own (bb_budget_members).
+      • Production budgets: any member of that production.
+      • Org-level budgets (production_id IS NULL): ONLY owners + org approvers.
+    """
+    if not budget_id:
+        return False
+    if u['role'] in ORG_APPROVER_ROLES:
+        return True
+    conn = get_db()
+    b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s', (budget_id,)).fetchone()
+    if not b:
+        conn.close(); return False
+    b = dict(b)
+    owned = conn.execute('SELECT 1 FROM bb_budget_members WHERE user_id=%s AND budget_id=%s',
+                         (u['id'], budget_id)).fetchone()
+    if owned:
+        conn.close(); return True
+    if b.get('production_id'):
+        member = conn.execute('SELECT 1 FROM bb_production_members WHERE user_id=%s AND production_id=%s',
+                              (u['id'], b['production_id'])).fetchone()
+        conn.close()
+        return bool(member)
+    # Org-level budget the user does not own → not permitted
+    conn.close()
+    return False
+
 def log_action(user_id, action, entity_type=None, entity_id=None, detail=None):
     conn = get_db()
     conn.execute('INSERT INTO bb_audit_log (user_id,action,entity_type,entity_id,detail) VALUES (%s,%s,%s,%s,%s)',
@@ -583,24 +649,9 @@ def me():
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    data = request.json
-    email = data.get('email', '').strip().lower()
-    name  = data.get('name', '').strip()
-    pw    = data.get('password', '')
-    if not email or not name or not pw:
-        return jsonify({'error': 'All fields required'}), 400
-    conn = get_db()
-    try:
-        conn.execute('INSERT INTO bb_users (name,email,password,role) VALUES (%s,%s,%s,%s)',
-                     (name, email, hash_pw(pw), 'volunteer'))
-        conn.commit()
-        u = conn.execute('SELECT * FROM bb_users WHERE email=?', (email,)).fetchone()
-        session['user_id'] = u['id']
-        conn.close()
-        return jsonify({'user': dict(u)})
-    except psycopg2.IntegrityError:
-        conn.close()
-        return jsonify({'error': 'Email already registered'}), 409
+    # Public self-registration is disabled. Accounts are created by an
+    # admin/treasurer/president via the Users page (/api/users/create).
+    return jsonify({'error': 'Self-registration is disabled. Please contact an administrator for access.'}), 403
 
 # ─── Users (admin) ───────────────────────────────────────────────────────────
 @app.route('/api/users', methods=['GET'])
@@ -659,6 +710,7 @@ def list_budgets():
     u = current_user()
     conn = get_db()
     is_admin = u['role'] in ('admin','treasurer','president')
+    owned_ids = user_owned_budget_ids(u['id'])
     if is_admin:
         budgets = conn.execute('''SELECT b.*,p.name as production_name FROM bb_budgets b
                                   LEFT JOIN bb_productions p ON b.production_id=p.id
@@ -666,18 +718,30 @@ def list_budgets():
     else:
         my_ids = [r['production_id'] for r in
                   conn.execute('SELECT production_id FROM bb_production_members WHERE user_id=%s',(u['id'],)).fetchall()]
+        # Non-admins see: production budgets for their productions + any budget they own.
+        # Org-level budgets are only visible if they personally own them.
+        clauses, params = [], []
         if my_ids:
             ph = ','.join(['%s']*len(my_ids))
+            clauses.append(f'b.production_id IN ({ph})'); params.extend(my_ids)
+        if owned_ids:
+            ph = ','.join(['%s']*len(owned_ids))
+            clauses.append(f'b.id IN ({ph})'); params.extend(owned_ids)
+        if clauses:
+            where = '(' + ' OR '.join(clauses) + ') AND b.is_active=1'
             budgets = conn.execute(f'''SELECT b.*,p.name as production_name FROM bb_budgets b
                                        LEFT JOIN bb_productions p ON b.production_id=p.id
-                                       WHERE (b.production_id IN ({ph}) OR b.production_id IS NULL)
-                                       AND b.is_active=1''', my_ids).fetchall()
+                                       WHERE {where}''', params).fetchall()
         else:
-            budgets = conn.execute('''SELECT b.*,p.name as production_name FROM bb_budgets b
-                                      LEFT JOIN bb_productions p ON b.production_id=p.id
-                                      WHERE b.production_id IS NULL AND b.is_active=1''').fetchall()
+            budgets = []
     conn.close()
-    return jsonify([dict(b) for b in budgets])
+    owned_set = set(owned_ids)
+    result = []
+    for b in budgets:
+        bd = dict(b)
+        bd['i_own'] = bd['id'] in owned_set
+        result.append(bd)
+    return jsonify(result)
 
 @app.route('/api/budgets', methods=['POST'])
 def create_budget():
@@ -813,6 +877,10 @@ def create_request():
     purchase_method = data.get('purchase_method', 'in_store')
     item_url = data.get('item_url', '')
     prod_id  = data.get('production_id') or None
+    budget_id = data.get('budget_id') or None
+    # Enforce budget permissions — block org-level budgets for non-owners, etc.
+    if budget_id and not user_can_use_budget(u, int(budget_id)):
+        return jsonify({'error': 'You are not permitted to submit against that budget.'}), 403
     if prod_id and get_production_producers(int(prod_id)):
         status = 'pending_producer'
     else:
@@ -1865,23 +1933,39 @@ def get_receipt_page_data(token):
                             ORDER BY submitted_at DESC''', (uid,)).fetchall()
     my_prod_ids = [r['production_id'] for r in
                    conn.execute('SELECT production_id FROM bb_production_members WHERE user_id=%s',(uid,)).fetchall()]
+    owned_ids = [r['budget_id'] for r in
+                 conn.execute('SELECT budget_id FROM bb_budget_members WHERE user_id=%s',(uid,)).fetchall()]
+    # Same rules as the desktop budget list: production budgets for their productions
+    # + any budget they personally own. Org-level budgets only if they own them.
+    clauses, params = [], []
     if my_prod_ids:
         ph = ','.join(['%s']*len(my_prod_ids))
+        clauses.append(f'b.production_id IN ({ph})'); params.extend(my_prod_ids)
+    if owned_ids:
+        ph = ','.join(['%s']*len(owned_ids))
+        clauses.append(f'b.id IN ({ph})'); params.extend(owned_ids)
+    if clauses:
+        where = '(' + ' OR '.join(clauses) + ') AND b.is_active=1'
         budgets = conn.execute(f'''SELECT b.id,b.name,b.area,b.total_amount,b.spent,b.production_id,
                                           p.name as production_name
                                    FROM bb_budgets b LEFT JOIN bb_productions p ON b.production_id=p.id
-                                   WHERE (b.production_id IN ({ph}) OR b.production_id IS NULL)
-                                   AND b.is_active=1 ORDER BY p.name,b.name''', my_prod_ids).fetchall()
+                                   WHERE {where} ORDER BY p.name,b.name''', params).fetchall()
+    else:
+        budgets = []
+    if my_prod_ids:
+        ph = ','.join(['%s']*len(my_prod_ids))
         productions = conn.execute(f"SELECT id,name,season FROM bb_productions WHERE id IN ({ph}) AND status='active'", my_prod_ids).fetchall()
     else:
-        budgets = conn.execute('''SELECT b.id,b.name,b.area,b.total_amount,b.spent,b.production_id,
-                                         p.name as production_name
-                                  FROM bb_budgets b LEFT JOIN bb_productions p ON b.production_id=p.id
-                                  WHERE b.production_id IS NULL AND b.is_active=1 ORDER BY b.name''').fetchall()
         productions = []
     conn.close()
+    owned_set = set(owned_ids)
+    budget_list = []
+    for b in budgets:
+        bd = dict(b)
+        bd['i_own'] = bd['id'] in owned_set
+        budget_list.append(bd)
     return jsonify({'user':u,'requests':[dict(r) for r in reqs],
-                    'budgets':[dict(b) for b in budgets],'productions':[dict(p) for p in productions]})
+                    'budgets':budget_list,'productions':[dict(p) for p in productions]})
 
 @app.route('/api/receipt/<token>/statements', methods=['GET'])
 def mobile_list_statements(token):
@@ -2061,6 +2145,8 @@ def mobile_new_request(token):
     if not title:     return jsonify({'error':'Title is required'}),400
     if not budget_id: return jsonify({'error':'Please select a budget'}),400
     if not est_cost:  return jsonify({'error':'Please enter the estimated amount'}),400
+    if not user_can_use_budget(u, int(budget_id)):
+        conn.close(); return jsonify({'error':'You are not permitted to submit against that budget.'}),403
     status = 'pending_producer' if (prod_id and get_production_producers(int(prod_id))) else 'pending_treasurer'
     conn.execute('''INSERT INTO bb_purchase_requests
                     (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
