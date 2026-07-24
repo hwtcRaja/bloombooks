@@ -277,11 +277,6 @@ tr:hover td{background:var(--cream)}
       <p>Purchasing &amp; Reimbursements</p>
     </div>
 
-    <div class="auth-tabs">
-      <button class="auth-tab active" onclick="showAuthTab('login')">Sign in</button>
-      <button class="auth-tab" onclick="showAuthTab('register')">New account</button>
-    </div>
-
     <!-- Login -->
     <div id="auth-login">
       <div class="form-group">
@@ -295,26 +290,8 @@ tr:hover td{background:var(--cream)}
       <div id="login-error" class="form-error hidden"></div>
       <button class="btn btn-primary w-full btn-lg mt-8" onclick="doLogin()">Sign in</button>
       <div class="text-xs text-muted mt-12" style="text-align:center">
-        Demo: volunteer@horizonwest.org / volunteer123
+        Need access? Contact your administrator.
       </div>
-    </div>
-
-    <!-- Register -->
-    <div id="auth-register" class="hidden">
-      <div class="form-group">
-        <label class="form-label">Full name</label>
-        <input type="text" id="reg-name" class="form-input" placeholder="Jane Smith">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Email address</label>
-        <input type="email" id="reg-email" class="form-input" placeholder="you@example.com">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Password</label>
-        <input type="password" id="reg-password" class="form-input" placeholder="Min 6 characters">
-      </div>
-      <div id="reg-error" class="form-error hidden"></div>
-      <button class="btn btn-primary w-full btn-lg mt-8" onclick="doRegister()">Create account</button>
     </div>
   </div>
 </div>
@@ -537,38 +514,11 @@ async function doLogin() {
   }
 }
 
-async function doRegister() {
-  const name = document.getElementById('reg-name').value.trim();
-  const email = document.getElementById('reg-email').value.trim();
-  const password = document.getElementById('reg-password').value;
-  const errEl = document.getElementById('reg-error');
-  errEl.classList.add('hidden');
-  if (password.length < 6) {
-    errEl.textContent = 'Password must be at least 6 characters';
-    errEl.classList.remove('hidden');
-    return;
-  }
-  try {
-    const d = await api('POST', '/auth/register', {name, email, password});
-    currentUser = d.user;
-    showApp();
-  } catch(e) {
-    errEl.textContent = e.message;
-    errEl.classList.remove('hidden');
-  }
-}
-
 async function doLogout() {
   await api('POST', '/auth/logout');
   currentUser = null;
   document.getElementById('app').classList.add('hidden');
   document.getElementById('auth-screen').style.display = 'flex';
-}
-
-function showAuthTab(tab) {
-  document.getElementById('auth-login').classList.toggle('hidden', tab !== 'login');
-  document.getElementById('auth-register').classList.toggle('hidden', tab !== 'register');
-  document.querySelectorAll('.auth-tab').forEach((t,i) => t.classList.toggle('active', (i===0&&tab==='login')||(i===1&&tab==='register')));
 }
 
 // ── App init ──────────────────────────────────────────────────────────────────
@@ -979,8 +929,22 @@ async function renderNewRequest() {
       </div>
     </div>`;
 
-  // If only org budgets, populate immediately
+  // Default the form toward the budget(s) this user owns.
+  const ownedBudget = allBudgets.find(b => b.i_own && b.is_active !== 0);
   if (myProductions.length === 0) {
+    // Only org budgets — populate + default to owned org budget (handled inside)
+    populateBudgetDropdown(null);
+  } else if (ownedBudget && ownedBudget.production_id) {
+    // User owns a production budget — pre-select that production, then its budgets
+    const prodSel = document.getElementById('req-production');
+    if (prodSel) {
+      prodSel.value = String(ownedBudget.production_id);
+      onProductionChange(String(ownedBudget.production_id));
+    } else {
+      populateBudgetDropdown(ownedBudget.production_id);
+    }
+  } else if (ownedBudget) {
+    // Owns an org budget while also on productions — default to org view
     populateBudgetDropdown(null);
   }
 }
@@ -1000,16 +964,22 @@ function onProductionChange(prodId) {
 function populateBudgetDropdown(prodId) {
   const sel = document.getElementById('req-budget');
   if (!sel) return;
+  const ownLabel = b => b.i_own ? '★ ' : '';
+  const optFor = (b, showArea) => {
+    const rem = b.total_amount - b.spent;
+    const yours = b.i_own ? ' — yours' : '';
+    const tail = showArea ? ` — ${b.area}` : '';
+    return `<option value="${b.id}">${ownLabel(b)}${b.name}${tail} (${fmtMoney(rem)} remaining${yours})</option>`;
+  };
   let opts = '<option value="">Select a budget / department...</option>';
   if (prodId) {
-    const prodBudgets = allBudgets.filter(b => b.production_id === prodId && b.is_active !== 0);
+    let prodBudgets = allBudgets.filter(b => b.production_id === prodId && b.is_active !== 0);
+    // Budgets you own float to the top
+    prodBudgets.sort((a,b) => (b.i_own?1:0) - (a.i_own?1:0));
     if (prodBudgets.length === 0) {
       opts += '<option value="" disabled>No departments set up for this production yet</option>';
     } else {
-      opts += prodBudgets.map(b => {
-        const rem = b.total_amount - b.spent;
-        return `<option value="${b.id}">${b.name} — ${b.area} (${fmtMoney(rem)} remaining)</option>`;
-      }).join('');
+      opts += prodBudgets.map(b => optFor(b, true)).join('');
     }
   } else {
     // Only show budgets with an actual amount (not parent categories with total_amount=0)
@@ -1029,20 +999,26 @@ function populateBudgetDropdown(prodId) {
     });
     // Grouped sub-budgets
     for (const [groupName, items] of Object.entries(parentMap)) {
+      items.sort((a,b) => (b.i_own?1:0) - (a.i_own?1:0));
       opts += `<optgroup label="${groupName}">`;
-      items.forEach(b => {
-        const rem = b.total_amount - b.spent;
-        opts += `<option value="${b.id}">${b.name} (${fmtMoney(rem)} left)</option>`;
-      });
+      items.forEach(b => { opts += optFor(b, false); });
       opts += '</optgroup>';
     }
-    // Standalone budgets
-    standalone.forEach(b => {
-      const rem = b.total_amount - b.spent;
-      opts += `<option value="${b.id}">${b.name} — ${b.area} (${fmtMoney(rem)} remaining)</option>`;
-    });
+    // Standalone budgets (owned first)
+    standalone.sort((a,b) => (b.i_own?1:0) - (a.i_own?1:0));
+    standalone.forEach(b => { opts += optFor(b, true); });
   }
   sel.innerHTML = opts;
+  // Default to the budget the user owns, if any is available in this list
+  const ownedInList = Array.from(sel.options).find(o => {
+    if (!o.value) return false;
+    const b = allBudgets.find(x => String(x.id) === o.value);
+    return b && b.i_own;
+  });
+  if (ownedInList) {
+    sel.value = ownedInList.value;
+    if (typeof onBudgetChange === 'function') onBudgetChange();
+  }
 }
 
 let newReceiptFile = null;
