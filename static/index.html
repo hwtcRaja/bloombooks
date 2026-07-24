@@ -2106,7 +2106,10 @@ async function renderRevenueTab() {
         </div>
       </div>
 
-      ${canManage ? `<div class="flex mb-12">
+      ${canManage ? `<div class="flex mb-12" style="gap:8px">
+        ${['admin','treasurer','president'].includes(currentUser.role)
+          ? `<button class="btn btn-outline btn-sm" onclick="showRoleCallLinkModal(${p.id})">🔗 ${p.rolecall_linked?'Rising Stars linked':'Link Rising Stars (RoleCall)'}</button>`
+          : ''}
         <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="showAddRevenueModal(${p.id})">+ Add revenue</button>
       </div>` : ''}
 
@@ -2114,17 +2117,19 @@ async function renderRevenueTab() {
         ? `<div class="empty"><div class="empty-icon">💵</div><h3>No revenue entries yet</h3><p>Track ticket sales, concessions, program ads, and other income for this production.</p></div>`
         : `<div class="table-wrap"><table>
             <thead><tr><th>Source</th><th>Description</th><th>Expected</th><th>Received</th><th>Date</th>${canManage?'<th></th>':''}</tr></thead>
-            <tbody>${entries.map(r => `<tr>
-              <td><div class="fw-600 text-sm">${r.source}</div></td>
+            <tbody>${entries.map(r => `<tr${r.rolecall_live?' style="background:var(--surface2,#f7faf7)"':''}>
+              <td><div class="fw-600 text-sm">${r.source}${r.rolecall_live?' <span class="badge" style="background:var(--green);color:#fff;font-size:10px;padding:1px 6px;border-radius:8px;vertical-align:middle">● LIVE</span>':''}</div></td>
               <td class="td-muted">${r.description||'—'}</td>
               <td class="fw-600">${fmtMoney(r.expected)}</td>
               <td class="fw-600" style="color:${r.actual>0?'var(--green)':'var(--ink3)'}">${fmtMoney(r.actual)}</td>
-              <td class="td-muted">${r.received_date?fmtDate(r.received_date):'—'}</td>
+              <td class="td-muted">${r.received_date?fmtDate(r.received_date):(r.rolecall_live?'auto':'—')}</td>
               ${canManage?`<td>
-                <div class="flex gap-6">
+                ${r.readonly
+                  ? `<span class="text-xs text-muted" title="Pulled live from RoleCall — manage enrollment in RoleCall">read-only</span>`
+                  : `<div class="flex gap-6">
                   <button class="btn btn-outline btn-sm" onclick="showEditRevenueModal(${p.id},${JSON.stringify(r).replace(/"/g,'&quot;')})">Edit</button>
                   <button class="btn btn-danger btn-sm" onclick="deleteRevenue(${p.id},${r.id})">×</button>
-                </div>
+                </div>`}
               </td>`:''}
             </tr>`).join('')}
             <tr style="border-top:2px solid var(--border)">
@@ -2254,6 +2259,71 @@ async function deleteRevenue(pid, rid) {
   try {
     await api('DELETE', `/productions/${pid}/revenue/${rid}`);
     toast('Removed.', 'info');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p => p.id === pid);
+    renderRevenueTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── RoleCall Rising Stars linking ────────────────────────────────────────────
+async function showRoleCallLinkModal(pid) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Link Rising Stars revenue</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm text-muted mb-12">Pull this production's enrollment revenue <strong>live</strong> from RoleCall. Nothing is copied — figures always reflect current confirmed registrations, and enrollment is still managed in RoleCall.</p>
+      <div id="rc-link-body"><div class="text-xs text-muted">Loading Rising Stars productions from RoleCall…</div></div>
+    </div>`;
+  showModal(html);
+  try {
+    const [cur, list] = await Promise.all([
+      api('GET', `/productions/${pid}/rolecall-link`),
+      api('GET', `/rolecall/rising-stars`)
+    ]);
+    const items = (list && list.items) || [];
+    const linkedId = cur && cur.link ? cur.link.rc_production_id : null;
+    const rev = cur && cur.revenue;
+    const opts = ['<option value="">— Select a RoleCall Rising Stars production —</option>']
+      .concat(items.map(it => {
+        const taken = it.linked_to_bb_production_id && it.linked_to_bb_production_id !== pid;
+        return `<option value="${it.id}" ${it.id===linkedId?'selected':''} ${taken?'disabled':''}>${it.name}${taken?' (already linked elsewhere)':''}</option>`;
+      })).join('');
+    document.getElementById('rc-link-body').innerHTML = `
+      ${linkedId && rev ? `<div class="card mb-12"><div class="card-body">
+        <div class="text-xs text-muted mb-4">Currently linked — live figures</div>
+        <div class="fw-600" style="color:var(--green);font-size:18px">${fmtMoney(rev.confirmed_dollars)} received</div>
+        <div class="text-xs text-muted">${rev.confirmed_regs} confirmed${rev.pending_regs?`, ${rev.pending_regs} pending (${fmtMoney(rev.pending_dollars)})`:''}</div>
+      </div></div>` : ''}
+      <div class="form-group"><label class="form-label">RoleCall production</label>
+        <select id="rc-link-select" class="form-select">${opts}</select></div>
+      <div class="flex gap-8 mt-8">
+        <button class="btn btn-primary btn-sm" onclick="saveRoleCallLink(${pid})">Save link</button>
+        ${linkedId?`<button class="btn btn-danger btn-sm" onclick="removeRoleCallLink(${pid})">Unlink</button>`:''}
+        <button class="btn btn-outline btn-sm" style="margin-left:auto" onclick="closeModal()">Cancel</button>
+      </div>
+      ${items.length===0?`<div class="text-xs text-muted mt-8">No Rising Stars productions found in RoleCall yet.</div>`:''}`;
+  } catch(e) {
+    document.getElementById('rc-link-body').innerHTML = `<div class="text-sm" style="color:var(--red)">${e.message}</div>`;
+  }
+}
+
+async function saveRoleCallLink(pid) {
+  const rcId = document.getElementById('rc-link-select').value;
+  if (!rcId) { toast('Please select a RoleCall production.', 'error'); return; }
+  try {
+    await api('POST', `/productions/${pid}/rolecall-link`, { rc_production_id: rcId });
+    toast('Rising Stars revenue linked!', 'success');
+    closeModal();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p => p.id === pid);
+    renderRevenueTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeRoleCallLink(pid) {
+  try {
+    await api('DELETE', `/productions/${pid}/rolecall-link`);
+    toast('Unlinked.', 'info');
+    closeModal();
     const prods = await api('GET', '/productions');
     _currentProd = prods.find(p => p.id === pid);
     renderRevenueTab();
