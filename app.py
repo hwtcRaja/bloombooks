@@ -175,6 +175,18 @@ def init_db():
         updated_at    TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
 
+    # Links a BloomBooks production to a RoleCall "Rising Stars" production so its
+    # enrollment revenue can be read live from the shared database. BloomBooks owns
+    # this table; RoleCall is never written to.
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_rolecall_links (
+        bb_production_id   INTEGER PRIMARY KEY REFERENCES bb_productions(id) ON DELETE CASCADE,
+        rc_production_id   TEXT NOT NULL,
+        rc_production_name TEXT,
+        linked_by          INTEGER REFERENCES bb_users(id),
+        linked_at          TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
+        updated_at         TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS bb_statements (
         id            SERIAL PRIMARY KEY,
         title         TEXT NOT NULL,
@@ -400,6 +412,96 @@ def user_can_use_budget(u, budget_id):
     # Org-level budget the user does not own → not permitted
     conn.close()
     return False
+
+# ─── RoleCall "Rising Stars" revenue read-through ─────────────────────────────
+# Both apps share the same Postgres database. RoleCall uses un-prefixed tables
+# (productions, program_registrations); BloomBooks uses bb_ tables. We read
+# RoleCall's enrollment revenue LIVE — nothing is copied, so it never goes stale.
+# All money in RoleCall is stored as integer CENTS.
+RISING_STARS_SOURCE = 'Rising Stars Enrollment (RoleCall)'
+
+def get_rolecall_link(conn, pid):
+    """Return the link row for a BloomBooks production, or None."""
+    try:
+        row = conn.execute('SELECT * FROM bb_rolecall_links WHERE bb_production_id=%s', (pid,)).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+def get_rolecall_rising_stars_revenue(conn, rc_production_id):
+    """
+    Live revenue for one RoleCall Rising Stars production, converted to dollars.
+      confirmed  → money actually collected  (maps to BloomBooks 'actual')
+      confirmed + pending → total anticipated (maps to BloomBooks 'expected')
+    Returns None if the RoleCall production can't be read (e.g. tables absent).
+    """
+    if not rc_production_id:
+        return None
+    sum_expr = ('''COALESCE(prod.price,0) * COALESCE(pr.participant_count,1)
+                   - COALESCE(pr.discount_amount,0)
+                   - COALESCE(pr.sibling_discount_amount,0)''')
+    try:
+        row = conn.execute(f'''
+            SELECT prod.name AS rc_name,
+                   COALESCE(SUM({sum_expr}) FILTER (WHERE pr.status='confirmed'), 0)       AS confirmed_cents,
+                   COALESCE(SUM({sum_expr}) FILTER (WHERE pr.status='pending_payment'), 0)  AS pending_cents,
+                   COUNT(pr.id) FILTER (WHERE pr.status='confirmed')                        AS confirmed_regs,
+                   COUNT(pr.id) FILTER (WHERE pr.status='pending_payment')                  AS pending_regs
+            FROM productions prod
+            LEFT JOIN program_registrations pr
+                   ON pr.production_id = prod.id AND pr.status != 'cancelled'
+            WHERE prod.id = %s
+            GROUP BY prod.id, prod.name''', (rc_production_id,)).fetchone()
+    except Exception as e:
+        app.logger.warning(f'RoleCall revenue read failed for {rc_production_id}: {e}')
+        return None
+    if not row:
+        return None
+    row = dict(row)
+    confirmed = int(row.get('confirmed_cents') or 0) / 100.0
+    pending   = int(row.get('pending_cents') or 0) / 100.0
+    return {
+        'rc_production_id':   rc_production_id,
+        'rc_production_name': row.get('rc_name'),
+        'confirmed_dollars':  round(confirmed, 2),
+        'pending_dollars':    round(pending, 2),
+        'confirmed_regs':     int(row.get('confirmed_regs') or 0),
+        'pending_regs':       int(row.get('pending_regs') or 0),
+    }
+
+def rolecall_revenue_line(conn, pid):
+    """
+    Build a synthetic, read-only revenue row for the production's Revenue tab,
+    or None if there's no link. Shaped like a bb_production_revenue row so the
+    frontend can render it inline.
+    """
+    link = get_rolecall_link(conn, pid)
+    if not link:
+        return None
+    rev = get_rolecall_rising_stars_revenue(conn, link['rc_production_id'])
+    if rev is None:
+        # Link exists but RoleCall is unreachable — surface a zeroed, flagged row.
+        return {
+            'id': None, 'source': RISING_STARS_SOURCE,
+            'description': 'Linked to RoleCall, but live data is currently unavailable.',
+            'expected': 0, 'actual': 0, 'received_date': None,
+            'rolecall_live': True, 'readonly': True, 'available': False,
+            'rc_production_id': link['rc_production_id'],
+            'rc_production_name': link.get('rc_production_name'),
+        }
+    desc = (f"{rev['confirmed_regs']} confirmed"
+            + (f", {rev['pending_regs']} pending" if rev['pending_regs'] else '')
+            + " — live from RoleCall")
+    return {
+        'id': None, 'source': RISING_STARS_SOURCE, 'description': desc,
+        'expected': round(rev['confirmed_dollars'] + rev['pending_dollars'], 2),
+        'actual':   rev['confirmed_dollars'],
+        'received_date': None,
+        'rolecall_live': True, 'readonly': True, 'available': True,
+        'rc_production_id': rev['rc_production_id'],
+        'rc_production_name': rev['rc_production_name'],
+        'confirmed_regs': rev['confirmed_regs'], 'pending_regs': rev['pending_regs'],
+    }
 
 def log_action(user_id, action, entity_type=None, entity_id=None, detail=None):
     conn = get_db()
@@ -1337,9 +1439,18 @@ def list_productions():
             prod['budgets'].append(bd)
         prod['total_spent'] = sum(b['spent'] for b in prod['budgets'])
         rev = conn.execute('SELECT expected,actual FROM bb_production_revenue WHERE production_id=%s',(prod['id'],)).fetchall()
-        prod['total_revenue_expected'] = sum(r['expected'] for r in rev)
-        prod['total_revenue_actual']   = sum(r['actual']   for r in rev)
-        prod['net_cost'] = prod['total_spent'] - prod['total_revenue_actual']
+        exp = sum(r['expected'] for r in rev)
+        act = sum(r['actual']   for r in rev)
+        # Fold in the live RoleCall Rising Stars enrollment revenue, if linked.
+        rc_line = rolecall_revenue_line(conn, prod['id'])
+        if rc_line:
+            exp += rc_line['expected']
+            act += rc_line['actual']
+            prod['rolecall_linked'] = True
+            prod['rolecall_revenue_actual'] = rc_line['actual']
+        prod['total_revenue_expected'] = exp
+        prod['total_revenue_actual']   = act
+        prod['net_cost'] = prod['total_spent'] - act
         prod['i_am_producer'] = any(m['user_id']==u['id'] and m['member_role']=='producer' for m in prod['members'])
         result.append(prod)
     conn.close()
@@ -1823,8 +1934,13 @@ def list_revenue(pid):
         return jsonify({'error': 'Insufficient permissions'}), 403
     conn = get_db()
     rows = conn.execute('SELECT * FROM bb_production_revenue WHERE production_id=%s ORDER BY created_at DESC', (pid,)).fetchall()
+    result = [dict(r) for r in rows]
+    # Prepend the live RoleCall Rising Stars line, if this production is linked.
+    rc_line = rolecall_revenue_line(conn, pid)
     conn.close()
-    return jsonify([dict(r) for r in rows])
+    if rc_line:
+        result.insert(0, rc_line)
+    return jsonify(result)
 
 @app.route('/api/productions/<int:pid>/revenue', methods=['POST'])
 def create_revenue(pid):
@@ -1874,6 +1990,91 @@ def delete_revenue(pid, rid):
         return jsonify({'error': 'Insufficient permissions'}), 403
     conn = get_db()
     conn.execute('DELETE FROM bb_production_revenue WHERE id=%s AND production_id=%s', (rid, pid))
+    conn.commit(); conn.close()
+    return jsonify({'ok': True})
+
+# ─── RoleCall Rising Stars link management ───────────────────────────────────
+@app.route('/api/rolecall/rising-stars', methods=['GET'])
+def list_rolecall_rising_stars():
+    """List RoleCall Rising Stars productions available to link (admins only)."""
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ORG_APPROVER_ROLES:
+        return jsonify({'error':'Insufficient permissions'}),403
+    conn = get_db()
+    try:
+        rows = conn.execute('''SELECT id, name,
+                                      COALESCE(registration_status,'') AS registration_status
+                               FROM productions
+                               WHERE stage='rising_stars'
+                                 AND registration_status IS NOT NULL
+                                 AND registration_status != 'draft'
+                               ORDER BY name''').fetchall()
+        items = [dict(r) for r in rows]
+    except Exception as e:
+        conn.close()
+        app.logger.warning(f'RoleCall rising-stars list failed: {e}')
+        return jsonify({'error':'Could not reach RoleCall data','items':[]}),200
+    # Attach which BloomBooks production (if any) each is already linked to.
+    links = {l['rc_production_id']: l for l in
+             [dict(x) for x in conn.execute('SELECT * FROM bb_rolecall_links').fetchall()]}
+    conn.close()
+    for it in items:
+        lk = links.get(it['id'])
+        it['linked_to_bb_production_id'] = lk['bb_production_id'] if lk else None
+    return jsonify({'items': items})
+
+@app.route('/api/productions/<int:pid>/rolecall-link', methods=['GET'])
+def get_rolecall_link_route(pid):
+    """Current link + live revenue preview for a production."""
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    if u['role'] not in ORG_APPROVER_ROLES and not is_producer_of(u['id'], pid):
+        return jsonify({'error':'Insufficient permissions'}),403
+    conn = get_db()
+    link = get_rolecall_link(conn, pid)
+    rev = get_rolecall_rising_stars_revenue(conn, link['rc_production_id']) if link else None
+    conn.close()
+    return jsonify({'linked': bool(link), 'link': link, 'revenue': rev})
+
+@app.route('/api/productions/<int:pid>/rolecall-link', methods=['POST'])
+def set_rolecall_link(pid):
+    """Link a BloomBooks production to a RoleCall Rising Stars production (admins)."""
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ORG_APPROVER_ROLES:
+        return jsonify({'error':'Insufficient permissions'}),403
+    rc_id = (request.json or {}).get('rc_production_id')
+    if not rc_id:
+        return jsonify({'error':'rc_production_id is required'}),400
+    conn = get_db()
+    rc = conn.execute("SELECT id, name FROM productions WHERE id=%s AND stage='rising_stars'", (rc_id,)).fetchone()
+    if not rc:
+        conn.close()
+        return jsonify({'error':'That RoleCall Rising Stars production was not found'}),404
+    rc = dict(rc); now = datetime.now().isoformat()
+    conn.execute('''INSERT INTO bb_rolecall_links (bb_production_id, rc_production_id, rc_production_name, linked_by, updated_at)
+                    VALUES (%s,%s,%s,%s,%s)
+                    ON CONFLICT (bb_production_id) DO UPDATE
+                      SET rc_production_id=EXCLUDED.rc_production_id,
+                          rc_production_name=EXCLUDED.rc_production_name,
+                          updated_at=EXCLUDED.updated_at''',
+                 (pid, rc['id'], rc.get('name'), u['id'], now))
+    conn.commit()
+    rev = get_rolecall_rising_stars_revenue(conn, rc['id'])
+    conn.close()
+    return jsonify({'ok': True, 'revenue': rev})
+
+@app.route('/api/productions/<int:pid>/rolecall-link', methods=['DELETE'])
+def delete_rolecall_link(pid):
+    """Remove the RoleCall link (admins)."""
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in ORG_APPROVER_ROLES:
+        return jsonify({'error':'Insufficient permissions'}),403
+    conn = get_db()
+    conn.execute('DELETE FROM bb_rolecall_links WHERE bb_production_id=%s', (pid,))
     conn.commit(); conn.close()
     return jsonify({'ok': True})
 
