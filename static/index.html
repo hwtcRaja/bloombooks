@@ -4220,11 +4220,10 @@ async function renderContractors() {
       ${_contractors.length === 0 ? `<div class="empty"><h3>No contractors yet</h3><p>Add a contractor to start tracking their W-9, agreement, and payments.</p></div>` : `
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Class/Workshop</th><th>Status</th><th>W-9</th><th>Agreement</th><th>Total paid</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Status</th><th>W-9</th><th>Agreement</th><th>Total paid</th><th></th></tr></thead>
           <tbody>${_contractors.map(c => `
             <tr style="cursor:pointer" onclick="openContractorDetail(${c.id})">
               <td><div class="fw-600">${c.name}</div>${c.business_name ? `<div class="text-xs text-muted">${c.business_name}</div>` : ''}</td>
-              <td class="td-muted">${c.classes_workshops || '—'}</td>
               <td><span class="badge ${c.status === 'active' ? 'badge-approved' : 'badge-denied'}">${c.status}</span></td>
               <td>${c.has_w9 ? '✓' : '<span class="text-muted">—</span>'}</td>
               <td>${c.has_agreement ? '✓' : '<span class="text-muted">—</span>'}</td>
@@ -4385,10 +4384,11 @@ function renderContractorDocuments(tc) {
     ${docs.length === 0 ? `<div class="empty"><h3>No documents yet</h3><p>Upload a signed W-9 or contractor agreement, or send one for e-signature below.</p></div>` : `
     <div class="table-wrap mb-20">
       <table>
-        <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th></th></tr></thead>
+        <thead><tr><th>Type</th><th>Class/Workshop</th><th>File</th><th>Uploaded</th><th></th></tr></thead>
         <tbody>${docs.map(d => `
           <tr>
             <td>${DOC_TYPE_LABELS[d.doc_type] || d.doc_type}</td>
+            <td class="td-muted">${d.class_workshop || '—'}</td>
             <td class="td-muted">${d.filename || '—'}</td>
             <td class="td-muted">${fmtDate(d.uploaded_at)}</td>
             <td style="white-space:nowrap">
