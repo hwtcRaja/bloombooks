@@ -3077,11 +3077,14 @@ def build_w9_pdf(fields, tin_type, tin_display, signer_name, signer_ip, signer_u
     return out.getvalue()
 
 def upload_pdf_private(pdf_bytes, folder):
-    # 'authenticated' (not 'private') — both keep the file inaccessible without a signed URL,
-    # but only 'authenticated' assets can be delivered with a custom download filename.
-    # 'private' assets are locked to Cloudinary's internal name with no way to override it.
+    # 'authenticated' (not 'private') so the file can get a custom download filename — see
+    # signed_doc_url for why 'private' can't do that.
+    # resource_type='image' (not 'raw') — Cloudinary explicitly supports PDFs as an image
+    # asset, and only image/video assets support transformations. fl_attachment (the flag
+    # that sets a custom filename) is a transformation, and raw assets flatly can't be
+    # transformed at all — that combination 400s no matter what the flag says.
     return cloudinary.uploader.upload(
-        io.BytesIO(pdf_bytes), folder=folder, resource_type='raw', type='authenticated'
+        io.BytesIO(pdf_bytes), folder=folder, resource_type='image', type='authenticated'
     )
 
 # ─── Contractors (secure: profiles, W9s/agreements, banking, payments) ────────
@@ -3131,14 +3134,20 @@ def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None,
             safe_name = cleaned
 
     if access_type == 'authenticated':
+        # Transformations (including fl_attachment, which sets the filename) only work on
+        # image/video assets — raw assets 400 outright if you try. New documents always
+        # upload as resource_type='image' now, but a few got uploaded as 'raw' during the
+        # brief window before that fix; this keeps those downloadable (generic name only)
+        # instead of erroring out.
+        can_use_flags = (resource_type or 'image') != 'raw'
         url, _opts = cloudinary.utils.cloudinary_url(
             public_id,
-            resource_type=resource_type or 'raw',
+            resource_type=resource_type or 'image',
             type='authenticated',
             sign_url=True,
             secure=True,
             format=fmt or 'pdf',
-            flags=f'attachment:{safe_name}' if safe_name else 'attachment',
+            flags=(f'attachment:{safe_name}' if safe_name else 'attachment') if can_use_flags else None,
             expires_at=int(time.time()) + 300,
         )
         return url
