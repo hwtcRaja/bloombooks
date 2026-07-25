@@ -538,7 +538,7 @@ function showApp() {
   document.getElementById('sb-admin-section').style.display = isProducer ? '' : 'none';
   document.getElementById('sb-planning-section').style.display = (isAdmin || isProducer) ? '' : 'none';
   document.getElementById('sb-training-admin').style.display = currentUser.role === 'admin' ? '' : 'none';
-  document.getElementById('sb-contractors').style.display = ['admin','treasurer'].includes(currentUser.role) ? '' : 'none';
+  document.getElementById('sb-contractors').style.display = ['admin','treasurer','president'].includes(currentUser.role) ? '' : 'none';
   loadBudgets();
   refreshBadges();
   nav('dashboard');
@@ -4222,7 +4222,7 @@ async function renderContractors() {
           <svg width="16" height="16" viewBox="0 0 20 20" fill="var(--teal)"><path fill-rule="evenodd" d="M10 1a4 4 0 00-4 4v2H5a2 2 0 00-2 2v7a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-1V5a4 4 0 00-4-4zm2 6V5a2 2 0 10-4 0v2h4z" clip-rule="evenodd"/></svg>
           <span class="text-sm fw-600" style="color:var(--teal)">Restricted section</span>
         </div>
-        <p class="text-xs text-muted" style="margin-top:4px">Only Admins and Treasurers can see this page. Tax IDs and bank account numbers are encrypted at rest, masked by default, and every view or change is logged.</p>
+        <p class="text-xs text-muted" style="margin-top:4px">Only Admins, Treasurers, and the President can see this page. Tax IDs and bank account numbers are encrypted at rest, masked by default, and every view or change is logged.</p>
       </div>
       <div class="stat-grid mb-20">
         <div class="stat-card"><div class="stat-label">Contractors</div><div class="stat-value">${_contractors.length}</div></div>
