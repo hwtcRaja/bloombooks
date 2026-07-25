@@ -9,7 +9,11 @@ import secrets
 from datetime import datetime
 import cloudinary
 import cloudinary.uploader
+import cloudinary.utils
 import requests as req_lib
+import base64
+import time
+from cryptography.fernet import Fernet, InvalidToken
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'bloombooks-dev-key')
@@ -23,6 +27,54 @@ cloudinary.config(
     api_key=os.environ.get('CLOUDINARY_API_KEY', ''),
     api_secret=os.environ.get('CLOUDINARY_API_SECRET', '')
 )
+
+# ─── Contractor field-level encryption ─────────────────────────────────────────
+# SSNs/EINs and bank account/routing numbers are encrypted at rest with Fernet
+# (AES-128-CBC + HMAC). Set CONTRACTOR_ENCRYPTION_KEY in production — generate one
+# with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# If it's not set, a key is derived from SECRET_KEY so local/dev still works, but
+# that fallback is NOT safe for production (it means anyone with SECRET_KEY can
+# decrypt contractor data — always set a dedicated key on Railway).
+_contractor_cipher = None
+def get_cipher():
+    global _contractor_cipher
+    if _contractor_cipher is not None:
+        return _contractor_cipher
+    key = os.environ.get('CONTRACTOR_ENCRYPTION_KEY', '').strip()
+    if key:
+        _contractor_cipher = Fernet(key.encode())
+    else:
+        print("[CONTRACTORS] WARNING: CONTRACTOR_ENCRYPTION_KEY is not set. Falling back to a "
+              "key derived from SECRET_KEY. Set CONTRACTOR_ENCRYPTION_KEY as its own env var "
+              "before storing real SSNs/EINs or bank details in production.")
+        digest = hashlib.sha256(app.secret_key.encode()).digest()
+        _contractor_cipher = Fernet(base64.urlsafe_b64encode(digest))
+    return _contractor_cipher
+
+def encrypt_value(plain):
+    """Encrypt a sensitive string for storage. Returns None for empty input."""
+    if plain is None or str(plain).strip() == '':
+        return None
+    return get_cipher().encrypt(str(plain).encode()).decode()
+
+def decrypt_value(token):
+    """Decrypt a value previously produced by encrypt_value. Returns None on failure."""
+    if not token:
+        return None
+    try:
+        return get_cipher().decrypt(token.encode()).decode()
+    except (InvalidToken, Exception):
+        return None
+
+def last4(value):
+    """Last 4 alphanumeric characters of a value, for safe display (e.g. ***-**-1234)."""
+    if not value:
+        return ''
+    digits = ''.join(ch for ch in str(value) if ch.isalnum())
+    return digits[-4:] if len(digits) >= 4 else digits
+
+def verify_password(user, password):
+    return bool(password) and hash_pw(password) == user['password']
 
 # ─── Email config ─────────────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
@@ -219,6 +271,72 @@ def init_db():
         facility_budget_id INTEGER REFERENCES bb_budgets(id) ON DELETE SET NULL,
         season_weeks     INTEGER DEFAULT 36,
         updated_at       TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
+    # ─── Contractors (secure section: W9s, agreements, payments, banking) ─────
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_contractors (
+        id                  SERIAL PRIMARY KEY,
+        name                TEXT NOT NULL,
+        business_name       TEXT,
+        contact_email       TEXT,
+        contact_phone       TEXT,
+        address             TEXT,
+        tax_classification  TEXT DEFAULT 'individual',
+        tax_id_type         TEXT DEFAULT 'ssn',
+        ein_ssn_encrypted   TEXT,
+        ein_ssn_last4       TEXT,
+        status              TEXT DEFAULT 'active',
+        notes               TEXT,
+        created_by          INTEGER REFERENCES bb_users(id),
+        created_at          TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
+        updated_at          TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_contractor_documents (
+        id               SERIAL PRIMARY KEY,
+        contractor_id    INTEGER NOT NULL REFERENCES bb_contractors(id) ON DELETE CASCADE,
+        doc_type         TEXT NOT NULL DEFAULT 'other',
+        filename         TEXT,
+        cloud_public_id  TEXT NOT NULL,
+        resource_type    TEXT DEFAULT 'raw',
+        format           TEXT,
+        effective_date   TEXT,
+        expires_at       TEXT,
+        uploaded_by      INTEGER REFERENCES bb_users(id),
+        uploaded_at      TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_contractor_bank_accounts (
+        id                          SERIAL PRIMARY KEY,
+        contractor_id               INTEGER NOT NULL REFERENCES bb_contractors(id) ON DELETE CASCADE,
+        nickname                    TEXT,
+        account_holder_name         TEXT,
+        account_type                TEXT DEFAULT 'checking',
+        routing_number_encrypted    TEXT,
+        routing_last4               TEXT,
+        account_number_encrypted    TEXT,
+        account_last4               TEXT,
+        is_primary                  INTEGER DEFAULT 0,
+        is_active                   INTEGER DEFAULT 1,
+        created_by                  INTEGER REFERENCES bb_users(id),
+        created_at                  TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_contractor_payments (
+        id                SERIAL PRIMARY KEY,
+        contractor_id     INTEGER NOT NULL REFERENCES bb_contractors(id) ON DELETE CASCADE,
+        amount            REAL NOT NULL,
+        method            TEXT NOT NULL,
+        bank_account_id   INTEGER REFERENCES bb_contractor_bank_accounts(id),
+        payment_date      TEXT NOT NULL,
+        reference_number  TEXT,
+        budget_id         INTEGER REFERENCES bb_budgets(id),
+        request_id        INTEGER REFERENCES bb_purchase_requests(id),
+        memo              TEXT,
+        status            TEXT DEFAULT 'paid',
+        void_reason       TEXT,
+        paid_by           INTEGER REFERENCES bb_users(id),
+        created_at        TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
 
     c.execute("ALTER TABLE bb_production_members ADD COLUMN IF NOT EXISTS display_title TEXT DEFAULT ''")
@@ -2504,6 +2622,346 @@ def get_facility_cost():
                     result['cost_per_hour_spent'] = round(rollup['spent']/total_possible_hours, 2)
     conn.close()
     return jsonify(result)
+
+# ─── Contractors (secure: profiles, W9s/agreements, banking, payments) ────────
+# This whole section is restricted to admin & treasurer only — it's the one part
+# of BloomBooks that touches SSNs/EINs and bank account numbers, so access is
+# deliberately narrower than the rest of the "Admin" area (which also includes
+# president/producer). Every create/update/delete/reveal/download is written to
+# bb_audit_log so there's a trail of who touched what and when.
+CONTRACTOR_ROLES = ('admin', 'treasurer')
+
+def require_contractor_access():
+    u = current_user()
+    if not u:
+        return None, (jsonify({'error': 'Not authenticated'}), 401)
+    if u['role'] not in CONTRACTOR_ROLES:
+        return None, (jsonify({'error': 'Insufficient permissions'}), 403)
+    return u, None
+
+def signed_doc_url(public_id, resource_type='raw', fmt=None):
+    """Short-lived signed URL for a private Cloudinary asset (never a permanent public link)."""
+    url, _opts = cloudinary.utils.cloudinary_url(
+        public_id,
+        resource_type=resource_type or 'raw',
+        type='private',
+        sign_url=True,
+        secure=True,
+        format=fmt,
+        expires_at=int(time.time()) + 300,
+    )
+    return url
+
+def scrub_contractor(row):
+    d = dict(row)
+    d.pop('ein_ssn_encrypted', None)
+    return d
+
+@app.route('/api/contractors', methods=['GET'])
+def list_contractors():
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    rows = conn.execute('''
+        SELECT ct.*,
+          EXISTS(SELECT 1 FROM bb_contractor_documents d WHERE d.contractor_id=ct.id AND d.doc_type='w9') AS has_w9,
+          EXISTS(SELECT 1 FROM bb_contractor_documents d WHERE d.contractor_id=ct.id AND d.doc_type='agreement') AS has_agreement,
+          (SELECT COALESCE(SUM(amount),0) FROM bb_contractor_payments p WHERE p.contractor_id=ct.id AND p.status='paid') AS total_paid
+        FROM bb_contractors ct ORDER BY ct.status ASC, ct.name ASC
+    ''').fetchall()
+    conn.close()
+    return jsonify([scrub_contractor(r) for r in rows])
+
+@app.route('/api/contractors', methods=['POST'])
+def create_contractor():
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Contractor name is required'}), 400
+    conn = get_db()
+    c = conn.execute('''INSERT INTO bb_contractors
+        (name, business_name, contact_email, contact_phone, address, tax_classification, notes, created_by)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
+        (name, data.get('business_name'), data.get('contact_email'), data.get('contact_phone'),
+         data.get('address'), data.get('tax_classification', 'individual'), data.get('notes'), u['id']))
+    cid = c.fetchone()['id']
+    conn.commit(); conn.close()
+    log_action(u['id'], 'created_contractor', 'contractor', cid, name)
+    return jsonify({'ok': True, 'id': cid})
+
+@app.route('/api/contractors/<int:cid>', methods=['GET'])
+def get_contractor(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    ct = conn.execute('SELECT * FROM bb_contractors WHERE id=%s', (cid,)).fetchone()
+    if not ct:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    docs = conn.execute('''SELECT id, doc_type, filename, format, effective_date, expires_at, uploaded_by, uploaded_at
+                           FROM bb_contractor_documents WHERE contractor_id=%s ORDER BY uploaded_at DESC''', (cid,)).fetchall()
+    banks = conn.execute('''SELECT id, nickname, account_holder_name, account_type, routing_last4, account_last4,
+                            is_primary, is_active, created_at
+                            FROM bb_contractor_bank_accounts WHERE contractor_id=%s
+                            ORDER BY is_primary DESC, created_at''', (cid,)).fetchall()
+    payments = conn.execute('''SELECT p.*, u.name AS paid_by_name FROM bb_contractor_payments p
+                               LEFT JOIN bb_users u ON p.paid_by = u.id
+                               WHERE p.contractor_id=%s ORDER BY p.payment_date DESC, p.id DESC''', (cid,)).fetchall()
+    conn.close()
+    payments = [dict(p) for p in payments]
+    return jsonify({
+        'contractor': scrub_contractor(ct),
+        'documents': [dict(d) for d in docs],
+        'bank_accounts': [dict(b) for b in banks],
+        'payments': payments,
+        'total_paid': sum(p['amount'] for p in payments if p['status'] == 'paid')
+    })
+
+@app.route('/api/contractors/<int:cid>', methods=['PUT'])
+def update_contractor(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Contractor name is required'}), 400
+    conn = get_db()
+    conn.execute('''UPDATE bb_contractors SET name=%s, business_name=%s, contact_email=%s, contact_phone=%s,
+        address=%s, tax_classification=%s, status=%s, notes=%s,
+        updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS') WHERE id=%s''',
+        (name, data.get('business_name'), data.get('contact_email'), data.get('contact_phone'),
+         data.get('address'), data.get('tax_classification'), data.get('status', 'active'), data.get('notes'), cid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'updated_contractor', 'contractor', cid, name)
+    return jsonify({'ok': True})
+
+@app.route('/api/contractors/<int:cid>', methods=['DELETE'])
+def delete_contractor(cid):
+    u = current_user()
+    if not u or u['role'] != 'admin':
+        return jsonify({'error': 'Insufficient permissions'}), 403
+    conn = get_db()
+    n = conn.execute('SELECT COUNT(*) AS n FROM bb_contractor_payments WHERE contractor_id=%s', (cid,)).fetchone()['n']
+    if n > 0:
+        conn.close()
+        return jsonify({'error': 'This contractor has recorded payments and can\'t be deleted — mark them inactive instead.'}), 400
+    docs = conn.execute('SELECT * FROM bb_contractor_documents WHERE contractor_id=%s', (cid,)).fetchall()
+    for doc in docs:
+        try:
+            cloudinary.uploader.destroy(doc['cloud_public_id'], resource_type=doc['resource_type'] or 'raw', type='private')
+        except Exception as e:
+            print(f"[CONTRACTOR DELETE] Cloudinary destroy failed: {e}")
+    conn.execute('DELETE FROM bb_contractors WHERE id=%s', (cid,))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'deleted_contractor', 'contractor', cid)
+    return jsonify({'ok': True})
+
+# ── Tax ID (SSN/EIN) ────────────────────────────────────────────────────────
+@app.route('/api/contractors/<int:cid>/tax-id', methods=['PUT'])
+def set_contractor_tax_id(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    tax_id = (data.get('tax_id') or '').strip()
+    if not tax_id:
+        return jsonify({'error': 'Tax ID is required'}), 400
+    conn = get_db()
+    conn.execute('''UPDATE bb_contractors SET ein_ssn_encrypted=%s, ein_ssn_last4=%s, tax_id_type=%s,
+        updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS') WHERE id=%s''',
+        (encrypt_value(tax_id), last4(tax_id), data.get('tax_id_type', 'ssn'), cid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'updated_contractor_tax_id', 'contractor', cid)
+    return jsonify({'ok': True})
+
+@app.route('/api/contractors/<int:cid>/tax-id/reveal', methods=['POST'])
+def reveal_contractor_tax_id(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    if not verify_password(u, data.get('password', '')):
+        log_action(u['id'], 'failed_reveal_attempt', 'contractor', cid, 'tax_id')
+        return jsonify({'error': 'Incorrect password'}), 403
+    conn = get_db()
+    ct = conn.execute('SELECT ein_ssn_encrypted, tax_id_type FROM bb_contractors WHERE id=%s', (cid,)).fetchone()
+    conn.close()
+    if not ct or not ct['ein_ssn_encrypted']:
+        return jsonify({'error': 'No tax ID on file'}), 404
+    log_action(u['id'], 'revealed_contractor_tax_id', 'contractor', cid)
+    return jsonify({'tax_id': decrypt_value(ct['ein_ssn_encrypted']), 'tax_id_type': ct['tax_id_type']})
+
+# ── Documents (W9s, signed agreements, etc.) — stored privately in Cloudinary ──
+@app.route('/api/contractors/<int:cid>/documents', methods=['POST'])
+def upload_contractor_document(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    file = request.files['file']
+    doc_type = request.form.get('doc_type', 'other')
+    if not cloudinary.config().cloud_name:
+        return jsonify({'error': 'Cloudinary not configured.'}), 500
+    try:
+        result = cloudinary.uploader.upload(
+            file,
+            folder=f'bloombooks/contractors/{cid}',
+            resource_type='auto',
+            type='private',
+            use_filename=True,
+            unique_filename=True
+        )
+        conn = get_db()
+        conn.execute('''INSERT INTO bb_contractor_documents
+            (contractor_id, doc_type, filename, cloud_public_id, resource_type, format, effective_date, expires_at, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+            (cid, doc_type, file.filename, result['public_id'], result.get('resource_type', 'raw'),
+             result.get('format'), request.form.get('effective_date') or None,
+             request.form.get('expires_at') or None, u['id']))
+        conn.commit(); conn.close()
+        log_action(u['id'], 'uploaded_contractor_document', 'contractor', cid, f"doc_type={doc_type}")
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/contractors/<int:cid>/documents/<int:did>/download', methods=['GET'])
+def download_contractor_document(cid, did):
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    doc = conn.execute('SELECT * FROM bb_contractor_documents WHERE id=%s AND contractor_id=%s', (did, cid)).fetchone()
+    conn.close()
+    if not doc:
+        return jsonify({'error': 'Not found'}), 404
+    try:
+        url = signed_doc_url(doc['cloud_public_id'], doc['resource_type'], doc['format'])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    log_action(u['id'], 'downloaded_contractor_document', 'contractor', cid, f"doc_type={doc['doc_type']}")
+    return jsonify({'url': url})
+
+@app.route('/api/contractors/<int:cid>/documents/<int:did>', methods=['DELETE'])
+def delete_contractor_document(cid, did):
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    doc = conn.execute('SELECT * FROM bb_contractor_documents WHERE id=%s AND contractor_id=%s', (did, cid)).fetchone()
+    if not doc:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    try:
+        cloudinary.uploader.destroy(doc['cloud_public_id'], resource_type=doc['resource_type'] or 'raw', type='private')
+    except Exception as e:
+        print(f"[CONTRACTOR DOC DELETE] Cloudinary destroy failed: {e}")
+    conn.execute('DELETE FROM bb_contractor_documents WHERE id=%s', (did,))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'deleted_contractor_document', 'contractor', cid, f"doc_type={doc['doc_type']}")
+    return jsonify({'ok': True})
+
+# ── Bank accounts (ACH/routing/account numbers — encrypted at rest) ────────────
+@app.route('/api/contractors/<int:cid>/bank-accounts', methods=['POST'])
+def add_contractor_bank_account(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    routing = (data.get('routing_number') or '').strip()
+    account = (data.get('account_number') or '').strip()
+    if not account:
+        return jsonify({'error': 'Account number is required'}), 400
+    conn = get_db()
+    if data.get('is_primary'):
+        conn.execute('UPDATE bb_contractor_bank_accounts SET is_primary=0 WHERE contractor_id=%s', (cid,))
+    conn.execute('''INSERT INTO bb_contractor_bank_accounts
+        (contractor_id, nickname, account_holder_name, account_type,
+         routing_number_encrypted, routing_last4, account_number_encrypted, account_last4, is_primary, created_by)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+        (cid, data.get('nickname'), data.get('account_holder_name'), data.get('account_type', 'checking'),
+         encrypt_value(routing), last4(routing), encrypt_value(account), last4(account),
+         1 if data.get('is_primary') else 0, u['id']))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'added_contractor_bank_account', 'contractor', cid, f"account ending {last4(account)}")
+    return jsonify({'ok': True})
+
+@app.route('/api/contractors/<int:cid>/bank-accounts/<int:bid>/reveal', methods=['POST'])
+def reveal_contractor_bank_account(cid, bid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    if not verify_password(u, data.get('password', '')):
+        log_action(u['id'], 'failed_reveal_attempt', 'contractor', cid, f"bank_account_id={bid}")
+        return jsonify({'error': 'Incorrect password'}), 403
+    conn = get_db()
+    acct = conn.execute('SELECT * FROM bb_contractor_bank_accounts WHERE id=%s AND contractor_id=%s', (bid, cid)).fetchone()
+    conn.close()
+    if not acct:
+        return jsonify({'error': 'Not found'}), 404
+    log_action(u['id'], 'revealed_contractor_bank_account', 'contractor', cid, f"bank_account_id={bid}")
+    return jsonify({
+        'routing_number': decrypt_value(acct['routing_number_encrypted']),
+        'account_number': decrypt_value(acct['account_number_encrypted']),
+        'account_holder_name': acct['account_holder_name']
+    })
+
+@app.route('/api/contractors/<int:cid>/bank-accounts/<int:bid>', methods=['DELETE'])
+def delete_contractor_bank_account(cid, bid):
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    conn.execute('DELETE FROM bb_contractor_bank_accounts WHERE id=%s AND contractor_id=%s', (bid, cid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'deleted_contractor_bank_account', 'contractor', cid, f"bank_account_id={bid}")
+    return jsonify({'ok': True})
+
+# ── Payments ─────────────────────────────────────────────────────────────────
+@app.route('/api/contractors/<int:cid>/payments', methods=['POST'])
+def add_contractor_payment(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    try:
+        amount = float(data.get('amount'))
+    except (TypeError, ValueError):
+        amount = 0
+    method = (data.get('method') or '').strip()
+    payment_date = (data.get('payment_date') or '').strip()
+    if amount <= 0 or not method or not payment_date:
+        return jsonify({'error': 'Amount, method, and payment date are required'}), 400
+    conn = get_db()
+    c = conn.execute('''INSERT INTO bb_contractor_payments
+        (contractor_id, amount, method, bank_account_id, payment_date, reference_number, budget_id, request_id, memo, paid_by)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
+        (cid, amount, method, data.get('bank_account_id') or None, payment_date, data.get('reference_number'),
+         data.get('budget_id') or None, data.get('request_id') or None, data.get('memo'), u['id']))
+    pid = c.fetchone()['id']
+    conn.commit(); conn.close()
+    log_action(u['id'], 'recorded_contractor_payment', 'contractor', cid, f"payment_id={pid} amount={amount} method={method}")
+    return jsonify({'ok': True, 'id': pid})
+
+@app.route('/api/contractors/payments/<int:pid>/void', methods=['POST'])
+def void_contractor_payment(pid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    conn = get_db()
+    pay = conn.execute('SELECT * FROM bb_contractor_payments WHERE id=%s', (pid,)).fetchone()
+    if not pay:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    conn.execute("UPDATE bb_contractor_payments SET status='void', void_reason=%s WHERE id=%s",
+                 (data.get('reason', ''), pid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'voided_contractor_payment', 'contractor', pay['contractor_id'], f"payment_id={pid}")
+    return jsonify({'ok': True})
+
+# ── Access / audit trail for a contractor ───────────────────────────────────
+@app.route('/api/contractors/<int:cid>/audit', methods=['GET'])
+def contractor_audit(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    rows = conn.execute('''SELECT a.*, u.name AS user_name FROM bb_audit_log a
+                           LEFT JOIN bb_users u ON a.user_id = u.id
+                           WHERE a.entity_type='contractor' AND a.entity_id=%s
+                           ORDER BY a.created_at DESC LIMIT 200''', (cid,)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
 
 # ─── Static ───────────────────────────────────────────────────────────────────
 @app.route('/', defaults={'path': ''})
