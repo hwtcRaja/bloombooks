@@ -4393,8 +4393,8 @@ function renderContractorDocuments(tc) {
       <button class="btn btn-primary btn-sm ml-8" onclick="document.getElementById('ct-doc-file').click()">+ Upload document</button>
       <input type="file" id="ct-doc-file" class="hidden" accept="image/*,application/pdf" onchange="uploadContractorDoc(this)">
     </div>
-    ${docs.length === 0 ? `<div class="empty"><div class="empty-icon">📄</div><h3>No documents yet</h3><p>Upload a signed W-9 or contractor agreement.</p></div>` : `
-    <div class="table-wrap">
+    ${docs.length === 0 ? `<div class="empty"><div class="empty-icon">📄</div><h3>No documents yet</h3><p>Upload a signed W-9 or contractor agreement, or send one for e-signature below.</p></div>` : `
+    <div class="table-wrap mb-20">
       <table>
         <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th></th></tr></thead>
         <tbody>${docs.map(d => `
@@ -4409,7 +4409,225 @@ function renderContractorDocuments(tc) {
           </tr>`).join('')}
         </tbody>
       </table>
-    </div>`}`;
+    </div>`}
+    <div class="flex flex-center mb-8" style="justify-content:space-between">
+      <div class="fw-600">E-signature requests</div>
+      <div>
+        <button class="btn btn-outline btn-sm" onclick="showTemplateManagerModal()">Manage agreement templates</button>
+        <button class="btn btn-primary btn-sm" onclick="showSendForSignatureModal()">+ Send for e-signature</button>
+      </div>
+    </div>
+    <div id="signing-requests-list"><div class="text-xs text-muted">Loading…</div></div>`;
+  loadSigningRequests();
+}
+
+async function loadSigningRequests() {
+  const box = document.getElementById('signing-requests-list');
+  if (!box) return;
+  try {
+    const reqs = await api('GET', `/contractors/${_currentContractor.contractor.id}/signing-requests`);
+    if (reqs.length === 0) {
+      box.innerHTML = `<div class="text-xs text-muted">No signature requests sent yet.</div>`;
+      return;
+    }
+    const statusBadge = s => ({
+      pending: '<span class="badge badge-pending">Pending</span>',
+      signed: '<span class="badge badge-approved">Signed</span>',
+      void: '<span class="badge badge-denied">Voided</span>',
+      expired: '<span class="badge badge-denied">Expired</span>',
+    }[s] || s);
+    box.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Document</th><th>Sent</th><th>Status</th><th></th></tr></thead>
+          <tbody>${reqs.map(r => `
+            <tr>
+              <td>${r.title}${r.recipient_email ? `<div class="text-xs text-muted">${r.recipient_email}</div>` : ''}</td>
+              <td class="td-muted">${fmtDate(r.created_at)}</td>
+              <td>${statusBadge(r.status)}</td>
+              <td style="white-space:nowrap">
+                ${r.status === 'pending' ? `
+                  <button class="btn btn-outline btn-sm" onclick="copyToClipboard('${r.link}')">Copy link</button>
+                  <button class="btn btn-outline btn-sm" onclick="resendSigningReq(${r.id})">Resend</button>
+                  <button class="btn btn-outline btn-sm" onclick="voidSigningReq(${r.id})">Void</button>` : ''}
+                ${r.status === 'signed' ? `<span class="text-xs text-muted">by ${r.signer_name || ''} on ${fmtDate(r.signed_at)}</span>` : ''}
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) { box.innerHTML = `<div class="text-xs text-muted">${e.message}</div>`; }
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => toast('Link copied!', 'success')).catch(() => toast('Could not copy link', 'error'));
+}
+
+async function resendSigningReq(rid) {
+  try {
+    await api('POST', `/signing-requests/${rid}/resend`, {});
+    toast('Reminder sent!', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function voidSigningReq(rid) {
+  if (!confirm('Cancel this signature request? The link will stop working.')) return;
+  try {
+    await api('POST', `/signing-requests/${rid}/void`, {});
+    toast('Request canceled.', 'info');
+    loadSigningRequests();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Send for e-signature ─────────────────────────────────────────────────────
+const AUTO_MERGE_FIELDS = ['org_name', 'contractor_name', 'business_name_suffix', 'effective_date', 'org_rep_name'];
+
+function extractMergeFields(body) {
+  const seen = new Set();
+  const out = [];
+  for (const m of (body || '').matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
+    if (!seen.has(m[1]) && !AUTO_MERGE_FIELDS.includes(m[1])) { seen.add(m[1]); out.push(m[1]); }
+  }
+  return out;
+}
+
+function fieldLabel(key) {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function renderDynamicSigFields(templateId) {
+  const box = document.getElementById('sig-dynamic-fields');
+  if (!box) return;
+  const t = (window._sigTemplates || []).find(x => String(x.id) === String(templateId));
+  const fields = t ? extractMergeFields(t.body) : [];
+  if (fields.length === 0) { box.innerHTML = `<div class="text-xs text-muted mb-8">This template has no additional fields to fill in.</div>`; return; }
+  box.innerHTML = fields.map(f => {
+    const isDate = f.endsWith('_date') || f === 'date';
+    const isLong = f === 'scope' || f.includes('description') || f.includes('notes');
+    if (isLong) {
+      return `<div class="form-group"><label class="form-label">${fieldLabel(f)}</label><textarea id="sig-field-${f}" class="form-textarea" data-field="${f}"></textarea></div>`;
+    }
+    return `<div class="form-group"><label class="form-label">${fieldLabel(f)}</label><input type="${isDate ? 'date' : 'text'}" id="sig-field-${f}" class="form-input" data-field="${f}"></div>`;
+  }).join('');
+}
+
+async function showSendForSignatureModal() {
+  const c = _currentContractor.contractor;
+  let templates = [];
+  try { templates = await api('GET', '/document-templates?doc_type=agreement'); } catch (e) {}
+  window._sigTemplates = templates;
+  const html = `
+    <div class="modal-header"><span class="modal-title">Send for e-signature</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Document</label>
+        <div class="radio-row" style="display:flex;gap:10px">
+          <label class="btn btn-outline btn-sm" style="flex:1;text-align:center"><input type="radio" name="sig-doc-type" value="agreement" checked onchange="toggleSigDocType()"> Agreement</label>
+          <label class="btn btn-outline btn-sm" style="flex:1;text-align:center"><input type="radio" name="sig-doc-type" value="w9" onchange="toggleSigDocType()"> W-9</label>
+        </div>
+      </div>
+      <div id="sig-agreement-fields">
+        <div class="form-group"><label class="form-label">Template</label>
+          <select id="sig-template" class="form-select" onchange="renderDynamicSigFields(this.value)">${templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}</select>
+        </div>
+        <div id="sig-dynamic-fields"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Recipient email</label><input type="email" id="sig-recipient" class="form-input" value="${c.contact_email || ''}"></div>
+      <div class="form-group"><label class="form-label">Link expires in</label>
+        <select id="sig-expires" class="form-select"><option value="7">7 days</option><option value="14" selected>14 days</option><option value="30">30 days</option></select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="sendSigningRequest()">Send</button>
+    </div>`;
+  showModal(html);
+  if (templates.length) renderDynamicSigFields(templates[0].id);
+}
+
+function toggleSigDocType() {
+  const type = document.querySelector('input[name="sig-doc-type"]:checked').value;
+  document.getElementById('sig-agreement-fields').style.display = type === 'agreement' ? '' : 'none';
+}
+
+async function sendSigningRequest() {
+  const docType = document.querySelector('input[name="sig-doc-type"]:checked').value;
+  const recipient_email = document.getElementById('sig-recipient').value.trim();
+  const expires_days = document.getElementById('sig-expires').value;
+  const payload = {doc_type: docType, recipient_email, expires_days};
+  if (docType === 'agreement') {
+    const tid = document.getElementById('sig-template').value;
+    if (!tid) { toast('Add a template first (Manage agreement templates)', 'error'); return; }
+    payload.template_id = parseInt(tid);
+    const custom_fields = {};
+    document.querySelectorAll('#sig-dynamic-fields [data-field]').forEach(el => {
+      custom_fields[el.dataset.field] = el.value.trim() || 'to be determined';
+    });
+    payload.custom_fields = custom_fields;
+  }
+  try {
+    const r = await api('POST', `/contractors/${_currentContractor.contractor.id}/signing-requests`, payload);
+    toast(r.emailed ? 'Sent! An email went out with the signing link.' : 'Signing link created — copy it below to share.', 'success');
+    closeModal();
+    loadSigningRequests();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Agreement template manager ───────────────────────────────────────────────
+async function showTemplateManagerModal() {
+  let templates = [];
+  try { templates = await api('GET', '/document-templates?doc_type=agreement'); } catch (e) {}
+  const t = templates[0];
+  const html = `
+    <div class="modal-header"><span class="modal-title">Agreement templates</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Template</label>
+        <select id="tpl-select" class="form-select" onchange="loadTemplateIntoForm()">
+          ${templates.map(x => `<option value="${x.id}">${x.name}</option>`).join('')}
+          <option value="new">+ New template</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Name</label><input type="text" id="tpl-name" class="form-input" value="${t ? t.name : ''}"></div>
+      <div class="form-group">
+        <label class="form-label">Body</label>
+        <div class="text-xs text-muted mb-8">Auto-filled: <code>{{contractor_name}}</code>, <code>{{org_name}}</code>, <code>{{business_name_suffix}}</code>, <code>{{effective_date}}</code>, <code>{{org_rep_name}}</code>. Any other <code>{{field_name}}</code> you write becomes a fill-in box when someone sends this agreement — e.g. <code>{{rate}}</code>, <code>{{class_workshop}}</code>, <code>{{location}}</code>.</div>
+        <textarea id="tpl-body" class="form-textarea" style="min-height:280px;font-family:monospace;font-size:12.5px">${t ? t.body : ''}</textarea>
+      </div>
+      <p class="text-xs text-muted">This is a starting template, not legal advice — have an attorney review it before relying on it for real agreements.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Close</button>
+      <button class="btn btn-primary" onclick="saveTemplateFromModal()">Save template</button>
+    </div>`;
+  window._tplCache = templates;
+  showModal(html);
+}
+
+function loadTemplateIntoForm() {
+  const sel = document.getElementById('tpl-select').value;
+  if (sel === 'new') {
+    document.getElementById('tpl-name').value = '';
+    document.getElementById('tpl-body').value = '';
+    return;
+  }
+  const t = (window._tplCache || []).find(x => String(x.id) === sel);
+  if (t) {
+    document.getElementById('tpl-name').value = t.name;
+    document.getElementById('tpl-body').value = t.body;
+  }
+}
+
+async function saveTemplateFromModal() {
+  const sel = document.getElementById('tpl-select').value;
+  const name = document.getElementById('tpl-name').value.trim();
+  const body = document.getElementById('tpl-body').value.trim();
+  if (!name || !body) { toast('Name and body are required', 'error'); return; }
+  try {
+    if (sel === 'new') { await api('POST', '/document-templates', {name, body, doc_type: 'agreement'}); }
+    else { await api('PUT', `/document-templates/${sel}`, {name, body}); }
+    toast('Template saved!', 'success');
+    closeModal();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function uploadContractorDoc(input) {

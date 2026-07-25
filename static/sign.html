@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Sign Document — BloomBooks</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --teal:#0f6e56;--teal2:#1a8a6c;--teal3:#e1f5ee;
+  --cream:#faf8f3;--ink:#1e1e1b;--ink2:#4a4a45;--ink3:#888880;
+  --border:#dddad0;--red:#b53030;--red-bg:#fdf0f0;
+  --green:#2d7d4f;--green-bg:#edf7f2;
+  --amber:#c97c10;--amber-bg:#fef3e2;
+  --r:10px;--r-sm:7px;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;padding-bottom:48px}
+.header{background:var(--ink);padding:16px;text-align:center}
+.header-title{color:#fff;font-size:17px;font-weight:700;letter-spacing:-.2px}
+.header-sub{color:rgba(255,255,255,.5);font-size:12px;margin-top:2px}
+.content{padding:16px;max-width:560px;margin:0 auto}
+.card{background:#fff;border:1px solid var(--border);border-radius:var(--r);margin-bottom:14px;overflow:hidden}
+.card-body{padding:18px}
+.doc-title{font-size:18px;font-weight:700;margin-bottom:4px}
+.doc-sub{font-size:13px;color:var(--ink3);margin-bottom:16px}
+.doc-body{font-size:14px;line-height:1.65;color:var(--ink2);white-space:pre-wrap;max-height:420px;overflow-y:auto;padding:14px;background:var(--cream);border:1px solid var(--border);border-radius:var(--r-sm);margin-bottom:16px}
+.form-group{margin-bottom:14px}
+.form-label{display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:5px}
+.req{color:var(--red)}
+.form-input,.form-select,.form-textarea{width:100%;padding:11px 13px;border:1.5px solid var(--border);border-radius:var(--r-sm);font-size:15px;color:var(--ink);background:#fff;outline:none;-webkit-appearance:none;appearance:none;font-family:inherit}
+.form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(15,110,86,.1)}
+.form-hint{font-size:12px;color:var(--ink3);margin-top:4px}
+.form-error{color:var(--red);font-size:13px;margin-top:10px;padding:10px 12px;background:var(--red-bg);border-radius:var(--r-sm)}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.consent-row{display:flex;align-items:flex-start;gap:10px;padding:12px;background:var(--teal3);border-radius:var(--r-sm);margin-bottom:16px}
+.consent-row input{margin-top:3px;flex-shrink:0}
+.consent-row label{font-size:12.5px;color:var(--ink2);line-height:1.5}
+.sig-input{font-family:'Segoe Script','Brush Script MT',cursive;font-size:26px;border:none;border-bottom:2px solid var(--ink);padding:8px 4px;background:transparent}
+.sig-input:focus{outline:none;border-bottom-color:var(--teal)}
+.btn-primary{width:100%;padding:15px;background:var(--teal);color:#fff;border:none;border-radius:var(--r-sm);font-size:16px;font-weight:700;cursor:pointer;transition:background .15s}
+.btn-primary:active{background:var(--teal2)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.loading{text-align:center;padding:64px 20px;color:var(--ink3)}
+.spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--teal);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.state-card{text-align:center;padding:40px 24px}
+.state-icon{font-size:40px;margin-bottom:12px}
+.state-title{font-size:18px;font-weight:700;margin-bottom:6px}
+.state-sub{font-size:14px;color:var(--ink3)}
+fieldset{border:1px solid var(--border);border-radius:var(--r-sm);padding:14px;margin-bottom:16px}
+legend{font-size:12px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;padding:0 6px}
+.radio-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px}
+.radio-opt{border:1.5px solid var(--border);border-radius:var(--r-sm);padding:9px 10px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:7px}
+.radio-opt.active{border-color:var(--teal);background:var(--teal3);color:var(--teal);font-weight:600}
+.secure-note{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink3);justify-content:center;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-title">🎭 BloomBooks</div>
+  <div class="header-sub" id="header-sub">Secure document signing</div>
+</div>
+<div class="content" id="content">
+  <div class="loading"><div class="spinner"></div>Loading document…</div>
+</div>
+
+<script>
+const token = location.pathname.split('/sign/')[1];
+let reqData = null;
+
+async function load() {
+  try {
+    const r = await fetch(`/api/sign/${token}`);
+    const d = await r.json();
+    if (!r.ok) { renderError(d.error || 'This signing link is invalid.'); return; }
+    reqData = d;
+    document.getElementById('header-sub').textContent = d.org_name || 'Secure document signing';
+    if (d.status === 'signed') renderSigned(d);
+    else if (d.status === 'expired') renderState('⏰', 'This link has expired', 'Ask the sender for a new signing link.');
+    else if (d.status === 'void') renderState('🚫', 'This request was canceled', 'Contact the sender if you believe this is a mistake.');
+    else if (d.doc_type === 'agreement') renderAgreement(d);
+    else renderW9(d);
+  } catch (e) {
+    renderError('Something went wrong loading this document.');
+  }
+}
+
+function renderError(msg) {
+  document.getElementById('content').innerHTML = `
+    <div class="card"><div class="card-body state-card">
+      <div class="state-icon">⚠️</div>
+      <div class="state-title">Can't load this document</div>
+      <div class="state-sub">${msg}</div>
+    </div></div>`;
+}
+
+function renderState(icon, title, sub) {
+  document.getElementById('content').innerHTML = `
+    <div class="card"><div class="card-body state-card">
+      <div class="state-icon">${icon}</div>
+      <div class="state-title">${title}</div>
+      <div class="state-sub">${sub}</div>
+    </div></div>`;
+}
+
+function renderSigned(d) {
+  document.getElementById('content').innerHTML = `
+    <div class="card"><div class="card-body state-card">
+      <div class="state-icon">✅</div>
+      <div class="state-title">Already signed</div>
+      <div class="state-sub">Signed by ${d.signer_name} on ${d.signed_at}.<br>You're all set — no further action needed.</div>
+    </div></div>`;
+}
+
+function renderAgreement(d) {
+  document.getElementById('content').innerHTML = `
+    <div class="card"><div class="card-body">
+      <div class="doc-title">${d.title}</div>
+      <div class="doc-sub">Prepared for ${d.contractor_name} by ${d.org_name}</div>
+      <div class="doc-body">${(d.body || '').replace(/</g,'&lt;')}</div>
+      ${signatureBlock()}
+      <div id="submit-error"></div>
+      <button class="btn-primary" onclick="submitAgreement()">Sign &amp; submit</button>
+    </div></div>
+    ${secureNote()}`;
+}
+
+function renderW9(d) {
+  document.getElementById('content').innerHTML = `
+    <div class="card"><div class="card-body">
+      <div class="doc-title">Form W-9</div>
+      <div class="doc-sub">Requested by ${d.org_name} — Request for Taxpayer Identification Number and Certification</div>
+
+      <fieldset>
+        <legend>Name &amp; classification</legend>
+        <div class="form-group">
+          <label class="form-label">Legal name (as shown on your tax return) <span class="req">*</span></label>
+          <input type="text" id="w9-legal-name" class="form-input" value="${d.contractor_name || ''}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Business name / disregarded entity name</label>
+          <input type="text" id="w9-business-name" class="form-input">
+          <div class="form-hint">Leave blank if not applicable</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Federal tax classification <span class="req">*</span></label>
+          <div class="radio-grid" id="w9-classification">
+            ${['individual:Individual / sole proprietor','c_corp:C corporation','s_corp:S corporation','partnership:Partnership','trust_estate:Trust / estate','llc:LLC','other:Other'].map(o=>{
+              const [val,label]=o.split(':');
+              return `<div class="radio-opt" data-val="${val}" onclick="pickClassification('${val}')">${label}</div>`;
+            }).join('')}
+          </div>
+          <div id="w9-llc-extra" style="display:none;margin-top:8px">
+            <select id="w9-llc-class" class="form-select">
+              <option value="C">C = C corporation</option>
+              <option value="S">S = S corporation</option>
+              <option value="P">P = Partnership</option>
+            </select>
+          </div>
+          <div id="w9-other-extra" style="display:none;margin-top:8px">
+            <input type="text" id="w9-other-desc" class="form-input" placeholder="Describe your classification">
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Address</legend>
+        <div class="form-group">
+          <label class="form-label">Street address <span class="req">*</span></label>
+          <input type="text" id="w9-address" class="form-input" placeholder="Number, street, apt/suite">
+        </div>
+        <div class="form-group">
+          <label class="form-label">City, state, ZIP <span class="req">*</span></label>
+          <input type="text" id="w9-city-state-zip" class="form-input" placeholder="City, ST 00000">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Account number(s)</label>
+          <input type="text" id="w9-account-numbers" class="form-input" placeholder="Optional">
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Exemptions (usually blank)</legend>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Exempt payee code</label>
+            <input type="text" id="w9-exempt-code" class="form-input">
+          </div>
+          <div class="form-group">
+            <label class="form-label">FATCA exemption code</label>
+            <input type="text" id="w9-fatca-code" class="form-input">
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Taxpayer Identification Number</legend>
+        <div class="form-group">
+          <label class="form-label">TIN type <span class="req">*</span></label>
+          <div class="radio-grid" id="w9-tin-type">
+            <div class="radio-opt active" data-val="ssn" onclick="pickTinType('ssn')">SSN</div>
+            <div class="radio-opt" data-val="ein" onclick="pickTinType('ein')">EIN</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" id="w9-tin-label">Social Security Number <span class="req">*</span></label>
+          <input type="text" id="w9-tin" class="form-input" placeholder="XXX-XX-XXXX" inputmode="numeric">
+          <div class="form-hint">Entered securely — encrypted before storage, never shown in full without a password re-check.</div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Part II — Certification</legend>
+        <div style="font-size:12.5px;color:var(--ink2);line-height:1.6">
+          Under penalties of perjury, I certify that: (1) the number shown on this form is my correct taxpayer identification number;
+          (2) I am not subject to backup withholding for the reasons stated in the IRS Form W-9 instructions;
+          (3) I am a U.S. citizen or other U.S. person; and (4) any FATCA exemption code entered above is correct.
+        </div>
+      </fieldset>
+
+      ${signatureBlock()}
+      <div id="submit-error"></div>
+      <button class="btn-primary" onclick="submitW9()">Sign &amp; submit</button>
+    </div></div>
+    ${secureNote()}`;
+}
+
+function signatureBlock() {
+  return `
+    <div class="consent-row">
+      <input type="checkbox" id="consent-check">
+      <label for="consent-check">I consent to sign this document electronically. I understand this has the same legal effect as a handwritten signature under the U.S. ESIGN Act.</label>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Type your full legal name to sign <span class="req">*</span></label>
+      <input type="text" id="signer-name" class="form-input sig-input" placeholder="Your full name">
+    </div>`;
+}
+
+function secureNote() {
+  return `<div class="secure-note">🔒 This link is unique to you and expires after use or on its expiration date.</div>`;
+}
+
+function pickClassification(val) {
+  document.querySelectorAll('#w9-classification .radio-opt').forEach(el => el.classList.toggle('active', el.dataset.val === val));
+  document.getElementById('w9-llc-extra').style.display = val === 'llc' ? '' : 'none';
+  document.getElementById('w9-other-extra').style.display = val === 'other' ? '' : 'none';
+}
+
+function pickTinType(val) {
+  document.querySelectorAll('#w9-tin-type .radio-opt').forEach(el => el.classList.toggle('active', el.dataset.val === val));
+  document.getElementById('w9-tin-label').innerHTML = (val === 'ein' ? 'Employer Identification Number' : 'Social Security Number') + ' <span class="req">*</span>';
+  document.getElementById('w9-tin').placeholder = val === 'ein' ? 'XX-XXXXXXX' : 'XXX-XX-XXXX';
+}
+
+function showError(msg) {
+  document.getElementById('submit-error').innerHTML = `<div class="form-error">${msg}</div>`;
+}
+
+async function submitAgreement() {
+  const consent = document.getElementById('consent-check').checked;
+  const signer_name = document.getElementById('signer-name').value.trim();
+  if (!consent) { showError('Please check the consent box to continue.'); return; }
+  if (!signer_name) { showError('Type your full legal name to sign.'); return; }
+  await doSubmit({consent, signer_name});
+}
+
+async function submitW9() {
+  const consent = document.getElementById('consent-check').checked;
+  const signer_name = document.getElementById('signer-name').value.trim();
+  const classEl = document.querySelector('#w9-classification .radio-opt.active');
+  const tinEl = document.querySelector('#w9-tin-type .radio-opt.active');
+  const fields = {
+    legal_name: document.getElementById('w9-legal-name').value.trim(),
+    business_name: document.getElementById('w9-business-name').value.trim(),
+    tax_classification: classEl ? classEl.dataset.val : '',
+    llc_tax_class: document.getElementById('w9-llc-class') ? document.getElementById('w9-llc-class').value : '',
+    other_description: document.getElementById('w9-other-desc') ? document.getElementById('w9-other-desc').value.trim() : '',
+    address: document.getElementById('w9-address').value.trim(),
+    city_state_zip: document.getElementById('w9-city-state-zip').value.trim(),
+    account_numbers: document.getElementById('w9-account-numbers').value.trim(),
+    exempt_payee_code: document.getElementById('w9-exempt-code').value.trim(),
+    fatca_code: document.getElementById('w9-fatca-code').value.trim(),
+    tin: document.getElementById('w9-tin').value.trim(),
+    tin_type: tinEl ? tinEl.dataset.val : 'ssn',
+  };
+  if (!consent) { showError('Please check the consent box to continue.'); return; }
+  if (!signer_name) { showError('Type your full legal name to sign.'); return; }
+  if (!fields.legal_name || !fields.tax_classification || !fields.address || !fields.city_state_zip || !fields.tin) {
+    showError('Please fill in all required fields.');
+    return;
+  }
+  await doSubmit({consent, signer_name, fields});
+}
+
+async function doSubmit(payload) {
+  const btn = document.querySelector('.btn-primary');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  try {
+    const r = await fetch(`/api/sign/${token}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      showError(d.error || 'Something went wrong. Please try again.');
+      btn.disabled = false;
+      btn.textContent = 'Sign & submit';
+      return;
+    }
+    renderState('✅', 'Signed successfully', 'Thank you — this has been sent back securely. You can close this page.');
+  } catch (e) {
+    showError('Network error — please check your connection and try again.');
+    btn.disabled = false;
+    btn.textContent = 'Sign & submit';
+  }
+}
+
+load();
+</script>
+</body>
+</html>
