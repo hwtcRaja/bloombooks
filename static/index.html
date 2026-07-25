@@ -4204,7 +4204,7 @@ async function saveTraining() {
 
 // ── Contractors (secure section — admin/treasurer only) ────────────────────────
 const CONTRACTOR_METHODS = ['ACH', 'Check', 'Zelle', 'Venmo', 'PayPal', 'Cash', 'Other'];
-const DOC_TYPE_LABELS = {w9: 'W-9', agreement: 'Contractor Agreement', other: 'Other'};
+const DOC_TYPE_LABELS = {w9: 'W-9', agreement: 'Contractor Agreement', bank_auth: 'Bank/ACH Authorization', other: 'Other'};
 let _contractors = [];
 let _currentContractor = null;
 let _contractorTab = 'profile';
@@ -4524,6 +4524,7 @@ async function showSendForSignatureModal() {
         <div class="radio-row" style="display:flex;gap:10px">
           <label class="btn btn-outline btn-sm" style="flex:1;text-align:center"><input type="radio" name="sig-doc-type" value="agreement" checked onchange="toggleSigDocType()"> Agreement</label>
           <label class="btn btn-outline btn-sm" style="flex:1;text-align:center"><input type="radio" name="sig-doc-type" value="w9" onchange="toggleSigDocType()"> W-9</label>
+          <label class="btn btn-outline btn-sm" style="flex:1;text-align:center"><input type="radio" name="sig-doc-type" value="bank_auth" onchange="toggleSigDocType()"> Bank Info</label>
         </div>
       </div>
       <div id="sig-agreement-fields">

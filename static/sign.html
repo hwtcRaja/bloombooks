@@ -80,6 +80,7 @@ async function load() {
     else if (d.status === 'expired') renderState('⏰', 'This link has expired', 'Ask the sender for a new signing link.');
     else if (d.status === 'void') renderState('🚫', 'This request was canceled', 'Contact the sender if you believe this is a mistake.');
     else if (d.doc_type === 'agreement') renderAgreement(d);
+    else if (d.doc_type === 'bank_auth') renderBankAuth(d);
     else renderW9(d);
   } catch (e) {
     renderError('Something went wrong loading this document.');
@@ -288,6 +289,76 @@ async function submitW9() {
   if (!consent) { showError('Please check the consent box to continue.'); return; }
   if (!signer_name) { showError('Type your full legal name to sign.'); return; }
   if (!fields.legal_name || !fields.tax_classification || !fields.address || !fields.city_state_zip || !fields.tin) {
+    showError('Please fill in all required fields.');
+    return;
+  }
+  await doSubmit({consent, signer_name, fields});
+}
+
+function renderBankAuth(d) {
+  document.getElementById('content').innerHTML = `
+    <div class="card"><div class="card-body">
+      <div class="doc-title">Bank / ACH Payment Authorization</div>
+      <div class="doc-sub">Requested by ${d.org_name} — sets up direct deposit for payments owed to ${d.contractor_name}</div>
+
+      <div class="doc-body" style="max-height:none">
+        I authorize ${d.org_name} to deposit payments owed to me for services rendered as an independent
+        contractor directly into the bank account below via ACH transfer, in lieu of a paper check. This
+        stays in effect until I submit a new form or notify ${d.org_name} in writing to change it.
+      </div>
+
+      <fieldset>
+        <legend>Account holder</legend>
+        <div class="form-group">
+          <label class="form-label">Name on the account <span class="req">*</span></label>
+          <input type="text" id="bk-holder-name" class="form-input" value="${d.contractor_name || ''}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Account type <span class="req">*</span></label>
+          <div class="radio-grid" id="bk-account-type" style="grid-template-columns:1fr 1fr">
+            <div class="radio-opt active" data-val="checking" onclick="pickAccountType('checking')">Checking</div>
+            <div class="radio-opt" data-val="savings" onclick="pickAccountType('savings')">Savings</div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Bank details</legend>
+        <div class="form-group">
+          <label class="form-label">Routing number <span class="req">*</span></label>
+          <input type="text" id="bk-routing" class="form-input" placeholder="9 digits" inputmode="numeric">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Account number <span class="req">*</span></label>
+          <input type="text" id="bk-account" class="form-input" inputmode="numeric">
+        </div>
+        <div class="form-hint">Entered securely — encrypted before storage. ${d.org_name} staff only ever see the last 4 digits without an extra password check.</div>
+      </fieldset>
+
+      ${signatureBlock()}
+      <div id="submit-error"></div>
+      <button class="btn-primary" onclick="submitBankAuth()">Sign &amp; submit</button>
+    </div></div>
+    ${secureNote()}`;
+}
+
+function pickAccountType(val) {
+  document.querySelectorAll('#bk-account-type .radio-opt').forEach(el => el.classList.toggle('active', el.dataset.val === val));
+}
+
+async function submitBankAuth() {
+  const consent = document.getElementById('consent-check').checked;
+  const signer_name = document.getElementById('signer-name').value.trim();
+  const typeEl = document.querySelector('#bk-account-type .radio-opt.active');
+  const fields = {
+    account_holder_name: document.getElementById('bk-holder-name').value.trim(),
+    account_type: typeEl ? typeEl.dataset.val : 'checking',
+    routing_number: document.getElementById('bk-routing').value.trim(),
+    account_number: document.getElementById('bk-account').value.trim(),
+  };
+  if (!consent) { showError('Please check the consent box to continue.'); return; }
+  if (!signer_name) { showError('Type your full legal name to sign.'); return; }
+  if (!fields.account_holder_name || !fields.routing_number || !fields.account_number) {
     showError('Please fill in all required fields.');
     return;
   }
