@@ -2896,6 +2896,67 @@ def build_agreement_pdf(title, body_text, signer_name, signer_ip, signer_ua, con
     doc.build(story, onFirstPage=deco, onLaterPages=deco)
     return buf.getvalue()
 
+def build_bank_auth_pdf(fields, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
+    """ACH/direct deposit authorization. The retained record shows the routing number in full
+    (it identifies a bank/branch, not the person, and isn't sensitive on its own) but masks the
+    account number to last 4 — the actual number stays encrypted in bb_contractor_bank_accounts
+    and is only used from there for payments, so the PDF doesn't need to duplicate it in full."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                             topMargin=PDF_MARGIN + 60, bottomMargin=PDF_MARGIN + 10,
+                             leftMargin=PDF_MARGIN, rightMargin=PDF_MARGIN)
+    styles = getSampleStyleSheet()
+    body_style = ParagraphStyle('bodyc2', parent=styles['Normal'], fontSize=10, leading=14.5, textColor=PDF_INK2)
+    heading_style = ParagraphStyle('h4c2', parent=styles['Heading4'], fontSize=11, textColor=PDF_INK, spaceBefore=4)
+
+    holder = fields.get('account_holder_name') or signer_name
+    intro = (
+        f"I, {holder}, authorize {ORG_NAME} to deposit payments owed to me for services rendered as an "
+        f"independent contractor directly into the bank account listed below via ACH (Automated Clearing "
+        f"House) transfer, in lieu of a paper check."
+    )
+    understand_items = [
+        f"This authorization remains in effect until I submit a new authorization form or notify {ORG_NAME} "
+        f"in writing to cancel or change it.",
+        f"It is my responsibility to promptly notify {ORG_NAME} of any changes to this account information.",
+        f"{ORG_NAME} is not responsible for delays or errors caused by incorrect account information I provide.",
+    ]
+
+    story = [Paragraph('ACH / DIRECT DEPOSIT PAYMENT AUTHORIZATION', heading_style), Spacer(1, 10)]
+    story.append(Paragraph(intro, body_style))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph('By signing this form, I understand and agree that:', body_style))
+    for item in understand_items:
+        story.append(Paragraph(f'\u2022 {item}', body_style))
+    story.append(Spacer(1, 16))
+
+    rows = [
+        ['Account holder name', holder],
+        ['Account type', (fields.get('account_type') or '').capitalize()],
+        ['Bank routing number', fields.get('routing_number_display', '')],
+        ['Bank account number', fields.get('account_number_display', '')],
+    ]
+    t = Table(rows, colWidths=[160, 300])
+    t.setStyle(TableStyle([
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f7f7f5')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 7),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 18))
+    sig_style = ParagraphStyle('sig2', parent=body_style, textColor=PDF_INK)
+    story.append(Paragraph(f'<b>Signed:</b> {signer_name}', sig_style))
+    story.append(Paragraph(f'<b>Date:</b> {signed_at}', sig_style))
+    _signature_certificate(story, styles, signer_name, signer_ip, signer_ua, consent_at, signed_at, token)
+
+    deco = _pdf_page_decorations('Payment Authorization')
+    doc.build(story, onFirstPage=deco, onLaterPages=deco)
+    return buf.getvalue()
+
 # ── Form W-9 — closer visual facsimile of the real IRS grid layout ─────────────
 IRS_W9_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'irs_form_w9.pdf')
 W9_FIELD_PREFIX = 'topmostSubform[0].Page1[0]'
@@ -3034,17 +3095,40 @@ def require_contractor_access():
         return None, (jsonify({'error': 'Insufficient permissions'}), 403)
     return u, None
 
-def signed_doc_url(public_id, resource_type='raw', fmt=None):
+DOC_TYPE_LABELS = {'w9': 'W-9', 'agreement': 'Contractor Agreement', 'bank_auth': 'Bank/ACH Authorization', 'other': 'Document'}
+
+def _slug_segment(text):
+    return re.sub(r'[^A-Za-z0-9]+', '_', (text or '')).strip('_').lower()
+
+def build_download_filename(contractor_name, doc_type, doc_title):
+    """firstname.lastname.doctype — e.g. jane.smith.w9 or jane.smith.instructor_agreement"""
+    parts = [p for p in (contractor_name or '').split() if p]
+    first = _slug_segment(parts[0]) if parts else 'contractor'
+    last = _slug_segment(parts[-1]) if len(parts) > 1 else ''
+    if doc_type == 'w9':
+        doc_slug = 'w9'
+    else:
+        doc_slug = _slug_segment(os.path.splitext(doc_title or '')[0]) or _slug_segment(doc_type) or 'document'
+    return '.'.join([p for p in (first, last, doc_slug) if p])
+
+def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None):
     """Time-limited download link for a private Cloudinary asset.
     type='private' assets aren't served through the normal CDN delivery path — Cloudinary
     requires going through its dedicated /download API endpoint (private_download_url),
     which is signed differently than a standard delivery URL."""
+    # Cloudinary's download endpoint names the file "stream" unless told otherwise —
+    # `attachment` accepts a filename (without extension; Cloudinary appends it).
+    attachment = True
+    if download_name:
+        safe_name = re.sub(r'[\\/:"*?<>|]+', ' ', download_name).strip()
+        if safe_name:
+            attachment = safe_name
     return cloudinary.utils.private_download_url(
         public_id,
         fmt or 'pdf',
         resource_type=resource_type or 'raw',
         type='private',
-        attachment=True,
+        attachment=attachment,
         expires_at=int(time.time()) + 300,
     )
 
@@ -3224,12 +3308,15 @@ def download_contractor_document(cid, did):
     u, err = require_contractor_access()
     if err: return err
     conn = get_db()
-    doc = conn.execute('SELECT * FROM bb_contractor_documents WHERE id=%s AND contractor_id=%s', (did, cid)).fetchone()
+    doc = conn.execute('''SELECT d.*, c.name AS contractor_name FROM bb_contractor_documents d
+                          JOIN bb_contractors c ON c.id = d.contractor_id
+                          WHERE d.id=%s AND d.contractor_id=%s''', (did, cid)).fetchone()
     conn.close()
     if not doc:
         return jsonify({'error': 'Not found'}), 404
     try:
-        url = signed_doc_url(doc['cloud_public_id'], doc['resource_type'], doc['format'])
+        download_name = build_download_filename(doc['contractor_name'], doc['doc_type'], doc['filename'])
+        url = signed_doc_url(doc['cloud_public_id'], doc['resource_type'], doc['format'], download_name=download_name)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     log_action(u['id'], 'downloaded_contractor_document', 'contractor', cid, f"doc_type={doc['doc_type']}")
@@ -3457,8 +3544,8 @@ def create_signing_request(cid):
     if err: return err
     data = request.json or {}
     doc_type = data.get('doc_type')
-    if doc_type not in ('agreement', 'w9'):
-        return jsonify({'error': 'doc_type must be agreement or w9'}), 400
+    if doc_type not in ('agreement', 'w9', 'bank_auth'):
+        return jsonify({'error': 'doc_type must be agreement, w9, or bank_auth'}), 400
     conn = get_db()
     ct = conn.execute('SELECT * FROM bb_contractors WHERE id=%s', (cid,)).fetchone()
     if not ct:
@@ -3483,6 +3570,8 @@ def create_signing_request(cid):
         merge_values.setdefault('effective_date', datetime.now().strftime('%B %d, %Y'))
         body_snapshot = render_merge(tmpl['body'], merge_values)
         title = data.get('title') or tmpl['name']
+    elif doc_type == 'bank_auth':
+        title = 'Bank/ACH Payment Authorization'
     else:
         title = 'Form W-9'
 
@@ -3611,6 +3700,35 @@ def submit_signing_request(token):
         if sr['doc_type'] == 'agreement':
             pdf_bytes = build_agreement_pdf(sr['title'], sr['body_snapshot'], signer_name, ip, ua, ts, ts, token)
             doc_type_stored = 'agreement'
+        elif sr['doc_type'] == 'bank_auth':
+            fields = data.get('fields') or {}
+            required = ['account_holder_name', 'routing_number', 'account_number', 'account_type']
+            missing = [f for f in required if not str(fields.get(f, '')).strip()]
+            if missing:
+                conn.close(); return jsonify({'error': f"Missing required field(s): {', '.join(missing)}"}), 400
+            routing = str(fields['routing_number']).strip()
+            account = str(fields['account_number']).strip()
+
+            # Save straight into the contractor's encrypted bank accounts — the same
+            # storage the admin-side "add bank account" form uses. This becomes primary.
+            conn.execute('UPDATE bb_contractor_bank_accounts SET is_primary=0 WHERE contractor_id=%s',
+                         (sr['contractor_id'],))
+            conn.execute('''INSERT INTO bb_contractor_bank_accounts
+                (contractor_id, nickname, account_holder_name, account_type,
+                 routing_number_encrypted, routing_last4, account_number_encrypted, account_last4, is_primary)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,1)''',
+                (sr['contractor_id'], 'Added via payment authorization form', fields['account_holder_name'],
+                 fields.get('account_type', 'checking'), encrypt_value(routing), last4(routing),
+                 encrypt_value(account), last4(account)))
+
+            display_fields = dict(fields)
+            # Routing numbers identify a bank/branch, not the person, so showing it in full on the
+            # retained PDF is normal practice. The account number is masked — the full number lives
+            # only in the encrypted bb_contractor_bank_accounts row used for actually paying them.
+            display_fields['routing_number_display'] = routing
+            display_fields['account_number_display'] = f"{'*' * 6}{last4(account)}"
+            pdf_bytes = build_bank_auth_pdf(display_fields, signer_name, ip, ua, ts, ts, token)
+            doc_type_stored = 'bank_auth'
         else:
             fields = data.get('fields') or {}
             required = ['legal_name', 'tax_classification', 'address', 'city_state_zip', 'tin', 'tin_type']
