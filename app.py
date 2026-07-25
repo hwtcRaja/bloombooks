@@ -3140,6 +3140,18 @@ def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None,
         # brief window before that fix; this keeps those downloadable (generic name only)
         # instead of erroring out.
         can_use_flags = (resource_type or 'image') != 'raw'
+        flags_value = None
+        if can_use_flags:
+            if safe_name:
+                # Cloudinary's transformation syntax splits on '.' to separate multiple
+                # flags, so a literal dot inside the filename (e.g. "jane.smith.w9") gets
+                # misparsed as extra, invalid flags. Escaping it as %2E is Cloudinary's
+                # documented workaround; it still comes through as a literal dot in the
+                # actual downloaded filename.
+                escaped_name = safe_name.replace('.', '%2E')
+                flags_value = f'attachment:{escaped_name}'
+            else:
+                flags_value = 'attachment'
         url, _opts = cloudinary.utils.cloudinary_url(
             public_id,
             resource_type=resource_type or 'image',
@@ -3147,7 +3159,7 @@ def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None,
             sign_url=True,
             secure=True,
             format=fmt or 'pdf',
-            flags=(f'attachment:{safe_name}' if safe_name else 'attachment') if can_use_flags else None,
+            flags=flags_value,
             expires_at=int(time.time()) + 300,
         )
         return url
@@ -3175,7 +3187,12 @@ def list_contractors():
         SELECT ct.*,
           EXISTS(SELECT 1 FROM bb_contractor_documents d WHERE d.contractor_id=ct.id AND d.doc_type='w9') AS has_w9,
           EXISTS(SELECT 1 FROM bb_contractor_documents d WHERE d.contractor_id=ct.id AND d.doc_type='agreement') AS has_agreement,
-          (SELECT COALESCE(SUM(amount),0) FROM bb_contractor_payments p WHERE p.contractor_id=ct.id AND p.status='paid') AS total_paid
+          (SELECT COALESCE(SUM(amount),0) FROM bb_contractor_payments p WHERE p.contractor_id=ct.id AND p.status='paid') AS total_paid,
+          (SELECT STRING_AGG(DISTINCT NULLIF(TRIM(sr.custom_fields::json->>'class_workshop'), ''), ', ')
+             FROM bb_signing_requests sr
+             WHERE sr.contractor_id=ct.id AND sr.doc_type='agreement' AND sr.status='signed'
+               AND COALESCE(sr.custom_fields, '{}') <> '{}'
+          ) AS classes_workshops
         FROM bb_contractors ct ORDER BY ct.status ASC, ct.name ASC
     ''').fetchall()
     conn.close()
