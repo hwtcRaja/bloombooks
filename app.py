@@ -3035,17 +3035,18 @@ def require_contractor_access():
     return u, None
 
 def signed_doc_url(public_id, resource_type='raw', fmt=None):
-    """Short-lived signed URL for a private Cloudinary asset (never a permanent public link)."""
-    url, _opts = cloudinary.utils.cloudinary_url(
+    """Time-limited download link for a private Cloudinary asset.
+    type='private' assets aren't served through the normal CDN delivery path — Cloudinary
+    requires going through its dedicated /download API endpoint (private_download_url),
+    which is signed differently than a standard delivery URL."""
+    return cloudinary.utils.private_download_url(
         public_id,
+        fmt or 'pdf',
         resource_type=resource_type or 'raw',
         type='private',
-        sign_url=True,
-        secure=True,
-        format=fmt,
+        attachment=True,
         expires_at=int(time.time()) + 300,
     )
-    return url
 
 def scrub_contractor(row):
     d = dict(row)
