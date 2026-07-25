@@ -3246,8 +3246,16 @@ def delete_contractor_document(cid, did):
         cloudinary.uploader.destroy(doc['cloud_public_id'], resource_type=doc['resource_type'] or 'raw', type='private')
     except Exception as e:
         print(f"[CONTRACTOR DOC DELETE] Cloudinary destroy failed: {e}")
-    conn.execute('DELETE FROM bb_contractor_documents WHERE id=%s', (did,))
-    conn.commit(); conn.close()
+    try:
+        # A signed document is linked back to the signing request that produced it —
+        # clear that link first so deleting the document doesn't hit a foreign-key error.
+        conn.execute('UPDATE bb_signing_requests SET final_document_id=NULL WHERE final_document_id=%s', (did,))
+        conn.execute('DELETE FROM bb_contractor_documents WHERE id=%s', (did,))
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        return jsonify({'error': f'Could not delete document: {e}'}), 500
+    conn.close()
     log_action(u['id'], 'deleted_contractor_document', 'contractor', cid, f"doc_type={doc['doc_type']}")
     return jsonify({'ok': True})
 
@@ -3300,8 +3308,16 @@ def delete_contractor_bank_account(cid, bid):
     u, err = require_contractor_access()
     if err: return err
     conn = get_db()
-    conn.execute('DELETE FROM bb_contractor_bank_accounts WHERE id=%s AND contractor_id=%s', (bid, cid))
-    conn.commit(); conn.close()
+    try:
+        # Clear any payment records' reference to this bank account first, so the
+        # delete doesn't hit a foreign-key error — the payment itself is untouched.
+        conn.execute('UPDATE bb_contractor_payments SET bank_account_id=NULL WHERE bank_account_id=%s', (bid,))
+        conn.execute('DELETE FROM bb_contractor_bank_accounts WHERE id=%s AND contractor_id=%s', (bid, cid))
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        return jsonify({'error': f'Could not delete bank account: {e}'}), 500
+    conn.close()
     log_action(u['id'], 'deleted_contractor_bank_account', 'contractor', cid, f"bank_account_id={bid}")
     return jsonify({'ok': True})
 
