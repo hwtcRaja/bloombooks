@@ -2629,7 +2629,7 @@ def get_facility_cost():
 # deliberately narrower than the rest of the "Admin" area (which also includes
 # president/producer). Every create/update/delete/reveal/download is written to
 # bb_audit_log so there's a trail of who touched what and when.
-CONTRACTOR_ROLES = ('admin', 'treasurer')
+CONTRACTOR_ROLES = ('admin', 'treasurer', 'president')
 
 def require_contractor_access():
     u = current_user()
