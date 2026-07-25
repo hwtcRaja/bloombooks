@@ -22,6 +22,9 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable
 from reportlab.lib.enums import TA_CENTER
+from reportlab.pdfgen import canvas as pdfcanvas
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject, BooleanObject
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'bloombooks-dev-key')
@@ -2791,27 +2794,6 @@ def sign_request_meta():
 def now_str():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-W9_CLASS_LABELS = {
-    'individual': 'Individual/sole proprietor or single-member LLC',
-    'c_corp': 'C corporation', 's_corp': 'S corporation',
-    'partnership': 'Partnership', 'trust_estate': 'Trust/estate',
-    'llc': 'Limited liability company', 'other': 'Other',
-}
-
-W9_CERT_TEXT = (
-    "Under penalties of perjury, I certify that: (1) The number shown on this form is my correct "
-    "taxpayer identification number (or I am waiting for a number to be issued to me); and (2) I am "
-    "not subject to backup withholding because (a) I am exempt from backup withholding, or (b) I have "
-    "not been notified by the Internal Revenue Service (IRS) that I am subject to backup withholding "
-    "as a result of a failure to report all interest or dividends, or (c) the IRS has notified me that "
-    "I am no longer subject to backup withholding; and (3) I am a U.S. citizen or other U.S. person "
-    "(as defined in the Form W-9 instructions); and (4) The FATCA code(s) entered on this form (if any) "
-    "indicating that I am exempt from FATCA reporting is correct.<br/><br/>"
-    "<i>Certification instructions: You must cross out item (2) above if you have been notified by the "
-    "IRS that you are currently subject to backup withholding because you have failed to report all "
-    "interest and dividends on your tax return.</i>"
-)
-
 def _signature_certificate(story, styles, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
     story.append(Spacer(1, 22))
     story.append(HRFlowable(width='100%', color=colors.HexColor('#cccccc'), thickness=0.7))
@@ -2839,77 +2821,197 @@ def _signature_certificate(story, styles, signer_name, signer_ip, signer_ua, con
         'this electronic signature has the same legal effect as a handwritten signature.',
         ParagraphStyle('small_italic', parent=styles['Italic'], fontSize=8, textColor=colors.HexColor('#777777'))))
 
+# ── HWTC branding (logo extracted from the org's real letterhead) ─────────────
+TEAL = colors.HexColor('#0f6e56')
+TEAL_DARK = colors.HexColor('#0b4f3f')
+PDF_INK = colors.HexColor('#1e1e1b')
+PDF_INK2 = colors.HexColor('#4a4a45')
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'hwtc_logo.png')
+LOGO_ASPECT = 683 / 331  # width / height of the source logo asset
+PDF_MARGIN = 56
+PDF_FOOTER_H = 20
+
+def _pdf_footer(c):
+    c.saveState()
+    c.setFillColor(TEAL)
+    c.rect(0, 0, letter[0], PDF_FOOTER_H, fill=1, stroke=0)
+    c.setFillColor(TEAL_DARK)
+    p = c.beginPath()
+    p.moveTo(0, 0); p.lineTo(0, PDF_FOOTER_H + 26); p.lineTo(34, 0); p.close()
+    c.drawPath(p, fill=1, stroke=0)
+    c.restoreState()
+
+def _pdf_header(c, title):
+    c.saveState()
+    if os.path.exists(LOGO_PATH):
+        logo_w = 1.55 * inch
+        logo_h = logo_w / LOGO_ASPECT
+        logo_x = PDF_MARGIN
+        logo_y = letter[1] - PDF_MARGIN - logo_h + 8
+        c.drawImage(LOGO_PATH, logo_x, logo_y, width=logo_w, height=logo_h, mask='auto')
+        line_y = logo_y + logo_h * 0.42
+        line_x0 = logo_x + logo_w + 14
+    else:
+        line_y = letter[1] - PDF_MARGIN - 20
+        line_x0 = PDF_MARGIN
+    c.setStrokeColor(TEAL)
+    c.setLineWidth(1.4)
+    c.line(line_x0, line_y, letter[0] - PDF_MARGIN, line_y)
+    c.setFillColor(PDF_INK)
+    c.setFont('Helvetica-Bold', 13)
+    c.drawRightString(letter[0] - PDF_MARGIN, line_y + 8, title.upper())
+    c.restoreState()
+
+def _pdf_page_decorations(title):
+    def _fn(c, doc):
+        _pdf_header(c, title)
+        _pdf_footer(c)
+    return _fn
+
 def build_agreement_pdf(title, body_text, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=54, bottomMargin=54, leftMargin=60, rightMargin=60)
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                             topMargin=PDF_MARGIN + 60, bottomMargin=PDF_MARGIN + 10,
+                             leftMargin=PDF_MARGIN, rightMargin=PDF_MARGIN)
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle('TitleC', parent=styles['Title'], alignment=TA_CENTER, fontSize=15)
-    story = [Paragraph(title, title_style), Spacer(1, 16)]
+    body_style = ParagraphStyle('bodyc', parent=styles['Normal'], fontSize=10, leading=14.5, textColor=PDF_INK2)
+    heading_style = ParagraphStyle('h4c', parent=styles['Heading4'], fontSize=10.5, textColor=PDF_INK, spaceBefore=4)
+    story = [Spacer(1, 4)]
     for para in (body_text or '').split('\n\n'):
         para = para.strip()
         if not para:
             continue
-        if para.isupper() and len(para) < 70:
-            story.append(Paragraph(para, styles['Heading4']))
+        first_line = para.split('\n')[0]
+        if first_line.isupper() and len(first_line) < 70:
+            story.append(Paragraph(para.replace('\n', '<br/>'), heading_style))
         else:
-            story.append(Paragraph(para.replace('\n', '<br/>'), styles['Normal']))
-        story.append(Spacer(1, 8))
-    story.append(Spacer(1, 18))
-    story.append(Paragraph(f'<b>Signed:</b> {signer_name}', styles['Normal']))
-    story.append(Paragraph(f'<b>Date:</b> {signed_at}', styles['Normal']))
+            story.append(Paragraph(para.replace('\n', '<br/>'), body_style))
+        story.append(Spacer(1, 7))
+    story.append(Spacer(1, 16))
+    sig_style = ParagraphStyle('sig', parent=body_style, textColor=PDF_INK)
+    story.append(Paragraph(f'<b>Signed:</b> {signer_name}', sig_style))
+    story.append(Paragraph(f'<b>Date:</b> {signed_at}', sig_style))
     _signature_certificate(story, styles, signer_name, signer_ip, signer_ua, consent_at, signed_at, token)
-    doc.build(story)
+    deco = _pdf_page_decorations(title)
+    doc.build(story, onFirstPage=deco, onLaterPages=deco)
+    return buf.getvalue()
+
+# ── Form W-9 — closer visual facsimile of the real IRS grid layout ─────────────
+IRS_W9_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'irs_form_w9.pdf')
+W9_FIELD_PREFIX = 'topmostSubform[0].Page1[0]'
+
+# Maps our internal tax_classification value -> the official form's checkbox "on" value.
+# (Field IDs and on-values were extracted directly from the IRS's own fillable PDF.)
+W9_CLASS_CHECKBOX_VALUES = {
+    'individual': '/1', 'c_corp': '/2', 's_corp': '/3',
+    'partnership': '/4', 'trust_estate': '/5', 'llc': '/6', 'other': '/7',
+}
+
+# Coordinates (PDF points, origin bottom-left) of the blank space above the
+# "Signature of U.S. person" / "Date" captions in the Sign Here box — this part
+# of the official form has no fillable field, so we overlay text onto it directly.
+W9_SIGNATURE_XY = (78, 203)
+W9_DATE_XY = (390, 203)
+
+def _pdf_certificate_page_bytes(document_label, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
+    """A single reportlab-drawn page recording the e-signature audit trail, to append after a filled form."""
+    buf = io.BytesIO()
+    c = pdfcanvas.Canvas(buf, pagesize=letter)
+    W, H = letter
+    m = 42
+    c.setFont('Helvetica-Bold', 14)
+    c.setFillColor(PDF_INK)
+    c.drawString(m, H - 70, 'Electronic Signature Certificate')
+    c.setStrokeColor(colors.HexColor('#cccccc'))
+    c.line(m, H - 80, W - m, H - 80)
+    rows = [
+        ('Document', document_label), ('Signed by', signer_name),
+        ('Consented to electronic signature at', consent_at), ('Signature completed at', signed_at),
+        ('IP address', signer_ip or 'unknown'), ('Browser / device', signer_ua or 'unknown'),
+        ('Signing request ID', token[:16] + '\u2026'),
+    ]
+    ry = H - 105
+    for label, val in rows:
+        c.setFont('Helvetica', 8.5); c.setFillColor(colors.HexColor('#555555'))
+        c.drawString(m, ry, label)
+        c.setFont('Helvetica', 9.5); c.setFillColor(PDF_INK)
+        c.drawString(m + 210, ry, str(val)[:80])
+        ry -= 16
+    c.setFont('Helvetica-Oblique', 7.5); c.setFillColor(colors.HexColor('#777777'))
+    c.drawString(m, ry - 10, 'This document was signed electronically. Under the U.S. ESIGN Act and applicable state UETA law,')
+    c.drawString(m, ry - 20, 'this electronic signature has the same legal effect as a handwritten signature.')
+    _pdf_footer(c)
+    c.showPage()
+    c.save()
     return buf.getvalue()
 
 def build_w9_pdf(fields, tin_type, tin_display, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=44, bottomMargin=44, leftMargin=54, rightMargin=54)
-    styles = getSampleStyleSheet()
-    small = ParagraphStyle('small', parent=styles['Normal'], fontSize=9, leading=13)
-    story = [
-        Paragraph('Substitute Form W-9', styles['Title']),
-        Paragraph('Request for Taxpayer Identification Number and Certification', styles['Normal']),
-        Paragraph('(Substitute form — certification content matches IRS Form W-9, Rev. March 2024)', small),
-        Spacer(1, 14),
-    ]
-    classification = W9_CLASS_LABELS.get(fields.get('tax_classification', ''), fields.get('tax_classification', ''))
-    if fields.get('tax_classification') == 'llc' and fields.get('llc_tax_class'):
-        classification += f" ({fields['llc_tax_class']})"
-    if fields.get('tax_classification') == 'other' and fields.get('other_description'):
-        classification += f" — {fields['other_description']}"
-    rows = [
-        ['1. Name (as shown on your income tax return)', fields.get('legal_name', '')],
-        ['2. Business name / disregarded entity name, if different', fields.get('business_name', '') or '—'],
-        ['3. Federal tax classification', classification],
-        ['4. Exemptions — exempt payee code / FATCA code',
-         f"{fields.get('exempt_payee_code') or '—'} / {fields.get('fatca_code') or '—'}"],
-        ['5. Address', fields.get('address', '')],
-        ['6. City, state, and ZIP code', fields.get('city_state_zip', '')],
-        ['7. Account number(s) (optional)', fields.get('account_numbers') or '—'],
-    ]
-    t = Table(rows, colWidths=[230, 270])
-    t.setStyle(TableStyle([
-        ('FONTSIZE', (0, 0), (-1, -1), 9.5),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f7f7f5')),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 14))
-    story.append(Paragraph('Part I — Taxpayer Identification Number (TIN)', styles['Heading4']))
-    story.append(Paragraph(f"{'Social Security Number' if tin_type == 'ssn' else 'Employer Identification Number'}: {tin_display}", styles['Normal']))
-    story.append(Spacer(1, 10))
-    story.append(Paragraph('Part II — Certification', styles['Heading4']))
-    story.append(Paragraph(W9_CERT_TEXT, small))
-    story.append(Spacer(1, 16))
-    story.append(Paragraph(f'<b>Signature of U.S. person:</b> {signer_name}', styles['Normal']))
-    story.append(Paragraph(f'<b>Date:</b> {signed_at}', styles['Normal']))
-    _signature_certificate(story, styles, signer_name, signer_ip, signer_ua, consent_at, signed_at, token)
-    doc.build(story)
-    return buf.getvalue()
+    """Fills the actual official IRS Form W-9 (the fillable PDF the IRS publishes), rather than a redrawn copy."""
+    P = W9_FIELD_PREFIX
+    writer = PdfWriter(clone_from=IRS_W9_PATH)
+
+    classification = fields.get('tax_classification', '')
+    field_values = {
+        f'{P}.f1_01[0]': fields.get('legal_name', ''),
+        f'{P}.f1_02[0]': fields.get('business_name', '') or '',
+        f'{P}.Address_ReadOrder[0].f1_07[0]': fields.get('address', ''),
+        f'{P}.Address_ReadOrder[0].f1_08[0]': fields.get('city_state_zip', ''),
+        f'{P}.f1_09[0]': ORG_NAME,  # "Requester's name and address (optional)"
+        f'{P}.f1_10[0]': fields.get('account_numbers', '') or '',
+        f'{P}.f1_05[0]': fields.get('exempt_payee_code', '') or '',
+        f'{P}.f1_06[0]': fields.get('fatca_code', '') or '',
+    }
+    if classification in W9_CLASS_CHECKBOX_VALUES:
+        idx = ['individual', 'c_corp', 's_corp', 'partnership', 'trust_estate', 'llc', 'other'].index(classification)
+        field_values[f'{P}.Boxes3a-b_ReadOrder[0].c1_1[{idx}]'] = W9_CLASS_CHECKBOX_VALUES[classification]
+    if classification == 'llc':
+        field_values[f'{P}.Boxes3a-b_ReadOrder[0].f1_03[0]'] = fields.get('llc_tax_class', '')
+    if classification == 'other':
+        field_values[f'{P}.Boxes3a-b_ReadOrder[0].f1_04[0]'] = fields.get('other_description', '')
+
+    digits = (tin_display or '').replace('-', '')
+    if tin_type == 'ein':
+        field_values[f'{P}.f1_14[0]'] = digits[:2]
+        field_values[f'{P}.f1_15[0]'] = digits[2:9]
+    else:
+        field_values[f'{P}.f1_11[0]'] = digits[:3]
+        field_values[f'{P}.f1_12[0]'] = digits[3:5]
+        field_values[f'{P}.f1_13[0]'] = digits[5:9]
+
+    writer.update_page_form_field_values(writer.pages[0], field_values, auto_regenerate=False)
+
+    # This is an XFA-based IRS form; without stripping /XFA, some viewers render the
+    # (blank) XFA layer instead of our filled AcroForm values. NeedAppearances tells
+    # viewers to regenerate field appearances from the values we just set.
+    acro = writer._root_object['/AcroForm']
+    if '/XFA' in acro:
+        del acro[NameObject('/XFA')]
+    acro[NameObject('/NeedAppearances')] = BooleanObject(True)
+
+    # Keep only the form page itself — the IRS's 6-page PDF is mostly instructions
+    # for the person filling it out, not something a business needs to keep on file.
+    for i in range(len(writer.pages) - 1, 0, -1):
+        writer.remove_page(i)
+
+    # The signature line isn't a fillable field on the official form, so overlay it.
+    sig_buf = io.BytesIO()
+    c = pdfcanvas.Canvas(sig_buf, pagesize=letter)
+    c.setFont('Helvetica-Oblique', 13)
+    c.setFillColorRGB(0.05, 0.05, 0.15)
+    c.drawString(W9_SIGNATURE_XY[0], W9_SIGNATURE_XY[1], signer_name)
+    c.setFont('Helvetica', 9)
+    c.setFillColorRGB(0, 0, 0)
+    c.drawString(W9_DATE_XY[0], W9_DATE_XY[1], signed_at[:10])
+    c.save()
+    sig_buf.seek(0)
+    writer.pages[0].merge_page(PdfReader(sig_buf).pages[0])
+
+    cert_bytes = _pdf_certificate_page_bytes('Form W-9', signer_name, signer_ip, signer_ua, consent_at, signed_at, token)
+    writer.append_pages_from_reader(PdfReader(io.BytesIO(cert_bytes)))
+
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 def upload_pdf_private(pdf_bytes, folder):
     return cloudinary.uploader.upload(

@@ -6,3 +6,4 @@ requests
 gunicorn
 cryptography==43.0.1
 reportlab==4.2.5
+pypdf==5.9.0
