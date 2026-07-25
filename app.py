@@ -6,6 +6,8 @@ import hashlib
 import os
 import json
 import secrets
+import re
+import io
 from datetime import datetime
 import cloudinary
 import cloudinary.uploader
@@ -14,6 +16,12 @@ import requests as req_lib
 import base64
 import time
 from cryptography.fernet import Fernet, InvalidToken
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable
+from reportlab.lib.enums import TA_CENTER
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'bloombooks-dev-key')
@@ -80,6 +88,7 @@ def verify_password(user, password):
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 FROM_EMAIL     = os.environ.get('FROM_EMAIL', 'BloomBooks <info@hwtco.org>')
 APP_URL        = os.environ.get('APP_URL', 'http://localhost:5001')
+ORG_NAME       = os.environ.get('ORG_NAME', 'Horizon West Theater Company')
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 class DBWrapper:
@@ -106,6 +115,105 @@ class DBWrapper:
 def get_db():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     return DBWrapper(conn)
+
+DEFAULT_AGREEMENT_TEMPLATE = """INDEPENDENT CONTRACTOR AGREEMENT
+
+This Independent Contractor Agreement ("Agreement") is entered into as of {{effective_date}} between {{org_name}} ("Organization") and {{contractor_name}}{{business_name_suffix}} ("Contractor").
+
+1. SERVICES
+Contractor agrees to provide the following services to the Organization: {{scope}}
+
+2. TERM
+This Agreement begins on {{start_date}} and ends on {{end_date}}, unless terminated earlier as provided below.
+
+3. COMPENSATION
+The Organization agrees to pay Contractor {{rate}}. Payment terms: {{payment_terms}}
+
+4. INDEPENDENT CONTRACTOR STATUS
+Contractor is an independent contractor, not an employee of the Organization. Contractor is responsible for their own taxes, insurance, and benefits. Nothing in this Agreement creates a partnership, joint venture, or employment relationship.
+
+5. TERMINATION
+Either party may terminate this Agreement with written notice if the other party materially breaches its terms and fails to cure the breach within a reasonable time after notice.
+
+6. CONFIDENTIALITY
+Contractor agrees to keep confidential any non-public information about the Organization's operations, participants, donors, or finances learned in the course of providing services, both during and after this engagement.
+
+7. OWNERSHIP OF WORK PRODUCT
+Any materials, creative work, or deliverables created by Contractor specifically for the Organization under this Agreement belong to the Organization upon payment in full, unless otherwise agreed in writing.
+
+8. INDEMNIFICATION
+Each party agrees to be responsible for its own acts and omissions in connection with this Agreement.
+
+9. GOVERNING LAW
+This Agreement is governed by the laws of the State of Florida.
+
+10. ENTIRE AGREEMENT
+This Agreement represents the entire understanding between the parties regarding its subject matter and supersedes any prior discussions or agreements.
+
+By signing below, both parties agree to the terms of this Agreement.
+"""
+
+
+INSTRUCTOR_AGREEMENT_TEMPLATE = """INSTRUCTOR AGREEMENT
+
+This Instructor Agreement is between Horizon West Theater Company ("HWTC") and the instructor identified below ("Instructor") for the class or workshop described in this agreement.
+
+Instructor Name: {{contractor_name}}
+Class/Workshop: {{class_workshop}}
+Date(s): {{class_dates}}
+Location: {{location}}
+Instructor Compensation: {{rate}}
+
+1. INSTRUCTIONAL SERVICES
+The Instructor agrees to provide instruction for the class or workshop listed above.
+
+Horizon West Theater Company will provide the facility, establish the available class schedule in coordination with the Instructor, manage participant registration, collect registration fees, and provide reasonable administrative support for the class.
+
+The Instructor is being engaged for their individual knowledge, experience, skills, and expertise in the subject matter. The Instructor will independently develop or select the curriculum, lesson content, activities, and methods of instruction used for the class.
+
+HWTC may establish general program requirements relating to participant safety, appropriate conduct, facility use, class length, age group, and the general description or purpose of the class but will not direct the Instructor's day-to-day instructional methods or curriculum.
+
+2. COMPENSATION
+The Instructor will receive the compensation listed above for providing the agreed-upon instructional services. Unless otherwise agreed upon, HWTC's standard instructor compensation is an amount equal to the registration fee charged for one participant in the class or workshop. Compensation is for instructional services only and is separate from any unpaid volunteer, board, committee, or other service the Instructor may provide to Horizon West Theater Company.
+
+3. INDEPENDENT INSTRUCTIONAL RELATIONSHIP
+The Instructor is engaged to provide instructional services for the specific class or workshop described in this agreement. The Instructor is free to provide similar instructional or professional services to other organizations or individuals. This agreement does not guarantee or require any future teaching engagements with HWTC. The Instructor is responsible for determining the manner and method of instruction and is not entitled to employee benefits from HWTC. The parties intend for the Instructor to provide these services as an independent contractor. The Instructor is responsible for any taxes or other obligations applicable to compensation received under this agreement.
+
+4. INSTRUCTOR CURRICULUM & MATERIALS
+The Instructor retains ownership of any original curriculum, lesson plans, exercises, choreography, instructional materials, techniques, or other materials created or developed independently by the Instructor and used in connection with the class.
+
+The Instructor is providing Horizon West Theater Company with their individual knowledge, experience, skills, and instructional services for the limited purpose of conducting the class or workshop described in this agreement.
+
+Unless separately agreed to in writing, the Instructor's curriculum and original instructional materials do not become the property of Horizon West Theater Company as a result of teaching the class.
+
+The Instructor grants HWTC permission to use any materials provided by the Instructor as reasonably necessary to administer and conduct the specific class or workshop covered by this agreement. This permission does not authorize HWTC to reproduce, distribute, sell, or use the Instructor's curriculum to conduct future classes without the Instructor's permission.
+
+The Instructor is responsible for ensuring that materials they provide or incorporate into their curriculum are either their own, appropriately licensed, or otherwise permitted for their intended use.
+
+5. SAFETY & CONDUCT
+The Instructor agrees to conduct the class in a safe, professional, and respectful manner and to follow applicable HWTC policies regarding participant safety, facility use, and conduct.
+
+The Instructor will promptly communicate any safety concerns, participant incidents, or other significant issues arising during the class to an appropriate HWTC representative.
+
+6. CANCELLATION OR CHANGES
+If the Instructor is unable to teach the scheduled class, they agree to notify HWTC as soon as reasonably possible.
+
+HWTC may cancel or reschedule a class due to enrollment, facility availability, safety concerns, weather, or other circumstances. If a class is canceled before instructional services are provided, instructor compensation may be adjusted accordingly.
+
+7. VOLUNTEER OR BOARD SERVICE
+If the Instructor also serves as a volunteer, committee member, officer, or member of the Board of Directors of Horizon West Theater Company, this agreement applies only to the paid instructional services described above. Any other volunteer or board service remains separate and uncompensated unless specifically authorized by HWTC.
+
+AGREEMENT
+By signing below, both parties acknowledge and agree to the terms above.
+
+Horizon West Theater Company
+Authorized Representative: {{org_rep_name}}
+Approved: {{effective_date}}
+
+Instructor
+The Instructor's typed signature and signing date are captured electronically at the end of this document.
+"""
+
 
 def init_db():
     conn = get_db()
@@ -338,6 +446,47 @@ def init_db():
         paid_by           INTEGER REFERENCES bb_users(id),
         created_at        TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
+
+    # ─── E-signature: templates & signing requests ─────────────────────────────
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_document_templates (
+        id          SERIAL PRIMARY KEY,
+        name        TEXT NOT NULL UNIQUE,
+        doc_type    TEXT NOT NULL DEFAULT 'agreement',
+        body        TEXT NOT NULL,
+        created_by  INTEGER REFERENCES bb_users(id),
+        created_at  TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
+        updated_at  TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_signing_requests (
+        id                 SERIAL PRIMARY KEY,
+        contractor_id      INTEGER NOT NULL REFERENCES bb_contractors(id) ON DELETE CASCADE,
+        doc_type           TEXT NOT NULL,
+        template_id        INTEGER REFERENCES bb_document_templates(id),
+        title              TEXT,
+        body_snapshot      TEXT,
+        custom_fields      TEXT DEFAULT '{}',
+        token              TEXT NOT NULL UNIQUE,
+        status             TEXT DEFAULT 'pending',
+        recipient_email    TEXT,
+        expires_at         TEXT,
+        created_by         INTEGER REFERENCES bb_users(id),
+        created_at         TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
+        signed_at          TEXT,
+        signer_name        TEXT,
+        signer_ip          TEXT,
+        signer_user_agent  TEXT,
+        consent_at         TEXT,
+        final_document_id  INTEGER REFERENCES bb_contractor_documents(id),
+        void_reason        TEXT
+    )''')
+
+    c.execute('''INSERT INTO bb_document_templates (name, doc_type, body) VALUES (%s,%s,%s)
+                 ON CONFLICT (name) DO NOTHING''',
+        ('Standard Contractor Agreement', 'agreement', DEFAULT_AGREEMENT_TEMPLATE))
+    c.execute('''INSERT INTO bb_document_templates (name, doc_type, body) VALUES (%s,%s,%s)
+                 ON CONFLICT (name) DO NOTHING''',
+        ('Instructor Agreement', 'agreement', INSTRUCTOR_AGREEMENT_TEMPLATE))
 
     c.execute("ALTER TABLE bb_production_members ADD COLUMN IF NOT EXISTS display_title TEXT DEFAULT ''")
 
@@ -2499,6 +2648,10 @@ def mobile_new_request(token):
 def mobile_receipt_page(token):
     return send_from_directory(app.static_folder, 'receipt.html')
 
+@app.route('/sign/<token>')
+def esign_page(token):
+    return send_from_directory(app.static_folder, 'sign.html')
+
 # ─── Pricing Calculator ───────────────────────────────────────────────────────
 # Figures out what to charge for programming (classes, workshops, Rising
 # Stars) and external rentals, using real facility costs from the Budgets
@@ -2622,6 +2775,146 @@ def get_facility_cost():
                     result['cost_per_hour_spent'] = round(rollup['spent']/total_possible_hours, 2)
     conn.close()
     return jsonify(result)
+
+# ─── E-signature: templates, PDF generation, signing requests ─────────────────
+def render_merge(body, values):
+    """Replace {{field}} tags with values; unknown tags render blank."""
+    def repl(m):
+        return str(values.get(m.group(1).strip(), ''))
+    return re.sub(r'\{\{\s*([\w.]+)\s*\}\}', repl, body or '')
+
+def sign_request_meta():
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+    ua = (request.headers.get('User-Agent', '') or '')[:300]
+    return ip, ua
+
+def now_str():
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+W9_CLASS_LABELS = {
+    'individual': 'Individual/sole proprietor or single-member LLC',
+    'c_corp': 'C corporation', 's_corp': 'S corporation',
+    'partnership': 'Partnership', 'trust_estate': 'Trust/estate',
+    'llc': 'Limited liability company', 'other': 'Other',
+}
+
+W9_CERT_TEXT = (
+    "Under penalties of perjury, I certify that: (1) The number shown on this form is my correct "
+    "taxpayer identification number (or I am waiting for a number to be issued to me); and (2) I am "
+    "not subject to backup withholding because (a) I am exempt from backup withholding, or (b) I have "
+    "not been notified by the Internal Revenue Service (IRS) that I am subject to backup withholding "
+    "as a result of a failure to report all interest or dividends, or (c) the IRS has notified me that "
+    "I am no longer subject to backup withholding; and (3) I am a U.S. citizen or other U.S. person "
+    "(as defined in the Form W-9 instructions); and (4) The FATCA code(s) entered on this form (if any) "
+    "indicating that I am exempt from FATCA reporting is correct.<br/><br/>"
+    "<i>Certification instructions: You must cross out item (2) above if you have been notified by the "
+    "IRS that you are currently subject to backup withholding because you have failed to report all "
+    "interest and dividends on your tax return.</i>"
+)
+
+def _signature_certificate(story, styles, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
+    story.append(Spacer(1, 22))
+    story.append(HRFlowable(width='100%', color=colors.HexColor('#cccccc'), thickness=0.7))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph('Electronic Signature Certificate', styles['Heading3']))
+    rows = [
+        ['Signed by', signer_name],
+        ['Consented to electronic signature at', consent_at],
+        ['Signature completed at', signed_at],
+        ['IP address', signer_ip or 'unknown'],
+        ['Browser / device', (signer_ua or 'unknown')],
+        ['Signing request ID', token[:16] + '…'],
+    ]
+    t = Table(rows, colWidths=[170, 330])
+    t.setStyle(TableStyle([
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#555555')),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        'This document was signed electronically. Under the U.S. ESIGN Act and applicable state UETA law, '
+        'this electronic signature has the same legal effect as a handwritten signature.',
+        ParagraphStyle('small_italic', parent=styles['Italic'], fontSize=8, textColor=colors.HexColor('#777777'))))
+
+def build_agreement_pdf(title, body_text, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=54, bottomMargin=54, leftMargin=60, rightMargin=60)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('TitleC', parent=styles['Title'], alignment=TA_CENTER, fontSize=15)
+    story = [Paragraph(title, title_style), Spacer(1, 16)]
+    for para in (body_text or '').split('\n\n'):
+        para = para.strip()
+        if not para:
+            continue
+        if para.isupper() and len(para) < 70:
+            story.append(Paragraph(para, styles['Heading4']))
+        else:
+            story.append(Paragraph(para.replace('\n', '<br/>'), styles['Normal']))
+        story.append(Spacer(1, 8))
+    story.append(Spacer(1, 18))
+    story.append(Paragraph(f'<b>Signed:</b> {signer_name}', styles['Normal']))
+    story.append(Paragraph(f'<b>Date:</b> {signed_at}', styles['Normal']))
+    _signature_certificate(story, styles, signer_name, signer_ip, signer_ua, consent_at, signed_at, token)
+    doc.build(story)
+    return buf.getvalue()
+
+def build_w9_pdf(fields, tin_type, tin_display, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=44, bottomMargin=44, leftMargin=54, rightMargin=54)
+    styles = getSampleStyleSheet()
+    small = ParagraphStyle('small', parent=styles['Normal'], fontSize=9, leading=13)
+    story = [
+        Paragraph('Substitute Form W-9', styles['Title']),
+        Paragraph('Request for Taxpayer Identification Number and Certification', styles['Normal']),
+        Paragraph('(Substitute form — certification content matches IRS Form W-9, Rev. March 2024)', small),
+        Spacer(1, 14),
+    ]
+    classification = W9_CLASS_LABELS.get(fields.get('tax_classification', ''), fields.get('tax_classification', ''))
+    if fields.get('tax_classification') == 'llc' and fields.get('llc_tax_class'):
+        classification += f" ({fields['llc_tax_class']})"
+    if fields.get('tax_classification') == 'other' and fields.get('other_description'):
+        classification += f" — {fields['other_description']}"
+    rows = [
+        ['1. Name (as shown on your income tax return)', fields.get('legal_name', '')],
+        ['2. Business name / disregarded entity name, if different', fields.get('business_name', '') or '—'],
+        ['3. Federal tax classification', classification],
+        ['4. Exemptions — exempt payee code / FATCA code',
+         f"{fields.get('exempt_payee_code') or '—'} / {fields.get('fatca_code') or '—'}"],
+        ['5. Address', fields.get('address', '')],
+        ['6. City, state, and ZIP code', fields.get('city_state_zip', '')],
+        ['7. Account number(s) (optional)', fields.get('account_numbers') or '—'],
+    ]
+    t = Table(rows, colWidths=[230, 270])
+    t.setStyle(TableStyle([
+        ('FONTSIZE', (0, 0), (-1, -1), 9.5),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f7f7f5')),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 14))
+    story.append(Paragraph('Part I — Taxpayer Identification Number (TIN)', styles['Heading4']))
+    story.append(Paragraph(f"{'Social Security Number' if tin_type == 'ssn' else 'Employer Identification Number'}: {tin_display}", styles['Normal']))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph('Part II — Certification', styles['Heading4']))
+    story.append(Paragraph(W9_CERT_TEXT, small))
+    story.append(Spacer(1, 16))
+    story.append(Paragraph(f'<b>Signature of U.S. person:</b> {signer_name}', styles['Normal']))
+    story.append(Paragraph(f'<b>Date:</b> {signed_at}', styles['Normal']))
+    _signature_certificate(story, styles, signer_name, signer_ip, signer_ua, consent_at, signed_at, token)
+    doc.build(story)
+    return buf.getvalue()
+
+def upload_pdf_private(pdf_bytes, folder):
+    return cloudinary.uploader.upload(
+        io.BytesIO(pdf_bytes), folder=folder, resource_type='raw', type='private'
+    )
 
 # ─── Contractors (secure: profiles, W9s/agreements, banking, payments) ────────
 # This whole section is restricted to admin & treasurer only — it's the one part
@@ -2962,6 +3255,291 @@ def contractor_audit(cid):
                            ORDER BY a.created_at DESC LIMIT 200''', (cid,)).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
+
+# ─── Document templates (agreements) ───────────────────────────────────────────
+@app.route('/api/document-templates', methods=['GET'])
+def list_document_templates():
+    u, err = require_contractor_access()
+    if err: return err
+    doc_type = request.args.get('doc_type', 'agreement')
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM bb_document_templates WHERE doc_type=%s ORDER BY name', (doc_type,)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/document-templates', methods=['POST'])
+def create_document_template():
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    body = (data.get('body') or '').strip()
+    if not name or not body:
+        return jsonify({'error': 'Name and body are required'}), 400
+    conn = get_db()
+    try:
+        c = conn.execute('INSERT INTO bb_document_templates (name, doc_type, body, created_by) VALUES (%s,%s,%s,%s) RETURNING id',
+                          (name, data.get('doc_type', 'agreement'), body, u['id']))
+        tid = c.fetchone()['id']
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        msg = 'A template with that name already exists' if 'unique' in str(e).lower() else str(e)
+        return jsonify({'error': msg}), 400
+    conn.close()
+    log_action(u['id'], 'created_document_template', 'template', tid, name)
+    return jsonify({'ok': True, 'id': tid})
+
+@app.route('/api/document-templates/<int:tid>', methods=['PUT'])
+def update_document_template(tid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    body = (data.get('body') or '').strip()
+    if not name or not body:
+        return jsonify({'error': 'Name and body are required'}), 400
+    conn = get_db()
+    conn.execute("UPDATE bb_document_templates SET name=%s, body=%s, updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS') WHERE id=%s",
+                 (name, body, tid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'updated_document_template', 'template', tid, name)
+    return jsonify({'ok': True})
+
+@app.route('/api/document-templates/<int:tid>', methods=['DELETE'])
+def delete_document_template(tid):
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    conn.execute('DELETE FROM bb_document_templates WHERE id=%s', (tid,))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'deleted_document_template', 'template', tid)
+    return jsonify({'ok': True})
+
+# ─── Signing requests (admin side: create / list / void / resend) ─────────────
+@app.route('/api/contractors/<int:cid>/signing-requests', methods=['GET'])
+def list_signing_requests(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM bb_signing_requests WHERE contractor_id=%s ORDER BY created_at DESC', (cid,)).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d.pop('body_snapshot', None)
+        d['link'] = f"{APP_URL}/sign/{d['token']}"
+        out.append(d)
+    return jsonify(out)
+
+@app.route('/api/contractors/<int:cid>/signing-requests', methods=['POST'])
+def create_signing_request(cid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    doc_type = data.get('doc_type')
+    if doc_type not in ('agreement', 'w9'):
+        return jsonify({'error': 'doc_type must be agreement or w9'}), 400
+    conn = get_db()
+    ct = conn.execute('SELECT * FROM bb_contractors WHERE id=%s', (cid,)).fetchone()
+    if not ct:
+        conn.close(); return jsonify({'error': 'Contractor not found'}), 404
+
+    token = secrets.token_urlsafe(24)
+    custom_fields = data.get('custom_fields') or {}
+    title = None
+    body_snapshot = None
+    template_id = None
+
+    if doc_type == 'agreement':
+        template_id = data.get('template_id')
+        tmpl = conn.execute('SELECT * FROM bb_document_templates WHERE id=%s', (template_id,)).fetchone() if template_id else None
+        if not tmpl:
+            conn.close(); return jsonify({'error': 'Template not found'}), 404
+        merge_values = dict(custom_fields)
+        merge_values.setdefault('org_name', ORG_NAME)
+        merge_values.setdefault('contractor_name', ct['name'])
+        merge_values.setdefault('org_rep_name', u['name'])
+        merge_values['business_name_suffix'] = f" ({ct['business_name']})" if ct.get('business_name') else ''
+        merge_values.setdefault('effective_date', datetime.now().strftime('%B %d, %Y'))
+        body_snapshot = render_merge(tmpl['body'], merge_values)
+        title = data.get('title') or tmpl['name']
+    else:
+        title = 'Form W-9'
+
+    from datetime import timedelta
+    expires_days = int(data.get('expires_days') or 14)
+    expires_at = (datetime.now() + timedelta(days=expires_days)).strftime('%Y-%m-%d %H:%M:%S')
+
+    c = conn.execute('''INSERT INTO bb_signing_requests
+        (contractor_id, doc_type, template_id, title, body_snapshot, custom_fields, token, recipient_email, expires_at, created_by)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
+        (cid, doc_type, template_id, title, body_snapshot, json.dumps(custom_fields), token,
+         data.get('recipient_email'), expires_at, u['id']))
+    rid = c.fetchone()['id']
+    conn.commit(); conn.close()
+
+    link = f"{APP_URL}/sign/{token}"
+    recipient = (data.get('recipient_email') or ct.get('contact_email') or '').strip()
+    if recipient:
+        subject = f"Please sign: {title} — {ORG_NAME}"
+        body_html = (
+            f'<p>Hi {ct["name"]},</p>'
+            f'<p>{ORG_NAME} has sent you a document to review and sign: <strong>{title}</strong>.</p>'
+            f'<p><a href="{link}" style="background:#0f6e56;color:#fff;padding:10px 18px;border-radius:6px;'
+            f'text-decoration:none;display:inline-block">Review &amp; sign</a></p>'
+            f'<p style="font-size:12px;color:#888">This link expires on {expires_at[:10]}. '
+            f'If the button doesn\'t work, copy this link: {link}</p>'
+        )
+        send_email(recipient, subject, body_html)
+
+    log_action(u['id'], 'sent_signing_request', 'contractor', cid, f"doc_type={doc_type} request_id={rid}")
+    return jsonify({'ok': True, 'id': rid, 'token': token, 'link': link, 'emailed': bool(recipient)})
+
+@app.route('/api/signing-requests/<int:rid>/void', methods=['POST'])
+def void_signing_request(rid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    conn = get_db()
+    sr = conn.execute('SELECT * FROM bb_signing_requests WHERE id=%s', (rid,)).fetchone()
+    if not sr:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    conn.execute("UPDATE bb_signing_requests SET status='void', void_reason=%s WHERE id=%s", (data.get('reason', ''), rid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'voided_signing_request', 'contractor', sr['contractor_id'], f"request_id={rid}")
+    return jsonify({'ok': True})
+
+@app.route('/api/signing-requests/<int:rid>/resend', methods=['POST'])
+def resend_signing_request(rid):
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    conn = get_db()
+    sr = conn.execute('SELECT * FROM bb_signing_requests WHERE id=%s', (rid,)).fetchone()
+    if not sr:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    ct = conn.execute('SELECT * FROM bb_contractors WHERE id=%s', (sr['contractor_id'],)).fetchone()
+    conn.close()
+    if sr['status'] != 'pending':
+        return jsonify({'error': f"This request is {sr['status']}, not pending"}), 400
+    recipient = (data.get('recipient_email') or sr.get('recipient_email') or (ct or {}).get('contact_email') or '').strip()
+    if not recipient:
+        return jsonify({'error': 'No recipient email on file'}), 400
+    link = f"{APP_URL}/sign/{sr['token']}"
+    subject = f"Reminder: please sign {sr['title']} — {ORG_NAME}"
+    body_html = (
+        f'<p>Hi {(ct or {}).get("name", "")},</p>'
+        f'<p>Friendly reminder — {ORG_NAME} is waiting on your signature for <strong>{sr["title"]}</strong>.</p>'
+        f'<p><a href="{link}" style="background:#0f6e56;color:#fff;padding:10px 18px;border-radius:6px;'
+        f'text-decoration:none;display:inline-block">Review &amp; sign</a></p>'
+    )
+    send_email(recipient, subject, body_html)
+    log_action(u['id'], 'resent_signing_request', 'contractor', sr['contractor_id'], f"request_id={rid}")
+    return jsonify({'ok': True})
+
+# ─── Public signing flow (token-based, no login) ───────────────────────────────
+@app.route('/api/sign/<token>', methods=['GET'])
+def get_signing_request(token):
+    conn = get_db()
+    sr = conn.execute('SELECT * FROM bb_signing_requests WHERE token=%s', (token,)).fetchone()
+    if not sr:
+        conn.close(); return jsonify({'error': 'This signing link is invalid.'}), 404
+    ct = conn.execute('SELECT name, business_name FROM bb_contractors WHERE id=%s', (sr['contractor_id'],)).fetchone()
+    conn.close()
+    status = sr['status']
+    if status == 'pending' and sr['expires_at'] and sr['expires_at'] < now_str():
+        status = 'expired'
+    out = {
+        'status': status,
+        'doc_type': sr['doc_type'],
+        'title': sr['title'],
+        'contractor_name': ct['name'] if ct else '',
+        'org_name': ORG_NAME,
+        'expires_at': sr['expires_at'],
+    }
+    if sr['doc_type'] == 'agreement':
+        out['body'] = sr['body_snapshot']
+    if status == 'signed':
+        out['signed_at'] = sr['signed_at']
+        out['signer_name'] = sr['signer_name']
+    return jsonify(out)
+
+@app.route('/api/sign/<token>', methods=['POST'])
+def submit_signing_request(token):
+    conn = get_db()
+    sr = conn.execute('SELECT * FROM bb_signing_requests WHERE token=%s', (token,)).fetchone()
+    if not sr:
+        conn.close(); return jsonify({'error': 'This signing link is invalid.'}), 404
+    if sr['status'] != 'pending':
+        conn.close(); return jsonify({'error': f"This document is already {sr['status']}."}), 400
+    if sr['expires_at'] and sr['expires_at'] < now_str():
+        conn.close(); return jsonify({'error': 'This signing link has expired. Ask for a new one.'}), 400
+
+    data = request.json or {}
+    consent = bool(data.get('consent'))
+    signer_name = (data.get('signer_name') or '').strip()
+    if not consent:
+        conn.close(); return jsonify({'error': 'You must consent to sign electronically.'}), 400
+    if not signer_name:
+        conn.close(); return jsonify({'error': 'Type your full legal name to sign.'}), 400
+
+    ct = conn.execute('SELECT * FROM bb_contractors WHERE id=%s', (sr['contractor_id'],)).fetchone()
+    ip, ua = sign_request_meta()
+    ts = now_str()
+
+    try:
+        if sr['doc_type'] == 'agreement':
+            pdf_bytes = build_agreement_pdf(sr['title'], sr['body_snapshot'], signer_name, ip, ua, ts, ts, token)
+            doc_type_stored = 'agreement'
+        else:
+            fields = data.get('fields') or {}
+            required = ['legal_name', 'tax_classification', 'address', 'city_state_zip', 'tin', 'tin_type']
+            missing = [f for f in required if not str(fields.get(f, '')).strip()]
+            if missing:
+                conn.close(); return jsonify({'error': f"Missing required field(s): {', '.join(missing)}"}), 400
+            tin = str(fields['tin']).strip()
+            tin_type = fields['tin_type']
+            # The stored PDF is the legal record of a completed W-9 (same as a paper form would be),
+            # so it shows the real TIN — it's a private Cloudinary asset, downloadable only by
+            # admin/treasurer/president through a short-lived signed URL.
+            tin_display = tin
+            pdf_bytes = build_w9_pdf(fields, tin_type, tin_display, signer_name, ip, ua, ts, ts, token)
+            doc_type_stored = 'w9'
+
+            # Populate the contractor's secure profile fields from the submitted W-9
+            conn.execute('''UPDATE bb_contractors SET
+                business_name=COALESCE(NULLIF(%s,''), business_name),
+                address=%s, tax_classification=%s,
+                ein_ssn_encrypted=%s, ein_ssn_last4=%s, tax_id_type=%s,
+                updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS')
+                WHERE id=%s''',
+                (fields.get('business_name', ''), f"{fields.get('address','')}, {fields.get('city_state_zip','')}",
+                 fields.get('tax_classification'), encrypt_value(tin), last4(tin), tin_type, sr['contractor_id']))
+            custom_fields_safe = {k: v for k, v in fields.items() if k not in ('tin',)}
+            conn.execute("UPDATE bb_signing_requests SET custom_fields=%s WHERE id=%s",
+                         (json.dumps(custom_fields_safe), sr['id']))
+
+        result = upload_pdf_private(pdf_bytes, folder=f'bloombooks/contractors/{sr["contractor_id"]}')
+        doc_c = conn.execute('''INSERT INTO bb_contractor_documents
+            (contractor_id, doc_type, filename, cloud_public_id, resource_type, format, effective_date, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
+            (sr['contractor_id'], doc_type_stored, f"{sr['title']}.pdf", result['public_id'],
+             result.get('resource_type', 'raw'), result.get('format', 'pdf'), ts[:10], None))
+        doc_id = doc_c.fetchone()['id']
+
+        conn.execute('''UPDATE bb_signing_requests SET status='signed', signed_at=%s, signer_name=%s,
+            signer_ip=%s, signer_user_agent=%s, consent_at=%s, final_document_id=%s WHERE id=%s''',
+            (ts, signer_name, ip, ua, ts, doc_id, sr['id']))
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        return jsonify({'error': f'Could not complete signing: {e}'}), 500
+
+    conn.close()
+    log_action(None, 'contractor_signed_document', 'contractor', sr['contractor_id'],
+               f"doc_type={sr['doc_type']} request_id={sr['id']} signer={signer_name}")
+    return jsonify({'ok': True})
 
 # ─── Static ───────────────────────────────────────────────────────────────────
 @app.route('/', defaults={'path': ''})
