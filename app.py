@@ -410,12 +410,14 @@ def init_db():
         filename         TEXT,
         cloud_public_id  TEXT NOT NULL,
         resource_type    TEXT DEFAULT 'raw',
+        access_type      TEXT DEFAULT 'private',
         format           TEXT,
         effective_date   TEXT,
         expires_at       TEXT,
         uploaded_by      INTEGER REFERENCES bb_users(id),
         uploaded_at      TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
+    c.execute("ALTER TABLE bb_contractor_documents ADD COLUMN IF NOT EXISTS access_type TEXT DEFAULT 'private'")
 
     c.execute('''CREATE TABLE IF NOT EXISTS bb_contractor_bank_accounts (
         id                          SERIAL PRIMARY KEY,
@@ -858,7 +860,7 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
                               production_id, status):
     """Fire notifications when a new request is submitted."""
     type_label   = 'SAP (Self-Authorized Purchase)' if req_type == 'sap' else 'Pre-approval request'
-    method_label = '🌐 Online' if purchase_method == 'online' else '🏪 In-store'
+    method_label = 'Online' if purchase_method == 'online' else 'In-store'
     amount_str   = f'${float(estimated_cost):.2f}'
     url_line     = f'<p style="margin:8px 0"><a href="{item_url}" style="color:#0f6e56">{item_url}</a></p>' if item_url else ''
     body = (
@@ -872,16 +874,16 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
 
     if status == 'pending_producer' and production_id:
         for p in get_production_producers(production_id):
-            send_email(p['email'], f'🎭 Purchase request needs your approval: {req_title}',
+            send_email(p['email'], f'Purchase request needs your approval: {req_title}',
                 email_html('New Purchase Request — Producer Review Needed', body,
                            'Review in BloomBooks', APP_URL))
         if req_type == 'sap':
             sap_note = '<p style="color:#c97c10;font-size:13px">This SAP still requires your approval after producer review.</p>'
             for a in get_admin_emails():
-                send_email(a['email'], f'📋 SAP submitted (FYI): {req_title}',
+                send_email(a['email'], f'SAP submitted (FYI): {req_title}',
                     email_html('SAP Submitted — FYI', body + sap_note, 'View in BloomBooks', APP_URL))
     else:
-        prefix = '📋 SAP' if req_type == 'sap' else '📄 New request'
+        prefix = 'SAP' if req_type == 'sap' else 'New request'
         for a in get_admin_emails():
             send_email(a['email'], f'{prefix}: {req_title}',
                 email_html('New Purchase Request — Review Needed', body, 'Review in BloomBooks', APP_URL))
@@ -896,7 +898,7 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
         f'</table>'
         f'<p style="font-size:13px;color:#666">You will receive updates by email as it moves through the approval process.</p>'
     )
-    send_email(submitter_email, f'✅ Request received: {req_title}',
+    send_email(submitter_email, f'Request received: {req_title}',
         email_html('Your Request Was Received', confirm_body, 'View in BloomBooks', APP_URL))
 
 
@@ -914,7 +916,7 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
                     f'<p>The producer approved your request for <strong>{req_title}</strong>. It is now with the Treasurer for review.</p>{note_html}',
                     'View in BloomBooks', APP_URL))
         for a in get_admin_emails():
-            send_email(a['email'], f'📄 Awaiting treasurer review: {req_title}',
+            send_email(a['email'], f'Awaiting treasurer review: {req_title}',
                 email_html('Producer Approved — Treasurer Review Needed',
                     f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Treasurer review needed.</p>{note_html}',
                     'Review in BloomBooks', APP_URL))
@@ -926,7 +928,7 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
                     f'<p>The treasurer approved your request for <strong>{req_title}</strong>. Awaiting president sign-off.</p>{note_html}',
                     'View in BloomBooks', APP_URL))
         for a in get_role_emails('president'):
-            send_email(a['email'], f'📄 Final sign-off needed: {req_title}',
+            send_email(a['email'], f'Final sign-off needed: {req_title}',
                 email_html('President Sign-Off Needed',
                     f'<p>Treasurer approved <strong>{req_title}</strong> ({amount}). Needs your final approval.</p>{note_html}',
                     'Review in BloomBooks', APP_URL))
@@ -938,7 +940,7 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
                 '<p>You are cleared to purchase. Keep your receipt — submit it through BloomBooks for reimbursement.</p>'
                 + note_html
             )
-            send_email(submitter['email'], f'🎉 Approved — go buy it! {req_title}',
+            send_email(submitter['email'], f'Approved — go buy it! {req_title}',
                 email_html('Purchase Approved! ✓', approved_body, 'View in BloomBooks', APP_URL))
 
     elif new_status == 'denied':
@@ -948,15 +950,15 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
                 + (f'<p><strong>Reason:</strong> {note}</p>' if note else '')
                 + '<p style="font-size:13px;color:#666">Please reach out to the treasurer or producer with any questions.</p>'
             )
-            send_email(submitter['email'], f'❌ Request not approved: {req_title}',
+            send_email(submitter['email'], f'Request not approved: {req_title}',
                 email_html('Purchase Request — Not Approved', denied_body))
         denied_admin_body = f'<p><strong>{acted_by_name}</strong> denied the request for <strong>{req_title}</strong>.</p>{note_html}'
         for a in get_admin_emails():
-            send_email(a['email'], f'❌ Request denied: {req_title}',
+            send_email(a['email'], f'Request denied: {req_title}',
                 email_html('Request Denied', denied_admin_body))
         if production_id:
             for p in get_production_producers(production_id):
-                send_email(p['email'], f'❌ Request denied: {req_title}',
+                send_email(p['email'], f'Request denied: {req_title}',
                     email_html('Request Denied', denied_admin_body))
 
 
@@ -972,9 +974,9 @@ def notify_reimbursement_paid(user_id, amount, method, req_title):
         f'<tr><td style="padding:5px 0;color:#666">Amount</td><td style="padding:5px 0;font-weight:600">${float(amount):.2f}</td></tr>'
         f'<tr><td style="padding:5px 0;color:#666">Method</td><td style="padding:5px 0">{method or "—"}</td></tr>'
         f'</table>'
-        f'<p style="font-size:13px;color:#666">Thank you for your contribution to Horizon West Theater Company! 🎭</p>'
+        f'<p style="font-size:13px;color:#666">Thank you for your contribution to Horizon West Theater Company!</p>'
     )
-    send_email(u['email'], f'💸 Reimbursement processed: ${float(amount):.2f}',
+    send_email(u['email'], f'Reimbursement processed: ${float(amount):.2f}',
         email_html('You Have Been Reimbursed!', paid_body))
 
 
@@ -982,7 +984,7 @@ def notify_welcome(name, email, temp_password, role):
     """Welcome email to newly created user with their login details."""
     role_label = role.replace('_', ' ').title()
     welcome_body = (
-        f'<p>An account has been created for you in BloomBooks, the purchasing and reimbursement system for Horizon West Theater Company.</p>'
+        f'<p>An account has been created for you in BloomBooks, the purchasing, reimbursement, and contractor management system for Horizon West Theater Company.</p>'
         f'<table style="width:100%;border-collapse:collapse;margin:12px 0;background:#fff;border:1px solid #e0ddd6;border-radius:6px">'
         f'<tr><td style="padding:8px 12px;color:#666;border-bottom:1px solid #e0ddd6;width:100px">Email</td><td style="padding:8px 12px;font-weight:600;border-bottom:1px solid #e0ddd6">{email}</td></tr>'
         f'<tr><td style="padding:8px 12px;color:#666;border-bottom:1px solid #e0ddd6">Password</td><td style="padding:8px 12px;font-weight:600;color:#0f6e56;border-bottom:1px solid #e0ddd6">{temp_password}</td></tr>'
@@ -990,7 +992,7 @@ def notify_welcome(name, email, temp_password, role):
         f'</table>'
         f'<p style="font-size:13px;color:#666">Please sign in and complete your purchasing training before submitting any requests.</p>'
     )
-    send_email(email, '🎭 Welcome to BloomBooks — Horizon West Theater Company',
+    send_email(email, 'Welcome to BloomBooks — Horizon West Theater Company',
         email_html(f'Welcome to BloomBooks, {name.split()[0]}!', welcome_body, 'Sign in to BloomBooks', APP_URL))
 
 
@@ -1375,7 +1377,7 @@ def approve_request(rid):
 def test_email():
     u = current_user()
     if not u: return jsonify({'error': 'Not authenticated'}), 401
-    ok = send_email(u['email'], '🧪 BloomBooks test email',
+    ok = send_email(u['email'], 'BloomBooks test email',
         email_html('Test Email', f'<p>This is a test from BloomBooks. If you can see this, emails are working!</p><p>Sent to: {u["email"]}</p>'))
     return jsonify({'ok': ok, 'sent_to': u['email'], 'resend_configured': bool(RESEND_API_KEY), 'from': FROM_EMAIL})
 def debug_config():
@@ -3075,8 +3077,11 @@ def build_w9_pdf(fields, tin_type, tin_display, signer_name, signer_ip, signer_u
     return out.getvalue()
 
 def upload_pdf_private(pdf_bytes, folder):
+    # 'authenticated' (not 'private') — both keep the file inaccessible without a signed URL,
+    # but only 'authenticated' assets can be delivered with a custom download filename.
+    # 'private' assets are locked to Cloudinary's internal name with no way to override it.
     return cloudinary.uploader.upload(
-        io.BytesIO(pdf_bytes), folder=folder, resource_type='raw', type='private'
+        io.BytesIO(pdf_bytes), folder=folder, resource_type='raw', type='authenticated'
     )
 
 # ─── Contractors (secure: profiles, W9s/agreements, banking, payments) ────────
@@ -3111,24 +3116,39 @@ def build_download_filename(contractor_name, doc_type, doc_title):
         doc_slug = _slug_segment(os.path.splitext(doc_title or '')[0]) or _slug_segment(doc_type) or 'document'
     return '.'.join([p for p in (first, last, doc_slug) if p])
 
-def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None):
-    """Time-limited download link for a private Cloudinary asset.
-    type='private' assets aren't served through the normal CDN delivery path — Cloudinary
-    requires going through its dedicated /download API endpoint (private_download_url),
-    which is signed differently than a standard delivery URL."""
-    # Cloudinary's download endpoint names the file "stream" unless told otherwise —
-    # `attachment` accepts a filename (without extension; Cloudinary appends it).
-    attachment = True
+def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None, access_type='private'):
+    """Time-limited download link for a restricted Cloudinary asset.
+    - 'authenticated' assets: delivered via a normal signed CDN URL, which supports a custom
+      download filename via the fl_attachment:<name> transformation flag.
+    - 'private' assets (legacy — uploaded before this fix): NOT servable through the CDN at all.
+      Must go through Cloudinary's separate /download API (private_download_url), which only
+      supports a boolean attachment flag — Cloudinary always names the file after its own
+      internal ID, with no way to override it. Kept only so older documents still download."""
+    safe_name = None
     if download_name:
-        safe_name = re.sub(r'[\\/:"*?<>|]+', ' ', download_name).strip()
-        if safe_name:
-            attachment = safe_name
+        cleaned = re.sub(r'[\\/:"*?<>|]+', ' ', download_name).strip()
+        if cleaned:
+            safe_name = cleaned
+
+    if access_type == 'authenticated':
+        url, _opts = cloudinary.utils.cloudinary_url(
+            public_id,
+            resource_type=resource_type or 'raw',
+            type='authenticated',
+            sign_url=True,
+            secure=True,
+            format=fmt or 'pdf',
+            flags=f'attachment:{safe_name}' if safe_name else 'attachment',
+            expires_at=int(time.time()) + 300,
+        )
+        return url
+
     return cloudinary.utils.private_download_url(
         public_id,
         fmt or 'pdf',
         resource_type=resource_type or 'raw',
         type='private',
-        attachment=attachment,
+        attachment=safe_name or True,
         expires_at=int(time.time()) + 300,
     )
 
@@ -3229,7 +3249,7 @@ def delete_contractor(cid):
     docs = conn.execute('SELECT * FROM bb_contractor_documents WHERE contractor_id=%s', (cid,)).fetchall()
     for doc in docs:
         try:
-            cloudinary.uploader.destroy(doc['cloud_public_id'], resource_type=doc['resource_type'] or 'raw', type='private')
+            cloudinary.uploader.destroy(doc['cloud_public_id'], resource_type=doc['resource_type'] or 'raw', type=doc['access_type'] or 'private')
         except Exception as e:
             print(f"[CONTRACTOR DELETE] Cloudinary destroy failed: {e}")
     conn.execute('DELETE FROM bb_contractors WHERE id=%s', (cid,))
@@ -3286,15 +3306,15 @@ def upload_contractor_document(cid):
             file,
             folder=f'bloombooks/contractors/{cid}',
             resource_type='auto',
-            type='private',
+            type='authenticated',
             use_filename=True,
             unique_filename=True
         )
         conn = get_db()
         conn.execute('''INSERT INTO bb_contractor_documents
-            (contractor_id, doc_type, filename, cloud_public_id, resource_type, format, effective_date, expires_at, uploaded_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-            (cid, doc_type, file.filename, result['public_id'], result.get('resource_type', 'raw'),
+            (contractor_id, doc_type, filename, cloud_public_id, resource_type, access_type, format, effective_date, expires_at, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+            (cid, doc_type, file.filename, result['public_id'], result.get('resource_type', 'raw'), 'authenticated',
              result.get('format'), request.form.get('effective_date') or None,
              request.form.get('expires_at') or None, u['id']))
         conn.commit(); conn.close()
@@ -3316,7 +3336,8 @@ def download_contractor_document(cid, did):
         return jsonify({'error': 'Not found'}), 404
     try:
         download_name = build_download_filename(doc['contractor_name'], doc['doc_type'], doc['filename'])
-        url = signed_doc_url(doc['cloud_public_id'], doc['resource_type'], doc['format'], download_name=download_name)
+        url = signed_doc_url(doc['cloud_public_id'], doc['resource_type'], doc['format'],
+                              download_name=download_name, access_type=doc['access_type'] or 'private')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     log_action(u['id'], 'downloaded_contractor_document', 'contractor', cid, f"doc_type={doc['doc_type']}")
@@ -3331,7 +3352,7 @@ def delete_contractor_document(cid, did):
     if not doc:
         conn.close(); return jsonify({'error': 'Not found'}), 404
     try:
-        cloudinary.uploader.destroy(doc['cloud_public_id'], resource_type=doc['resource_type'] or 'raw', type='private')
+        cloudinary.uploader.destroy(doc['cloud_public_id'], resource_type=doc['resource_type'] or 'raw', type=doc['access_type'] or 'private')
     except Exception as e:
         print(f"[CONTRACTOR DOC DELETE] Cloudinary destroy failed: {e}")
     try:
@@ -3759,10 +3780,10 @@ def submit_signing_request(token):
 
         result = upload_pdf_private(pdf_bytes, folder=f'bloombooks/contractors/{sr["contractor_id"]}')
         doc_c = conn.execute('''INSERT INTO bb_contractor_documents
-            (contractor_id, doc_type, filename, cloud_public_id, resource_type, format, effective_date, uploaded_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
+            (contractor_id, doc_type, filename, cloud_public_id, resource_type, access_type, format, effective_date, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
             (sr['contractor_id'], doc_type_stored, f"{sr['title']}.pdf", result['public_id'],
-             result.get('resource_type', 'raw'), result.get('format', 'pdf'), ts[:10], None))
+             result.get('resource_type', 'raw'), 'authenticated', result.get('format', 'pdf'), ts[:10], None))
         doc_id = doc_c.fetchone()['id']
 
         conn.execute('''UPDATE bb_signing_requests SET status='signed', signed_at=%s, signer_name=%s,
@@ -3815,7 +3836,7 @@ def ensure_db():
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 5001))
-    print(f"\n🎭 BloomBooks is running!")
+    print(f"\nBloomBooks is running!")
     print(f"   Open http://localhost:{port} in your browser\n")
     print("   Demo accounts:")
     print("   admin@horizonwest.org      / admin123")
