@@ -411,6 +411,7 @@ def init_db():
         cloud_public_id  TEXT NOT NULL,
         resource_type    TEXT DEFAULT 'raw',
         access_type      TEXT DEFAULT 'private',
+        cloud_version    TEXT,
         format           TEXT,
         effective_date   TEXT,
         expires_at       TEXT,
@@ -418,6 +419,7 @@ def init_db():
         uploaded_at      TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
     c.execute("ALTER TABLE bb_contractor_documents ADD COLUMN IF NOT EXISTS access_type TEXT DEFAULT 'private'")
+    c.execute("ALTER TABLE bb_contractor_documents ADD COLUMN IF NOT EXISTS cloud_version TEXT")
 
     c.execute('''CREATE TABLE IF NOT EXISTS bb_contractor_bank_accounts (
         id                          SERIAL PRIMARY KEY,
@@ -3077,14 +3079,14 @@ def build_w9_pdf(fields, tin_type, tin_display, signer_name, signer_ip, signer_u
     return out.getvalue()
 
 def upload_pdf_private(pdf_bytes, folder):
-    # 'authenticated' (not 'private') so the file can get a custom download filename — see
-    # signed_doc_url for why 'private' can't do that.
-    # resource_type='image' (not 'raw') — Cloudinary explicitly supports PDFs as an image
-    # asset, and only image/video assets support transformations. fl_attachment (the flag
-    # that sets a custom filename) is a transformation, and raw assets flatly can't be
-    # transformed at all — that combination 400s no matter what the flag says.
+    # Reverted to 'private' — this is the one delivery mechanism that's actually confirmed
+    # working on this account (via the Admin API /download endpoint in signed_doc_url).
+    # 'authenticated' + CDN delivery kept failing with "Unauthenticated access" across
+    # several attempted fixes (version numbers, dot-escaping, image vs raw resource_type)
+    # without a clear resolution, so reliability wins over the custom-filename nicety —
+    # private downloads work, just always named after Cloudinary's internal asset ID.
     return cloudinary.uploader.upload(
-        io.BytesIO(pdf_bytes), folder=folder, resource_type='image', type='authenticated'
+        io.BytesIO(pdf_bytes), folder=folder, resource_type='raw', type='private'
     )
 
 # ─── Contractors (secure: profiles, W9s/agreements, banking, payments) ────────
@@ -3119,10 +3121,14 @@ def build_download_filename(contractor_name, doc_type, doc_title):
         doc_slug = _slug_segment(os.path.splitext(doc_title or '')[0]) or _slug_segment(doc_type) or 'document'
     return '.'.join([p for p in (first, last, doc_slug) if p])
 
-def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None, access_type='private'):
+def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None, access_type='private', version=None):
     """Time-limited download link for a restricted Cloudinary asset.
     - 'authenticated' assets: delivered via a normal signed CDN URL, which supports a custom
-      download filename via the fl_attachment:<name> transformation flag.
+      download filename via the fl_attachment:<name> transformation flag. This requires the
+      asset's REAL version number (as returned by the upload call) — without it, the SDK
+      falls back to a placeholder "v1" that doesn't match the asset Cloudinary actually has,
+      and the signature check fails with "Unauthenticated access" even though the URL looks
+      well-formed.
     - 'private' assets (legacy — uploaded before this fix): NOT servable through the CDN at all.
       Must go through Cloudinary's separate /download API (private_download_url), which only
       supports a boolean attachment flag — Cloudinary always names the file after its own
@@ -3160,6 +3166,7 @@ def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None,
             secure=True,
             format=fmt or 'pdf',
             flags=flags_value,
+            version=version,
             expires_at=int(time.time()) + 300,
         )
         return url
@@ -3329,16 +3336,16 @@ def upload_contractor_document(cid):
             file,
             folder=f'bloombooks/contractors/{cid}',
             resource_type='auto',
-            type='authenticated',
+            type='private',
             use_filename=True,
             unique_filename=True
         )
         conn = get_db()
         conn.execute('''INSERT INTO bb_contractor_documents
-            (contractor_id, doc_type, filename, cloud_public_id, resource_type, access_type, format, effective_date, expires_at, uploaded_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-            (cid, doc_type, file.filename, result['public_id'], result.get('resource_type', 'raw'), 'authenticated',
-             result.get('format'), request.form.get('effective_date') or None,
+            (contractor_id, doc_type, filename, cloud_public_id, resource_type, access_type, cloud_version, format, effective_date, expires_at, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+            (cid, doc_type, file.filename, result['public_id'], result.get('resource_type', 'raw'), 'private',
+             result.get('version'), result.get('format'), request.form.get('effective_date') or None,
              request.form.get('expires_at') or None, u['id']))
         conn.commit(); conn.close()
         log_action(u['id'], 'uploaded_contractor_document', 'contractor', cid, f"doc_type={doc_type}")
@@ -3360,7 +3367,8 @@ def download_contractor_document(cid, did):
     try:
         download_name = build_download_filename(doc['contractor_name'], doc['doc_type'], doc['filename'])
         url = signed_doc_url(doc['cloud_public_id'], doc['resource_type'], doc['format'],
-                              download_name=download_name, access_type=doc['access_type'] or 'private')
+                              download_name=download_name, access_type=doc['access_type'] or 'private',
+                              version=doc['cloud_version'])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     log_action(u['id'], 'downloaded_contractor_document', 'contractor', cid, f"doc_type={doc['doc_type']}")
@@ -3803,10 +3811,11 @@ def submit_signing_request(token):
 
         result = upload_pdf_private(pdf_bytes, folder=f'bloombooks/contractors/{sr["contractor_id"]}')
         doc_c = conn.execute('''INSERT INTO bb_contractor_documents
-            (contractor_id, doc_type, filename, cloud_public_id, resource_type, access_type, format, effective_date, uploaded_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
+            (contractor_id, doc_type, filename, cloud_public_id, resource_type, access_type, cloud_version, format, effective_date, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
             (sr['contractor_id'], doc_type_stored, f"{sr['title']}.pdf", result['public_id'],
-             result.get('resource_type', 'raw'), 'authenticated', result.get('format', 'pdf'), ts[:10], None))
+             result.get('resource_type', 'raw'), 'private', result.get('version'),
+             result.get('format', 'pdf'), ts[:10], None))
         doc_id = doc_c.fetchone()['id']
 
         conn.execute('''UPDATE bb_signing_requests SET status='signed', signed_at=%s, signer_name=%s,
