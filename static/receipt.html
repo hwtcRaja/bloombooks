@@ -126,9 +126,9 @@ input[type=file]{display:none}
 </div>
 
 <div class="tab-bar" id="tab-bar" style="display:none">
-  <button class="tab-btn active" id="tab-receipt" onclick="switchTab('receipt')" style="font-size:12px">📎 Receipt</button>
-  <button class="tab-btn" id="tab-new" onclick="switchTab('new')" style="font-size:12px">➕ Request</button>
-  <button class="tab-btn" id="tab-statements" onclick="switchTab('statements')" style="font-size:12px">📋 Statements</button>
+  <button class="tab-btn active" id="tab-receipt" onclick="switchTab('receipt')" style="font-size:12px">Receipt</button>
+  <button class="tab-btn" id="tab-new" onclick="switchTab('new')" style="font-size:12px">Request</button>
+  <button class="tab-btn" id="tab-statements" onclick="switchTab('statements')" style="font-size:12px">Statements</button>
 </div>
 
 <div class="content" id="main-content">
@@ -193,7 +193,7 @@ function renderReceiptTab() {
   const u = pageData.user;
   const reqs = pageData.requests;
   const reqCards = reqs.length === 0
-    ? `<div class="empty-note">No open requests found.<br>Submit a request using the ➕ tab first.</div>`
+    ? `<div class="empty-note">No open requests found.<br>Submit a request using the tab first.</div>`
     : reqs.map(r => {
         const approved = r.status === 'approved';
         const statusLabel = r.status.replace('pending_','Awaiting ').replace('_',' ');
@@ -214,9 +214,7 @@ function renderReceiptTab() {
     <div class="card"><div class="card-label">Select request</div><div class="card-body" style="padding-top:8px">${reqCards}</div></div>
     <div id="receipt-form" style="display:none">
       <div class="card"><div class="card-label">Receipt photo</div><div class="card-body">
-        <div class="upload-zone" id="r-upload-zone" onclick="document.getElementById('r-file-input').click()">
-          <div class="upload-icon">📷</div>
-          <div class="upload-text">Take photo or choose file</div>
+        <div class="upload-zone" id="r-upload-zone" onclick="document.getElementById('r-file-input').click()">          <div class="upload-text">Take photo or choose file</div>
           <div class="upload-sub">JPG, PNG, or PDF</div>
         </div>
         <input type="file" id="r-file-input" accept="image/*,application/pdf" onchange="handleReceiptFile(this)">
@@ -338,8 +336,8 @@ function renderNewRequestTab() {
     </div></div>
     <div class="card"><div class="card-label">Purchase method</div><div class="card-body" style="padding-top:8px">
       <div class="method-toggle">
-        <div class="method-opt active" id="nmethod-store" onclick="setNewMethod('in_store')"><div style="font-size:18px;margin-bottom:3px">🏪</div><div style="font-size:13px;font-weight:600">In-store</div></div>
-        <div class="method-opt" id="nmethod-online" onclick="setNewMethod('online')"><div style="font-size:18px;margin-bottom:3px">🌐</div><div style="font-size:13px;font-weight:600">Online</div></div>
+        <div class="method-opt active" id="nmethod-store" onclick="setNewMethod('in_store')"><div style="font-size:13px;font-weight:600">In-store</div></div>
+        <div class="method-opt" id="nmethod-online" onclick="setNewMethod('online')"><div style="font-size:13px;font-weight:600">Online</div></div>
       </div>
       <div id="n-vendor-field" class="form-group" style="margin-top:10px">
         <label class="form-label">Store / vendor</label>
@@ -367,8 +365,7 @@ function renderNewRequestTab() {
         </div>
       </div></div>
       <div class="card"><div class="card-label">Receipt photo</div><div class="card-body">
-        <div class="upload-zone" id="n-upload-zone" onclick="document.getElementById('n-file-input').click()">
-          <div class="upload-icon">📷</div><div class="upload-text">Take photo or choose file</div>
+        <div class="upload-zone" id="n-upload-zone" onclick="document.getElementById('n-file-input').click()"><div class="upload-text">Take photo or choose file</div>
           <div class="upload-sub">JPG, PNG, or PDF</div>
         </div>
         <input type="file" id="n-file-input" accept="image/*,application/pdf" onchange="handleNewFile(this)">
@@ -473,17 +470,15 @@ async function renderStatementsTab() {
           <div class="user-av">${pageData.user.name.charAt(0).toUpperCase()}</div>
           <div><div class="user-name">${pageData.user.name}</div><div class="user-sub">Purchase Statements</div></div>
         </div>
-        <div class="card"><div class="card-body" style="text-align:center;padding:24px">
-          <div style="font-size:36px;margin-bottom:12px">📋</div>
-          <div class="fw-600 mb-8">Manage statements on desktop</div>
+        <div class="card"><div class="card-body" style="text-align:center;padding:24px">          <div class="fw-600 mb-8">Manage statements on desktop</div>
           <p style="font-size:13px;color:var(--ink3);line-height:1.6">Create and manage purchase statements from the BloomBooks desktop app. Once submitted, you can attach receipts here on mobile.</p>
         </div></div>
         <div class="card"><div class="card-label">Your open requests</div><div class="card-body" style="padding-top:8px">
           ${pageData.requests.length===0
-            ? '<div class="empty-note">No open requests — submit a new one using the ➕ tab.</div>'
+            ? '<div class="empty-note">No open requests — submit a new one using the tab.</div>'
             : pageData.requests.map(r=>{
                 const amt = r.actual_cost||r.estimated_cost;
-                const statusLabel = r.status.replace('pending_','⏳ ').replace('_',' ');
+                const statusLabel = r.status.replace('pending_','').replace('_',' ');
                 return `<div class="req-card" style="cursor:default">
                   <div class="req-card-title">${r.title}</div>
                   <div class="req-card-meta">$${parseFloat(amt).toFixed(2)} · ${statusLabel}</div>
@@ -535,7 +530,7 @@ async function renderStatementsTab() {
         </div>`;
       }).join('')}`;
   } catch(e) {
-    document.getElementById('main-content').innerHTML = `<div class="error-state"><div class="big-icon">⚠️</div><p>${e.message}</p></div>`;
+    document.getElementById('main-content').innerHTML = `<div class="error-state"><p>${e.message}</p></div>`;
   }
 }
 
@@ -614,9 +609,7 @@ function showMobileAddItem(sid) {
           <input type="text" id="sit-reimb-handle" class="form-input" placeholder="Username"></div>
       </div>
       <div class="form-group"><label class="form-label">Receipt photo</label>
-        <div class="upload-zone" id="sit-upload-zone" onclick="document.getElementById('sit-receipt-file').click()">
-          <div class="upload-icon" style="font-size:24px;margin-bottom:4px">📷</div>
-          <div class="upload-text" style="font-size:13px">Tap to attach receipt</div>
+        <div class="upload-zone" id="sit-upload-zone" onclick="document.getElementById('sit-receipt-file').click()">          <div class="upload-text" style="font-size:13px">Tap to attach receipt</div>
         </div>
         <input type="file" id="sit-receipt-file" accept="image/*,application/pdf" style="display:none"
           onchange="document.getElementById('sit-upload-zone').classList.toggle('has-file',!!this.files[0]);document.getElementById('sit-file-name').textContent=this.files[0]?.name||''">
@@ -698,8 +691,7 @@ function showLoading() {
 function showError(msg) {
   document.getElementById('tab-bar').style.display='none';
   document.getElementById('main-content').innerHTML=`
-    <div class="error-state"><div class="big-icon">🚫</div>
-    <h3 style="font-size:18px;font-weight:700;margin-bottom:8px">Link not found</h3>
+    <div class="error-state">    <h3 style="font-size:18px;font-weight:700;margin-bottom:8px">Link not found</h3>
     <p style="font-size:14px;color:var(--ink3)">${msg}</p>
     <p style="font-size:13px;color:var(--ink3);margin-top:10px">Contact your production manager for a new link.</p>
     </div>`;
@@ -707,8 +699,8 @@ function showError(msg) {
 
 function showSuccess(type) {
   const msgs={
-    receipt:{icon:'✅',title:'Receipt submitted!',body:'Your receipt has been attached. The team will review it and process your reimbursement once approved.'},
-    new:{icon:'🎉',title:'Request submitted!',body:"Your purchase request is now in the approval queue. You'll get an update by email."},
+    receipt:{icon:'',title:'Receipt submitted!',body:'Your receipt has been attached. The team will review it and process your reimbursement once approved.'},
+    new:{icon:'',title:'Request submitted!',body:"Your purchase request is now in the approval queue. You'll get an update by email."},
   };
   const m=msgs[type];
   document.getElementById('main-content').innerHTML=`

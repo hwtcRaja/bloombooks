@@ -58,7 +58,7 @@ legend{font-size:12px;font-weight:700;color:var(--ink3);text-transform:uppercase
 </head>
 <body>
 <div class="header">
-  <div class="header-title">🎭 BloomBooks</div>
+  <div class="header-title">BloomBooks</div>
   <div class="header-sub" id="header-sub">Secure document signing</div>
 </div>
 <div class="content" id="content">
@@ -77,8 +77,8 @@ async function load() {
     reqData = d;
     document.getElementById('header-sub').textContent = d.org_name || 'Secure document signing';
     if (d.status === 'signed') renderSigned(d);
-    else if (d.status === 'expired') renderState('⏰', 'This link has expired', 'Ask the sender for a new signing link.');
-    else if (d.status === 'void') renderState('🚫', 'This request was canceled', 'Contact the sender if you believe this is a mistake.');
+    else if (d.status === 'expired') renderState('', 'This link has expired', 'Ask the sender for a new signing link.');
+    else if (d.status === 'void') renderState('', 'This request was canceled', 'Contact the sender if you believe this is a mistake.');
     else if (d.doc_type === 'agreement') renderAgreement(d);
     else if (d.doc_type === 'bank_auth') renderBankAuth(d);
     else renderW9(d);
@@ -108,7 +108,7 @@ function renderState(icon, title, sub) {
 function renderSigned(d) {
   document.getElementById('content').innerHTML = `
     <div class="card"><div class="card-body state-card">
-      <div class="state-icon">✅</div>
+      <div class="state-icon"></div>
       <div class="state-title">Already signed</div>
       <div class="state-sub">Signed by ${d.signer_name} on ${d.signed_at}.<br>You're all set — no further action needed.</div>
     </div></div>`;
@@ -240,7 +240,7 @@ function signatureBlock() {
 }
 
 function secureNote() {
-  return `<div class="secure-note">🔒 This link is unique to you and expires after use or on its expiration date.</div>`;
+  return `<div class="secure-note">This link is unique to you and expires after use or on its expiration date.</div>`;
 }
 
 function pickClassification(val) {
@@ -382,7 +382,7 @@ async function doSubmit(payload) {
       btn.textContent = 'Sign & submit';
       return;
     }
-    renderState('✅', 'Signed successfully', 'Thank you — this has been sent back securely. You can close this page.');
+    renderState('', 'Signed successfully', 'Thank you — this has been sent back securely. You can close this page.');
   } catch (e) {
     showError('Network error — please check your connection and try again.');
     btn.disabled = false;

@@ -274,7 +274,7 @@ tr:hover td{background:var(--cream)}
         <span class="suite-label">HWTC SUITE</span>
       </div>
       <h1>BloomBooks</h1>
-      <p>Purchasing &amp; Reimbursements</p>
+      <p>Purchasing, Reimbursements &amp; Contractors</p>
     </div>
 
     <!-- Login -->
@@ -337,7 +337,7 @@ tr:hover td{background:var(--cream)}
         </svg>
         <div>
           <div class="sb-app-name">BloomBooks</div>
-          <div class="sb-app-sub">Purchasing & Reimb.</div>
+          <div class="sb-app-sub">Finance & Contractors</div>
         </div>
       </div>
     </div>
@@ -560,7 +560,7 @@ function nav(page) {
   document.getElementById('tb-title').textContent = titles[page] || page;
   document.getElementById('tb-actions').innerHTML = '';
   const content = document.getElementById('content');
-  content.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div><p>Loading...</p></div>';
+  content.innerHTML = '<div class="empty"><p>Loading...</p></div>';
   const pages = {
     'dashboard': renderDashboard, 'my-requests': renderMyRequests,
     'new-request': renderNewRequest, 'reimbursements': renderReimbursements,
@@ -671,9 +671,7 @@ async function renderDashboard() {
     }
 
     const trainingGate = !currentUser.training_complete && currentUser.role === 'volunteer' ? `
-      <div class="training-gate mb-24">
-        <div class="training-gate-icon">📋</div>
-        <div>
+      <div class="training-gate mb-24">        <div>
           <h3>Complete your purchasing training</h3>
           <p>You need to complete the HWTC purchasing training before submitting purchase requests.</p>
         </div>
@@ -681,7 +679,7 @@ async function renderDashboard() {
       </div>` : '';
 
     const recentHtml = recent.length === 0 ?
-      `<div class="empty"><div class="empty-icon">📄</div><h3>No requests yet</h3><p>Submit your first purchase request to get started.</p></div>` :
+      `<div class="empty"><h3>No requests yet</h3><p>Submit your first purchase request to get started.</p></div>` :
       `<div class="table-wrap"><table>
         <thead><tr><th>Title</th><th>Amount</th><th>Budget</th><th>Submitted</th><th>Status</th></tr></thead>
         <tbody>${recent.map(r => `
@@ -741,7 +739,7 @@ async function renderMyRequests() {
     const reqs = await api('GET', '/requests?mine=1');
     if (reqs.length === 0) {
       document.getElementById('content').innerHTML = `
-        <div class="empty"><div class="empty-icon">📄</div><h3>No requests yet</h3>
+        <div class="empty"><h3>No requests yet</h3>
         <p>Submit your first purchase request to get started.</p>
         <button class="btn btn-primary mt-16" onclick="nav('new-request')">Submit a request</button></div>`;
       return;
@@ -781,9 +779,7 @@ async function renderMyRequests() {
 async function renderNewRequest() {
   if (!currentUser.training_complete && currentUser.role === 'volunteer') {
     document.getElementById('content').innerHTML = `
-      <div class="training-gate">
-        <div class="training-gate-icon">📋</div>
-        <div><h3>Training required before submitting requests</h3>
+      <div class="training-gate">        <div><h3>Training required before submitting requests</h3>
         <p>Please complete the HWTC purchasing training first.</p></div>
       </div>
       <button class="btn btn-primary" onclick="nav('training')">Go to training →</button>`;
@@ -845,14 +841,14 @@ async function renderNewRequest() {
               <label style="display:block;cursor:pointer">
                 <input type="radio" name="purchase-method" value="in_store" checked onchange="togglePurchaseMethod('in_store')" style="display:none">
                 <div id="method-store" style="border:2px solid var(--teal);border-radius:var(--r);padding:10px 12px;background:var(--teal3)">
-                  <div class="fw-600 text-sm">🏪 In-store / in-person</div>
+                  <div class="fw-600 text-sm">In-store / in-person</div>
                   <div class="text-xs text-muted mt-2">At a physical store or vendor</div>
                 </div>
               </label>
               <label style="display:block;cursor:pointer">
                 <input type="radio" name="purchase-method" value="online" onchange="togglePurchaseMethod('online')" style="display:none">
                 <div id="method-online" style="border:2px solid var(--border);border-radius:var(--r);padding:10px 12px">
-                  <div class="fw-600 text-sm">🌐 Online purchase</div>
+                  <div class="fw-600 text-sm">Online purchase</div>
                   <div class="text-xs text-muted mt-2">Ordering from a website</div>
                 </div>
               </label>
@@ -1131,7 +1127,7 @@ async function showRequestDetail(rid) {
   const receiptsHtml = r.receipts && r.receipts.length > 0 ?
     `<div class="receipt-grid">${r.receipts.map(rc => `
       <div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')" title="Click to view full size">
-        <img src="${rc.image_url}" alt="Receipt" onerror="this.outerHTML='<span style=font-size:24px>📎</span>'">
+        <img src="${rc.image_url}" alt="Receipt" onerror="this.outerHTML='<span style=font-size:24px></span>'">
       </div>`).join('')}</div>
      <div class="text-xs text-muted mt-4">${r.receipts.length} receipt${r.receipts.length!==1?'s':''} attached — click to view</div>` :
     `<span class="text-xs text-muted">No receipts uploaded</span>`;
@@ -1171,7 +1167,7 @@ async function showRequestDetail(rid) {
         <div><div class="text-xs text-muted">Submitted by</div><div class="fw-600 text-sm mt-4">${r.submitter_name}</div></div>
         <div><div class="text-xs text-muted">Date</div><div class="fw-600 text-sm mt-4">${fmtDate(r.submitted_at)}</div></div>
         <div><div class="text-xs text-muted">Estimated cost</div><div class="fw-600 text-sm mt-4">${fmtMoney(r.estimated_cost)}</div></div>
-        <div><div class="text-xs text-muted">Purchase method</div><div class="fw-600 text-sm mt-4">${r.purchase_method==='online'?'🌐 Online':'🏪 In-store'}${r.vendor?' — '+r.vendor:''}</div></div>
+        <div><div class="text-xs text-muted">Purchase method</div><div class="fw-600 text-sm mt-4">${r.purchase_method==='online'?'Online':'In-store'}${r.vendor?' — '+r.vendor:''}</div></div>
         <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div></div>
         <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.is_sap ? 'SAP — Self-Authorized' : 'Pre-approval'}</div></div>
       </div>
@@ -1281,7 +1277,7 @@ async function renderApprovals() {
         steps.map((s,i) => {
           const color = s.done ? 'var(--green)' : s.current ? 'var(--amber)' : 'var(--ink3)';
           const bg    = s.done ? 'var(--green-bg)' : s.current ? 'var(--amber-bg)' : 'var(--cream2)';
-          const icon  = s.done ? '✓' : s.current ? '⏳' : '·';
+          const icon  = s.done ? '✓' : s.current ? '●' : '·';
           return (i>0?'<span style="color:var(--border);font-size:9px;margin:0 2px">→</span>':'') +
             `<span title="${s.note||''}" style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:99px;background:${bg};color:${color};cursor:${s.note?'help':'default'}">${icon} ${s.label}</span>`;
         }).join('') + '</div>';
@@ -1303,16 +1299,16 @@ async function renderApprovals() {
           <div class="flex flex-center gap-6 mb-5">
             ${r.production_name?`<span class="badge badge-treasurer" style="font-size:10px">${r.production_name}</span>`:'<span class="text-xs text-muted">Org</span>'}
             ${r.is_sap?'<span class="badge badge-sap" style="font-size:10px">SAP</span>':''}
-            ${r.purchase_method==='online'?'<span style="font-size:10px">🌐</span>':'<span style="font-size:10px">🏪</span>'}
+            ${r.purchase_method==='online'?'<span style="font-size:10px"></span>':'<span style="font-size:10px"></span>'}
             <span class="text-xs text-muted" style="margin-left:auto">${fmtDate(r.submitted_at)}</span>
           </div>
           <div class="fw-600 mb-1" style="line-height:1.3">${r.title}</div>
           <div class="text-xs text-muted mb-5">${r.submitter_name}${r.budget_name?' · '+r.budget_name:''}</div>
           <div class="fw-600" style="font-size:15px">${fmtMoney(r.estimated_cost)}${r.actual_cost&&r.actual_cost!==r.estimated_cost?` <span class="text-xs text-muted">actual ${fmtMoney(r.actual_cost)}</span>`:''}</div>
-          ${r.item_url?`<div class="mt-4"><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:11px;color:var(--teal)">🌐 View item →</a></div>`:''}
+          ${r.item_url?`<div class="mt-4"><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:11px;color:var(--teal)">View item →</a></div>`:''}
           ${r.sap_reason?`<div class="mt-5 text-xs" style="color:var(--amber);background:var(--amber-bg);padding:4px 7px;border-radius:var(--r-sm)">SAP: ${r.sap_reason}</div>`:''}
           ${r.budget_name?`<div class="mt-5"><div class="budget-bar-wrap" style="height:3px"><div class="budget-bar-fill ${bp>90?'danger':bp>70?'warn':''}" style="width:${bp}%;height:3px"></div></div><div class="text-xs text-muted mt-1">${fmtMoney(r.budget_spent)}/${fmtMoney(r.budget_total)}</div></div>`:''}
-          ${r.receipts&&r.receipts.length>0?`<div class="flex gap-3 mt-5">${r.receipts.map(rc=>`<div class="receipt-thumb" style="width:36px;height:36px" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.outerHTML='<span>📎</span>'"></div>`).join('')}</div>`:''}
+          ${r.receipts&&r.receipts.length>0?`<div class="flex gap-3 mt-5">${r.receipts.map(rc=>`<div class="receipt-thumb" style="width:36px;height:36px" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.outerHTML='<span></span>'"></div>`).join('')}</div>`:''}
           ${approvalTrail(r)}
           ${acting?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
             ${r.status==='pending_president'?`<input type="number" id="act-${r.id}" class="form-input mb-6" value="${r.actual_cost||r.estimated_cost}" step="0.01" placeholder="Actual cost" style="padding:5px 9px;font-size:12px">` :''}
@@ -1457,7 +1453,7 @@ async function renderReimbursements() {
               </tr>`).join('')}
             </tbody>
           </table>
-        </div>` : `<div class="empty"><div class="empty-icon">✓</div><h3>No pending reimbursements</h3><p>${isAdmin ? 'All volunteers have been paid.' : 'You have no pending reimbursements.'}</p></div>`}
+        </div>` : `<div class="empty"><h3>No pending reimbursements</h3><p>${isAdmin ? 'All volunteers have been paid.' : 'You have no pending reimbursements.'}</p></div>`}
       ${paid.length > 0 ? `
         <div class="fw-600 mb-12" style="font-size:15px;color:var(--ink3)">Payment history</div>
         <div class="table-wrap">
@@ -1665,7 +1661,7 @@ async function renderBudgets() {
       }
     }
 
-    if (!html) html = `<div class="empty"><div class="empty-icon">💰</div><h3>No budgets yet</h3>${isAdmin?'<button class="btn btn-primary mt-16" onclick="showBudgetModal()">Create first budget</button>':''}</div>`;
+    if (!html) html = `<div class="empty"><h3>No budgets yet</h3>${isAdmin?'<button class="btn btn-primary mt-16" onclick="showBudgetModal()">Create first budget</button>':''}</div>`;
     document.getElementById('content').innerHTML = `<div class="section-sub">Track spend across productions and org areas</div>${html}`;
   } catch(e) {
     document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
@@ -1702,7 +1698,7 @@ function showBudgetModal(id=0, name='', area='', season='', total=0, production_
       <div class="form-group"><label class="form-label">Budget amount <span class="req">*</span></label>
         <input type="number" id="b-total" class="form-input" value="${total||''}" placeholder="0.00" step="0.01"></div>` : `
       <div class="panel mb-4" style="background:var(--teal3);border-color:var(--teal);padding:10px 14px;font-size:13px">
-        💡 This creates a <strong>category container</strong>. Its total will be the sum of sub-budgets you add to it — no amount needed here.
+        This creates a <strong>category container</strong>. Its total will be the sum of sub-budgets you add to it — no amount needed here.
       </div>
       <input type="hidden" id="b-total" value="0">`}
       ${!production_id && parentOpts ? `
@@ -1801,7 +1797,7 @@ async function renderProductions() {
 
     if (prods.length === 0) {
       document.getElementById('content').innerHTML = `
-        <div class="empty"><div class="empty-icon">🎭</div><h3>No productions yet</h3>
+        <div class="empty"><h3>No productions yet</h3>
         ${canCreate?'<button class="btn btn-primary mt-16" onclick="showProductionModal()">Create first production</button>':''}
         </div>`;
       return;
@@ -1978,7 +1974,7 @@ function renderProdTab() {
     tc.innerHTML = `
       ${canManage ? `<div class="flex mb-16"><button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="showAddDeptModal()">+ Add department</button></div>` : ''}
       ${p.budgets.length === 0
-        ? `<div class="empty"><div class="empty-icon">💰</div><h3>No departments yet</h3><p>Add departments like Props, Costumes, Lighting — each with their own budget cap.</p></div>`
+        ? `<div class="empty"><h3>No departments yet</h3><p>Add departments like Props, Costumes, Lighting — each with their own budget cap.</p></div>`
         : p.budgets.map(b => {
             const pct = b.total_amount>0?Math.min(100,(b.spent/b.total_amount)*100):0;
             const remaining = b.total_amount - b.spent;
@@ -2116,13 +2112,13 @@ async function renderRevenueTab() {
 
       ${canManage ? `<div class="flex mb-12" style="gap:8px">
         ${['admin','treasurer','president'].includes(currentUser.role)
-          ? `<button class="btn btn-outline btn-sm" onclick="showRoleCallLinkModal(${p.id})">🔗 ${p.rolecall_linked?'Rising Stars linked':'Link Rising Stars (RoleCall)'}</button>`
+          ? `<button class="btn btn-outline btn-sm" onclick="showRoleCallLinkModal(${p.id})">${p.rolecall_linked?'Rising Stars linked':'Link Rising Stars (RoleCall)'}</button>`
           : ''}
         <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="showAddRevenueModal(${p.id})">+ Add revenue</button>
       </div>` : ''}
 
       ${entries.length === 0
-        ? `<div class="empty"><div class="empty-icon">💵</div><h3>No revenue entries yet</h3><p>Track ticket sales, concessions, program ads, and other income for this production.</p></div>`
+        ? `<div class="empty"><h3>No revenue entries yet</h3><p>Track ticket sales, concessions, program ads, and other income for this production.</p></div>`
         : `<div class="table-wrap"><table>
             <thead><tr><th>Source</th><th>Description</th><th>Expected</th><th>Received</th><th>Date</th>${canManage?'<th></th>':''}</tr></thead>
             <tbody>${entries.map(r => `<tr${r.rolecall_live?' style="background:var(--surface2,#f7faf7)"':''}>
@@ -2621,7 +2617,7 @@ async function renderStatements() {
     };
     if (statements.length === 0) {
       document.getElementById('content').innerHTML = `
-        <div class="empty"><div class="empty-icon">📋</div><h3>No statements yet</h3>
+        <div class="empty"><h3>No statements yet</h3>
         <p>Create a statement to group multiple purchases together and submit them all at once.</p>
         <button class="btn btn-primary mt-16" onclick="showNewStatementModal()">Create first statement</button></div>`;
       return;
@@ -2655,7 +2651,7 @@ async function renderStatements() {
               return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
                 <div style="flex:1">
                   <div class="text-sm fw-600">${item.title}</div>
-                  <div class="text-xs text-muted">${item.vendor||''}${item.purchase_method==='online'?' · 🌐':' · 🏪'}</div>
+                  <div class="text-xs text-muted">${item.vendor||''}${item.purchase_method==='online'?' ·':' ·'}</div>
                 </div>
                 <div class="text-sm fw-600">${fmtMoney(item.actual_cost||item.estimated_cost)}</div>
                 <span class="badge ${iBadgeCls}" style="font-size:10px">${iBadgeLabel}</span>
@@ -2751,8 +2747,8 @@ function buildItemFormHTML(sid, item) {
       <div class="form-group">
         <label class="form-label">Purchase method</label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="method-opt ${item?.purchase_method!=='online'?'active':''}" id="smethod-store" onclick="setItemMethod('in_store')">🏪 In-store</div>
-          <div class="method-opt ${item?.purchase_method==='online'?'active':''}" id="smethod-online" onclick="setItemMethod('online')">🌐 Online</div>
+          <div class="method-opt ${item?.purchase_method!=='online'?'active':''}" id="smethod-store" onclick="setItemMethod('in_store')">In-store</div>
+          <div class="method-opt ${item?.purchase_method==='online'?'active':''}" id="smethod-online" onclick="setItemMethod('online')">Online</div>
         </div>
       </div>
       <input type="hidden" id="sitem-method" value="${item?.purchase_method||'in_store'}">
@@ -2989,7 +2985,7 @@ function pcDollars(n) {
 
 async function renderPricingCalc() {
   const content = document.getElementById('content');
-  content.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div><p>Loading...</p></div>';
+  content.innerHTML = '<div class="empty"><p>Loading...</p></div>';
   try {
     const [capacity, settings, facilityCost, productions] = await Promise.all([
       api('GET','/space-capacity-hours'),
@@ -3401,7 +3397,7 @@ async function renderUsers() {
               ${canManage ? `<td><div class="flex gap-8">
                 <button class="btn btn-outline btn-sm" onclick="showEditUserModal(${u.id},'${u.name.replace(/'/g,"\\'")}','${u.email}',${u.training_complete})">Edit</button>
                 <button class="btn btn-outline btn-sm" onclick="showResetPasswordModal(${u.id},'${u.name.replace(/'/g,"\\'")}')">Password</button>
-                <button class="btn btn-outline btn-sm" onclick="showReceiptLink(${u.id},'${u.name.replace(/'/g,"\\'")}')">📱 Receipt link</button>
+                <button class="btn btn-outline btn-sm" onclick="showReceiptLink(${u.id},'${u.name.replace(/'/g,"\\'")}')">Receipt link</button>
                 ${u.is_active!==0?`<button class="btn btn-danger btn-sm" onclick="setUserActive(${u.id},0)">Deactivate</button>`:''}
                 <button class="btn btn-danger btn-sm" onclick="confirmDeleteUser(${u.id},'${u.name.replace(/'/g,"\\'")}')">Delete</button>
               </div></td>` : ''}
@@ -3535,7 +3531,7 @@ async function showReceiptLink(uid, name) {
   try {
     const d = await api('GET', `/users/${uid}/receipt-token`);
     const html = `
-      <div class="modal-header"><span class="modal-title">📱 Mobile receipt link</span><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-header"><span class="modal-title">Mobile receipt link</span><button class="modal-close" onclick="closeModal()">×</button></div>
       <div class="modal-body">
         <p class="text-sm mb-16">Share this link with <strong>${name}</strong> so they can submit receipts from their phone — no login required.</p>
         <div class="form-group">
@@ -3623,7 +3619,7 @@ async function markTrained(uid) {
 const HWTC_SLIDES = [
   {
     section: 'Smart Theater Spending',
-    icon: '🎭',
+    icon: '',
     color: '#0f6e56',
     title: 'Smart Theater Spending',
     subtitle: 'Stretch every dollar for Horizon West Theater Company',
@@ -3631,7 +3627,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Smart Theater Spending',
-    icon: '🏪',
+    icon: '',
     color: '#0f6e56',
     title: 'Check Storage First',
     subtitle: 'Don\'t reinvent the wheel',
@@ -3644,7 +3640,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Smart Theater Spending',
-    icon: '🛍️',
+    icon: '',
     color: '#0f6e56',
     title: 'Shop Smart, Shop Local',
     subtitle: 'Big box stores aren\'t always the best deal',
@@ -3657,7 +3653,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Smart Theater Spending',
-    icon: '🔄',
+    icon: '',
     color: '#0f6e56',
     title: 'Rent vs. Buy',
     subtitle: 'Storage is tight and budgets are tighter',
@@ -3670,7 +3666,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Credit Card',
-    icon: '💳',
+    icon: '',
     color: '#7a5a10',
     title: 'Using the HWTC Credit Card',
     subtitle: 'A tool to make purchasing easier — use it with care',
@@ -3683,7 +3679,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Credit Card',
-    icon: '💰',
+    icon: '',
     color: '#7a5a10',
     title: 'Credit Card Limits',
     subtitle: 'Know the rules before you swipe',
@@ -3696,7 +3692,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Reimbursements',
-    icon: '🧾',
+    icon: '',
     color: '#185fa5',
     title: 'Getting Reimbursed',
     subtitle: 'What you need to know before spending your own money',
@@ -3709,7 +3705,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Reimbursements',
-    icon: '📸',
+    icon: '',
     color: '#185fa5',
     title: 'Receipts & Submission',
     subtitle: 'No receipt = no reimbursement',
@@ -3723,7 +3719,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Donations',
-    icon: '🎁',
+    icon: '',
     color: '#2d7d4f',
     title: 'Donating Items',
     subtitle: 'We love donations — but check first!',
@@ -3736,7 +3732,7 @@ const HWTC_SLIDES = [
   },
   {
     section: 'Summary',
-    icon: '✅',
+    icon: '',
     color: '#0f6e56',
     title: 'You\'re Almost Ready!',
     subtitle: 'Key things to remember',
@@ -3876,9 +3872,7 @@ async function renderTraining() {
 
     if (status.completed) {
       document.getElementById('content').innerHTML = `
-        <div class="panel" style="max-width:580px;text-align:center;padding:48px 40px">
-          <div style="font-size:52px;margin-bottom:16px">🎓</div>
-          <h2 style="font-size:24px;font-weight:700;margin-bottom:8px;color:var(--green)">Training complete!</h2>
+        <div class="panel" style="max-width:580px;text-align:center;padding:48px 40px">          <h2 style="font-size:24px;font-weight:700;margin-bottom:8px;color:var(--green)">Training complete!</h2>
           <p class="text-muted text-sm">You passed with a score of <strong>${status.score}%</strong>. You are authorized to submit purchase requests for Horizon West Theater Company.</p>
           <div style="margin-top:24px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
             <button class="btn btn-primary" onclick="nav('new-request')">Submit a purchase request →</button>
@@ -3966,9 +3960,7 @@ function renderQuizView() {
   quizSubmitted = false;
   document.getElementById('content').innerHTML = `
     <div style="max-width:700px">
-      <div class="panel mb-20" style="background:var(--teal3);border-color:var(--teal);display:flex;align-items:center;gap:16px">
-        <div style="font-size:28px">📝</div>
-        <div>
+      <div class="panel mb-20" style="background:var(--teal3);border-color:var(--teal);display:flex;align-items:center;gap:16px">        <div>
           <div class="fw-600" style="font-size:16px">HWTC Purchasing Knowledge Check</div>
           <div class="text-sm text-muted mt-4">${HWTC_QUESTIONS.length} questions · You need 80% to pass · Take your time</div>
         </div>
@@ -4055,16 +4047,12 @@ async function submitQuiz() {
     const passed = d.passed;
     const resultEl = document.getElementById('quiz-result');
     resultEl.innerHTML = passed
-      ? `<div class="panel mt-20" style="background:var(--green-bg);border-color:#a8d8b9;text-align:center;padding:32px;border-radius:var(--r)">
-           <div style="font-size:48px;margin-bottom:12px">🎓</div>
-           <div style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:6px">You passed!</div>
+      ? `<div class="panel mt-20" style="background:var(--green-bg);border-color:#a8d8b9;text-align:center;padding:32px;border-radius:var(--r)">           <div style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:6px">You passed!</div>
            <div class="text-sm text-muted">${correct} of ${HWTC_QUESTIONS.length} correct · ${score}%</div>
            <p class="text-sm mt-12" style="color:var(--ink2)">You are now authorized to submit purchase requests for Horizon West Theater Company.</p>
            <button class="btn btn-primary mt-16" onclick="nav('new-request')">Submit your first purchase request →</button>
          </div>`
-      : `<div class="panel mt-20" style="background:var(--red-bg);border-color:#e8b4b4;text-align:center;padding:32px;border-radius:var(--r)">
-           <div style="font-size:48px;margin-bottom:12px">📖</div>
-           <div style="font-size:22px;font-weight:700;color:var(--red);margin-bottom:6px">Not quite — ${score}%</div>
+      : `<div class="panel mt-20" style="background:var(--red-bg);border-color:#e8b4b4;text-align:center;padding:32px;border-radius:var(--r)">           <div style="font-size:22px;font-weight:700;color:var(--red);margin-bottom:6px">Not quite — ${score}%</div>
            <div class="text-sm text-muted">${correct} of ${HWTC_QUESTIONS.length} correct · Need 80% to pass</div>
            <p class="text-sm mt-12" style="color:var(--ink2)">Review the explanations above, then try again. You've got this!</p>
            <button class="btn btn-outline mt-16" onclick="renderTraining()">Try again from the start</button>
@@ -4229,7 +4217,7 @@ async function renderContractors() {
         <div class="stat-card green"><div class="stat-label">Total paid</div><div class="stat-value">${fmtMoney(totalPaid)}</div></div>
         <div class="stat-card ${missingW9 ? 'amber' : ''}"><div class="stat-label">Active, missing W-9</div><div class="stat-value">${missingW9}</div></div>
       </div>
-      ${_contractors.length === 0 ? `<div class="empty"><div class="empty-icon">🗂️</div><h3>No contractors yet</h3><p>Add a contractor to start tracking their W-9, agreement, and payments.</p></div>` : `
+      ${_contractors.length === 0 ? `<div class="empty"><h3>No contractors yet</h3><p>Add a contractor to start tracking their W-9, agreement, and payments.</p></div>` : `
       <div class="table-wrap">
         <table>
           <thead><tr><th>Name</th><th>Status</th><th>W-9</th><th>Agreement</th><th>Total paid</th><th></th></tr></thead>
@@ -4393,7 +4381,7 @@ function renderContractorDocuments(tc) {
       <button class="btn btn-primary btn-sm ml-8" onclick="document.getElementById('ct-doc-file').click()">+ Upload document</button>
       <input type="file" id="ct-doc-file" class="hidden" accept="image/*,application/pdf" onchange="uploadContractorDoc(this)">
     </div>
-    ${docs.length === 0 ? `<div class="empty"><div class="empty-icon">📄</div><h3>No documents yet</h3><p>Upload a signed W-9 or contractor agreement, or send one for e-signature below.</p></div>` : `
+    ${docs.length === 0 ? `<div class="empty"><h3>No documents yet</h3><p>Upload a signed W-9 or contractor agreement, or send one for e-signature below.</p></div>` : `
     <div class="table-wrap mb-20">
       <table>
         <thead><tr><th>Type</th><th>File</th><th>Uploaded</th><th></th></tr></thead>
@@ -4673,7 +4661,7 @@ function renderContractorBanking(tc) {
       <div class="text-xs" style="color:var(--teal)">Account and routing numbers are encrypted and shown masked. Revealing the full number requires your password and is logged.</div>
     </div>
     <div class="flex mb-16"><button class="btn btn-primary btn-sm" onclick="showAddBankModal()">+ Add bank account</button></div>
-    ${banks.length === 0 ? `<div class="empty"><div class="empty-icon">🏦</div><h3>No bank accounts on file</h3></div>` : `
+    ${banks.length === 0 ? `<div class="empty"><h3>No bank accounts on file</h3></div>` : `
     <div class="table-wrap">
       <table>
         <thead><tr><th>Nickname</th><th>Holder</th><th>Type</th><th>Routing</th><th>Account</th><th></th></tr></thead>
@@ -4816,7 +4804,7 @@ function renderContractorPayments(tc) {
   const banks = _currentContractor.bank_accounts;
   tc.innerHTML = `
     <div class="flex mb-16"><button class="btn btn-primary btn-sm" onclick="showAddPaymentModal()">+ Record payment</button></div>
-    ${payments.length === 0 ? `<div class="empty"><div class="empty-icon">💵</div><h3>No payments recorded</h3></div>` : `
+    ${payments.length === 0 ? `<div class="empty"><h3>No payments recorded</h3></div>` : `
     <div class="table-wrap">
       <table>
         <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Recorded by</th><th>Status</th><th></th></tr></thead>
@@ -4896,7 +4884,7 @@ async function voidPayment(pid) {
 
 // ── Activity tab ─────────────────────────────────────────────────────────────
 async function renderContractorActivity(tc) {
-  tc.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div><p>Loading...</p></div>';
+  tc.innerHTML = '<div class="empty"><p>Loading...</p></div>';
   try {
     const log = await api('GET', `/contractors/${_currentContractor.contractor.id}/audit`);
     tc.innerHTML = log.length === 0 ? `<div class="empty"><p>No activity yet.</p></div>` : `
