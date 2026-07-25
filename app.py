@@ -3187,12 +3187,7 @@ def list_contractors():
         SELECT ct.*,
           EXISTS(SELECT 1 FROM bb_contractor_documents d WHERE d.contractor_id=ct.id AND d.doc_type='w9') AS has_w9,
           EXISTS(SELECT 1 FROM bb_contractor_documents d WHERE d.contractor_id=ct.id AND d.doc_type='agreement') AS has_agreement,
-          (SELECT COALESCE(SUM(amount),0) FROM bb_contractor_payments p WHERE p.contractor_id=ct.id AND p.status='paid') AS total_paid,
-          (SELECT STRING_AGG(DISTINCT NULLIF(TRIM(sr.custom_fields::json->>'class_workshop'), ''), ', ')
-             FROM bb_signing_requests sr
-             WHERE sr.contractor_id=ct.id AND sr.doc_type='agreement' AND sr.status='signed'
-               AND COALESCE(sr.custom_fields, '{}') <> '{}'
-          ) AS classes_workshops
+          (SELECT COALESCE(SUM(amount),0) FROM bb_contractor_payments p WHERE p.contractor_id=ct.id AND p.status='paid') AS total_paid
         FROM bb_contractors ct ORDER BY ct.status ASC, ct.name ASC
     ''').fetchall()
     conn.close()
@@ -3225,8 +3220,10 @@ def get_contractor(cid):
     ct = conn.execute('SELECT * FROM bb_contractors WHERE id=%s', (cid,)).fetchone()
     if not ct:
         conn.close(); return jsonify({'error': 'Not found'}), 404
-    docs = conn.execute('''SELECT id, doc_type, filename, format, effective_date, expires_at, uploaded_by, uploaded_at
-                           FROM bb_contractor_documents WHERE contractor_id=%s ORDER BY uploaded_at DESC''', (cid,)).fetchall()
+    docs = conn.execute('''SELECT d.id, d.doc_type, d.filename, d.format, d.effective_date, d.expires_at, d.uploaded_by, d.uploaded_at,
+                           (SELECT sr.custom_fields::json->>'class_workshop' FROM bb_signing_requests sr
+                            WHERE sr.final_document_id = d.id LIMIT 1) AS class_workshop
+                           FROM bb_contractor_documents d WHERE d.contractor_id=%s ORDER BY d.uploaded_at DESC''', (cid,)).fetchall()
     banks = conn.execute('''SELECT id, nickname, account_holder_name, account_type, routing_last4, account_last4,
                             is_primary, is_active, created_at
                             FROM bb_contractor_bank_accounts WHERE contractor_id=%s
