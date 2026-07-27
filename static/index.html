@@ -3398,6 +3398,7 @@ async function renderUsers() {
                 <button class="btn btn-outline btn-sm" onclick="showEditUserModal(${u.id},'${u.name.replace(/'/g,"\\'")}','${u.email}',${u.training_complete})">Edit</button>
                 <button class="btn btn-outline btn-sm" onclick="showResetPasswordModal(${u.id},'${u.name.replace(/'/g,"\\'")}')">Password</button>
                 <button class="btn btn-outline btn-sm" onclick="showReceiptLink(${u.id},'${u.name.replace(/'/g,"\\'")}')">Receipt link</button>
+                <button class="btn btn-outline btn-sm" onclick="showBudgetAccessModal(${u.id},'${u.name.replace(/'/g,"\\'")}')">Budget access</button>
                 ${u.is_active!==0?`<button class="btn btn-danger btn-sm" onclick="setUserActive(${u.id},0)">Deactivate</button>`:''}
                 <button class="btn btn-danger btn-sm" onclick="confirmDeleteUser(${u.id},'${u.name.replace(/'/g,"\\'")}')">Delete</button>
               </div></td>` : ''}
@@ -3444,6 +3445,82 @@ async function doEditUser(uid) {
     toast('User updated!','success');
     closeModal(); renderUsers();
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+async function showBudgetAccessModal(uid, name) {
+  let access, allBudgets;
+  try {
+    [access, allBudgets] = await Promise.all([
+      api('GET', `/users/${uid}/budget-access`),
+      api('GET', '/budgets')
+    ]);
+  } catch (e) { toast(e.message, 'error'); return; }
+  window._baCurrentUid = uid;
+  window._baAllBudgets = allBudgets;
+  const html = `
+    <div class="modal-header"><span class="modal-title">${name} — budget access</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="panel mb-16" style="background:var(--teal3);border-color:var(--teal)">
+        <label class="text-sm" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:400">
+          <input type="checkbox" id="ba-org-level" ${access.can_submit_org_level ? 'checked' : ''} onchange="toggleOrgLevelAccess(${uid})" style="margin-top:2px">
+          <span><strong>Can submit general org-level purchases</strong><br>
+          <span class="text-xs text-muted">Lets this person submit against any org-level budget (not tied to a specific production) — e.g. general operations, facility, or admin purchases — without being added to each one individually.</span></span>
+        </label>
+      </div>
+      <div class="text-xs text-muted fw-600 mb-8">SPECIFIC BUDGET ACCESS</div>
+      <div id="ba-budget-list">${renderBudgetAccessList(access.budgets, uid)}</div>
+      <hr class="divider">
+      <div class="text-xs text-muted fw-600 mb-8">GRANT ACCESS TO A SPECIFIC BUDGET</div>
+      <div class="flex gap-8">
+        <select id="ba-add-budget" class="form-select">
+          ${allBudgets.map(b => `<option value="${b.id}">${b.name}${b.production_name ? ' — ' + b.production_name : ' (org-level)'}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="addBudgetAccess(${uid})">Add</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeModal()">Done</button>
+    </div>`;
+  showModal(html);
+}
+
+function renderBudgetAccessList(budgets, uid) {
+  if (!budgets || budgets.length === 0) return `<p class="text-xs text-muted mb-12">No specific budgets granted yet.</p>`;
+  return budgets.map(b => `
+    <div class="flex flex-center gap-8 mb-8 p-8" style="border:1px solid var(--border);border-radius:var(--r-sm)">
+      <span class="text-sm">${b.name}${b.production_name ? ` <span class="text-xs text-muted">— ${b.production_name}</span>` : ' <span class="text-xs text-muted">— org-level</span>'}</span>
+      <button class="btn btn-danger btn-sm" style="margin-left:auto;font-size:11px;padding:2px 7px" onclick="removeBudgetAccess(${uid},${b.id})">×</button>
+    </div>`).join('');
+}
+
+async function toggleOrgLevelAccess(uid) {
+  const checked = document.getElementById('ba-org-level').checked;
+  try {
+    await api('PATCH', `/users/${uid}`, {can_submit_org_level: checked});
+    toast(checked ? 'General org-level access granted.' : 'General org-level access removed.', checked ? 'success' : 'info');
+  } catch (e) {
+    toast(e.message, 'error');
+    document.getElementById('ba-org-level').checked = !checked;
+  }
+}
+
+async function addBudgetAccess(uid) {
+  const bid = parseInt(document.getElementById('ba-add-budget').value);
+  try {
+    await api('POST', `/budgets/${bid}/members`, {user_id: uid, is_owner: 1});
+    toast('Budget access granted!', 'success');
+    const access = await api('GET', `/users/${uid}/budget-access`);
+    document.getElementById('ba-budget-list').innerHTML = renderBudgetAccessList(access.budgets, uid);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function removeBudgetAccess(uid, bid) {
+  try {
+    await api('DELETE', `/budgets/${bid}/members/${uid}`);
+    toast('Budget access removed.', 'info');
+    const access = await api('GET', `/users/${uid}/budget-access`);
+    document.getElementById('ba-budget-list').innerHTML = renderBudgetAccessList(access.budgets, uid);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function setUserActive(uid, active) {
