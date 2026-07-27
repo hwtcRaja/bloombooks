@@ -232,6 +232,7 @@ def init_db():
         training_complete INTEGER DEFAULT 0,
         created_at        TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
+    c.execute("ALTER TABLE bb_users ADD COLUMN IF NOT EXISTS can_submit_org_level INTEGER DEFAULT 0")
 
     c.execute('''
     CREATE TABLE IF NOT EXISTS bb_budgets (
@@ -661,9 +662,9 @@ def user_can_use_budget(u, budget_id):
     """
     Can this user submit a purchase request against this budget?
       • Org approvers (admin/treasurer/president): any budget.
+      • Anyone with can_submit_org_level: any org-level budget (production_id IS NULL).
       • Anyone: a budget they personally own (bb_budget_members).
       • Production budgets: any member of that production.
-      • Org-level budgets (production_id IS NULL): ONLY owners + org approvers.
     """
     if not budget_id:
         return False
@@ -683,9 +684,10 @@ def user_can_use_budget(u, budget_id):
                               (u['id'], b['production_id'])).fetchone()
         conn.close()
         return bool(member)
-    # Org-level budget the user does not own → not permitted
+    # Org-level budget the user doesn't personally own → allowed only with general
+    # org-level submit access (a lighter-weight grant than a full approver role).
     conn.close()
-    return False
+    return bool(u.get('can_submit_org_level'))
 
 # ─── RoleCall "Rising Stars" revenue read-through ─────────────────────────────
 # Both apps share the same Postgres database. RoleCall uses un-prefixed tables
@@ -1086,6 +1088,7 @@ def list_budgets():
     u = current_user()
     conn = get_db()
     is_admin = u['role'] in ('admin','treasurer','president')
+    can_org = is_admin or bool(u.get('can_submit_org_level'))
     owned_ids = user_owned_budget_ids(u['id'])
     if is_admin:
         budgets = conn.execute('''SELECT b.*,p.name as production_name FROM bb_budgets b
@@ -1094,8 +1097,8 @@ def list_budgets():
     else:
         my_ids = [r['production_id'] for r in
                   conn.execute('SELECT production_id FROM bb_production_members WHERE user_id=%s',(u['id'],)).fetchall()]
-        # Non-admins see: production budgets for their productions + any budget they own.
-        # Org-level budgets are only visible if they personally own them.
+        # Non-admins see: production budgets for their productions + any budget they own
+        # + (if granted) every org-level budget, even ones they don't personally own.
         clauses, params = [], []
         if my_ids:
             ph = ','.join(['%s']*len(my_ids))
@@ -1103,6 +1106,8 @@ def list_budgets():
         if owned_ids:
             ph = ','.join(['%s']*len(owned_ids))
             clauses.append(f'b.id IN ({ph})'); params.extend(owned_ids)
+        if can_org:
+            clauses.append('b.production_id IS NULL')
         if clauses:
             where = '(' + ' OR '.join(clauses) + ') AND b.is_active=1'
             budgets = conn.execute(f'''SELECT b.*,p.name as production_name FROM bb_budgets b
@@ -1674,10 +1679,30 @@ def update_user(uid):
     if 'role'              in data: conn.execute('UPDATE bb_users SET role=%s WHERE id=%s',(data['role'],uid))
     if 'training_complete' in data: conn.execute('UPDATE bb_users SET training_complete=%s WHERE id=%s',(data['training_complete'],uid))
     if 'is_active'         in data: conn.execute('UPDATE bb_users SET is_active=%s WHERE id=%s',(data['is_active'],uid))
+    if 'can_submit_org_level' in data: conn.execute('UPDATE bb_users SET can_submit_org_level=%s WHERE id=%s',(int(bool(data['can_submit_org_level'])),uid))
     if 'password' in data and data['password']:
         conn.execute('UPDATE bb_users SET password=%s WHERE id=%s',(hash_pw(data['password']),uid))
     conn.commit(); conn.close()
     return jsonify({'ok':True})
+
+@app.route('/api/users/<int:uid>/budget-access', methods=['GET'])
+def get_user_budget_access(uid):
+    err = require_auth(['admin','treasurer','president'])
+    if err: return err
+    conn = get_db()
+    target = conn.execute('SELECT id, can_submit_org_level FROM bb_users WHERE id=%s', (uid,)).fetchone()
+    if not target:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    owned = conn.execute('''SELECT b.id, b.name, b.production_id, p.name AS production_name
+                            FROM bb_budget_members bm
+                            JOIN bb_budgets b ON b.id = bm.budget_id
+                            LEFT JOIN bb_productions p ON b.production_id = p.id
+                            WHERE bm.user_id=%s ORDER BY p.name, b.name''', (uid,)).fetchall()
+    conn.close()
+    return jsonify({
+        'can_submit_org_level': bool(target['can_submit_org_level']),
+        'budgets': [dict(b) for b in owned]
+    })
 
 # ─── Productions ──────────────────────────────────────────────────────────────
 @app.route('/api/productions', methods=['GET'])
@@ -2397,11 +2422,13 @@ def regenerate_receipt_token(uid):
 @app.route('/api/receipt/<token>', methods=['GET'])
 def get_receipt_page_data(token):
     conn = get_db()
-    u = conn.execute('SELECT id,name,email,training_complete FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    u = conn.execute('SELECT id,name,email,role,training_complete,can_submit_org_level FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
     if not u:
         conn.close()
         return jsonify({'error': 'Invalid or expired link'}), 404
     u = dict(u); uid = u['id']
+    is_admin = u['role'] in ('admin','treasurer','president')
+    can_org = is_admin or bool(u.get('can_submit_org_level'))
     reqs = conn.execute('''SELECT id,title,estimated_cost,actual_cost,status,type,vendor,submitted_at
                             FROM bb_purchase_requests
                             WHERE submitted_by=%s AND status NOT IN ('denied','reimbursed')
@@ -2411,22 +2438,30 @@ def get_receipt_page_data(token):
     owned_ids = [r['budget_id'] for r in
                  conn.execute('SELECT budget_id FROM bb_budget_members WHERE user_id=%s',(uid,)).fetchall()]
     # Same rules as the desktop budget list: production budgets for their productions
-    # + any budget they personally own. Org-level budgets only if they own them.
-    clauses, params = [], []
-    if my_prod_ids:
-        ph = ','.join(['%s']*len(my_prod_ids))
-        clauses.append(f'b.production_id IN ({ph})'); params.extend(my_prod_ids)
-    if owned_ids:
-        ph = ','.join(['%s']*len(owned_ids))
-        clauses.append(f'b.id IN ({ph})'); params.extend(owned_ids)
-    if clauses:
-        where = '(' + ' OR '.join(clauses) + ') AND b.is_active=1'
-        budgets = conn.execute(f'''SELECT b.id,b.name,b.area,b.total_amount,b.spent,b.production_id,
+    # + any budget they personally own + (if granted) every org-level budget.
+    if is_admin:
+        budgets = conn.execute('''SELECT b.id,b.name,b.area,b.total_amount,b.spent,b.production_id,
                                           p.name as production_name
                                    FROM bb_budgets b LEFT JOIN bb_productions p ON b.production_id=p.id
-                                   WHERE {where} ORDER BY p.name,b.name''', params).fetchall()
+                                   WHERE b.is_active=1 ORDER BY p.name,b.name''').fetchall()
     else:
-        budgets = []
+        clauses, params = [], []
+        if my_prod_ids:
+            ph = ','.join(['%s']*len(my_prod_ids))
+            clauses.append(f'b.production_id IN ({ph})'); params.extend(my_prod_ids)
+        if owned_ids:
+            ph = ','.join(['%s']*len(owned_ids))
+            clauses.append(f'b.id IN ({ph})'); params.extend(owned_ids)
+        if can_org:
+            clauses.append('b.production_id IS NULL')
+        if clauses:
+            where = '(' + ' OR '.join(clauses) + ') AND b.is_active=1'
+            budgets = conn.execute(f'''SELECT b.id,b.name,b.area,b.total_amount,b.spent,b.production_id,
+                                              p.name as production_name
+                                       FROM bb_budgets b LEFT JOIN bb_productions p ON b.production_id=p.id
+                                       WHERE {where} ORDER BY p.name,b.name''', params).fetchall()
+        else:
+            budgets = []
     if my_prod_ids:
         ph = ','.join(['%s']*len(my_prod_ids))
         productions = conn.execute(f"SELECT id,name,season FROM bb_productions WHERE id IN ({ph}) AND status='active'", my_prod_ids).fetchall()
@@ -2602,7 +2637,7 @@ def submit_receipt_mobile(token):
 @app.route('/api/receipt/<token>/new-request', methods=['POST'])
 def mobile_new_request(token):
     conn = get_db()
-    u = conn.execute('SELECT id,name,role,training_complete FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    u = conn.execute('SELECT id,name,role,training_complete,can_submit_org_level FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
     if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
     u = dict(u); uid = u['id']
     data      = request.form
