@@ -2602,7 +2602,7 @@ def submit_receipt_mobile(token):
 @app.route('/api/receipt/<token>/new-request', methods=['POST'])
 def mobile_new_request(token):
     conn = get_db()
-    u = conn.execute('SELECT id,name,training_complete FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    u = conn.execute('SELECT id,name,role,training_complete FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
     if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
     u = dict(u); uid = u['id']
     data      = request.form
