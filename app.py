@@ -722,27 +722,55 @@ def get_rolecall_link(conn, pid):
 def get_rolecall_rising_stars_revenue(conn, rc_production_id):
     """
     Live revenue for one RoleCall Rising Stars production, converted to dollars.
-      confirmed  → money actually collected  (maps to BloomBooks 'actual')
-      confirmed + pending → total anticipated (maps to BloomBooks 'expected')
+      confirmed_dollars → money actually in hand (maps to BloomBooks 'actual').
+        Prefers the real Square-confirmed amount over price × participant_count
+        (the two can drift — promo codes, price changes after the fact). A
+        Step Up hold only counts once it's actually been charged — a pending
+        hold is a promise, not money collected yet. Comp'd enrollments are $0
+        by design. Deduped by order, since sibling registrations sharing one
+        Square order all carry that order's full amount.
+      pending_dollars → additional amount still outstanding: pending
+        (uncharged) Step Up holds, plus waitlisted registrations that could
+        still convert. Added to confirmed_dollars downstream for 'expected'.
     Returns None if the RoleCall production can't be read (e.g. tables absent).
     """
     if not rc_production_id:
         return None
-    sum_expr = ('''COALESCE(prod.price,0) * COALESCE(pr.participant_count,1)
-                   - COALESCE(pr.discount_amount,0)
-                   - COALESCE(pr.sibling_discount_amount,0)''')
     try:
-        row = conn.execute(f'''
-            SELECT prod.name AS rc_name,
-                   COALESCE(SUM({sum_expr}) FILTER (WHERE pr.status='confirmed'), 0)       AS confirmed_cents,
-                   COALESCE(SUM({sum_expr}) FILTER (WHERE pr.status='pending_payment'), 0)  AS pending_cents,
-                   COUNT(pr.id) FILTER (WHERE pr.status='confirmed')                        AS confirmed_regs,
-                   COUNT(pr.id) FILTER (WHERE pr.status='pending_payment')                  AS pending_regs
-            FROM productions prod
-            LEFT JOIN program_registrations pr
-                   ON pr.production_id = prod.id AND pr.status != 'cancelled'
-            WHERE prod.id = %s
-            GROUP BY prod.id, prod.name''', (rc_production_id,)).fetchone()
+        row = conn.execute('''WITH dedup_regs AS (
+            SELECT DISTINCT ON (COALESCE(pr.square_order_id, pr.id))
+                pr.id, pr.status,
+                CASE WHEN pr.is_comped THEN 0
+                    WHEN su.hold_status = 'charged' THEN su.amount
+                    WHEN su.hold_status = 'pending' THEN 0
+                    ELSE COALESCE(pr.amount_paid_cents,
+                        COALESCE(prod.price,0) * COALESCE(pr.participant_count,1)
+                        - COALESCE(pr.discount_amount,0) - COALESCE(pr.sibling_discount_amount,0))
+                END AS confirmed_amount,
+                CASE WHEN NOT pr.is_comped AND su.hold_status = 'pending' THEN su.amount ELSE 0 END AS pending_step_up_amount
+            FROM program_registrations pr
+            JOIN productions prod ON prod.id = pr.production_id
+            LEFT JOIN step_up_child_holds su ON su.registration_id = pr.id
+            WHERE pr.production_id = %s AND pr.status != 'cancelled'
+            ORDER BY COALESCE(pr.square_order_id, pr.id), pr.id
+        ),
+        waitlist_amt AS (
+            SELECT pr.id,
+                CASE WHEN pr.is_comped THEN 0 ELSE
+                    COALESCE(prod.price,0) * COALESCE(pr.participant_count,1)
+                    - COALESCE(pr.discount_amount,0) - COALESCE(pr.sibling_discount_amount,0)
+                END AS amount
+            FROM program_registrations pr JOIN productions prod ON prod.id=pr.production_id
+            WHERE pr.production_id = %s AND pr.status = 'waitlisted'
+        )
+        SELECT prod.name AS rc_name,
+            COALESCE((SELECT SUM(confirmed_amount) FROM dedup_regs WHERE status='confirmed'), 0) AS confirmed_cents,
+            COALESCE((SELECT SUM(pending_step_up_amount) FROM dedup_regs WHERE status='confirmed'), 0) AS pending_step_up_cents,
+            COALESCE((SELECT SUM(amount) FROM waitlist_amt), 0) AS waitlist_cents,
+            (SELECT COUNT(*) FROM dedup_regs WHERE status='confirmed') AS confirmed_regs,
+            (SELECT COUNT(*) FROM program_registrations WHERE production_id=%s AND status='pending_payment') AS pending_regs
+        FROM productions prod WHERE prod.id = %s''',
+            (rc_production_id, rc_production_id, rc_production_id, rc_production_id)).fetchone()
     except Exception as e:
         app.logger.warning(f'RoleCall revenue read failed for {rc_production_id}: {e}')
         return None
@@ -750,12 +778,13 @@ def get_rolecall_rising_stars_revenue(conn, rc_production_id):
         return None
     row = dict(row)
     confirmed = int(row.get('confirmed_cents') or 0) / 100.0
-    pending   = int(row.get('pending_cents') or 0) / 100.0
+    pending_step_up = int(row.get('pending_step_up_cents') or 0) / 100.0
+    waitlist = int(row.get('waitlist_cents') or 0) / 100.0
     return {
         'rc_production_id':   rc_production_id,
         'rc_production_name': row.get('rc_name'),
         'confirmed_dollars':  round(confirmed, 2),
-        'pending_dollars':    round(pending, 2),
+        'pending_dollars':    round(pending_step_up + waitlist, 2),
         'confirmed_regs':     int(row.get('confirmed_regs') or 0),
         'pending_regs':       int(row.get('pending_regs') or 0),
     }
