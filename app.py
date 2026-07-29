@@ -1507,7 +1507,9 @@ def list_reimbursements():
     if u['role'] in ('admin','treasurer','president'):
         rows = conn.execute('''SELECT rb.*,u.name as user_name,u.email as user_email,
                                pr.title,pr.estimated_cost,pr.actual_cost,pr.is_emergency,
-                               pr.reimb_method,pr.reimb_handle
+                               pr.type as request_type,
+                               COALESCE(NULLIF(pr.reimb_method,''), u.reimb_method) as reimb_method,
+                               COALESCE(NULLIF(pr.reimb_handle,''), u.reimb_handle) as reimb_handle
                                FROM bb_reimbursements rb
                                JOIN bb_users u ON rb.user_id=u.id
                                JOIN bb_purchase_requests pr ON rb.request_id=pr.id
@@ -1515,7 +1517,9 @@ def list_reimbursements():
     else:
         rows = conn.execute('''SELECT rb.*,u.name as user_name,u.email as user_email,
                                pr.title,pr.estimated_cost,pr.actual_cost,pr.is_emergency,
-                               pr.reimb_method,pr.reimb_handle
+                               pr.type as request_type,
+                               COALESCE(NULLIF(pr.reimb_method,''), u.reimb_method) as reimb_method,
+                               COALESCE(NULLIF(pr.reimb_handle,''), u.reimb_handle) as reimb_handle
                                FROM bb_reimbursements rb
                                JOIN bb_users u ON rb.user_id=u.id
                                JOIN bb_purchase_requests pr ON rb.request_id=pr.id
