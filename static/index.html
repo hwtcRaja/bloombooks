@@ -4902,8 +4902,14 @@ function renderContractorPayments(tc) {
   window._ctBanksForModal = banks;
 }
 
-function showAddPaymentModal() {
+async function showAddPaymentModal() {
   const banks = _currentContractor.bank_accounts || [];
+  showModal('<div class="modal-body"><p class="td-muted">Loading…</p></div>');
+  let payable = { linked: false, programs: [] };
+  try {
+    payable = await api('GET', `/contractors/${_currentContractor.contractor.id}/payable-events`);
+  } catch (e) { /* non-fatal — payment still works without the class picker */ }
+  window._ctPayableEvents = payable;
   const html = `
     <div class="modal-header"><span class="modal-title">Record payment</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
@@ -4921,6 +4927,7 @@ function showAddPaymentModal() {
       </div>
       <div class="form-group"><label class="form-label">Reference / check #</label><input type="text" id="pm-ref" class="form-input"></div>
       <div class="form-group"><label class="form-label">Memo</label><textarea id="pm-memo" class="form-textarea" style="min-height:56px"></textarea></div>
+      ${renderPayableEventsPicker(payable)}
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -4929,7 +4936,44 @@ function showAddPaymentModal() {
   showModal(html);
 }
 
+function renderPayableEventsPicker(payable) {
+  if (!payable.linked) {
+    return `<div class="form-group" style="margin-top:8px"><div class="td-muted" style="font-size:13px">Not linked to a RoleCall instructor — link this contractor to a volunteer in RoleCall to pay against specific classes.</div></div>`;
+  }
+  if (!payable.programs.length) {
+    return `<div class="form-group" style="margin-top:8px"><div class="td-muted" style="font-size:13px">No paid instructional courses currently assigned to ${payable.volunteer_name} in RoleCall.</div></div>`;
+  }
+  return `
+    <div class="form-group" style="margin-top:8px">
+      <label class="form-label">Apply to specific classes <span class="td-muted" style="font-weight:400">(optional — for your own tracking, doesn't affect the amount)</span></label>
+      ${payable.programs.map(p => `
+        <div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:600;font-size:13px">${escHtmlBB(p.program_name)}</span>
+            <span class="td-muted" style="font-size:12px">Expected: ${fmtMoney(p.expected_pay)}${p.fully_paid ? ' · <span style="color:#166534;font-weight:600">All sessions paid</span>' : ''}</span>
+          </div>
+          ${p.events.map(e => `
+            <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;${e.already_paid ? 'opacity:0.55' : 'cursor:pointer'}">
+              <input type="checkbox" class="pm-event-cb" data-event-id="${e.id}" ${e.already_paid ? 'disabled' : ''}>
+              <span style="flex:1">${escHtmlBB(e.name)} ${e.event_date ? '· ' + fmtDate(e.event_date) : ''}</span>
+              ${e.already_paid
+                ? '<span class="td-muted" style="font-size:11px">Paid</span>'
+                : (e.has_logged_time
+                    ? `<span style="color:#166534;font-size:11px">✓ ${e.logged_hours}h logged</span>`
+                    : '<span style="color:#b45309;font-size:11px">⚠ No time logged</span>')}
+            </label>`).join('')}
+        </div>`).join('')}
+    </div>`;
+}
+
+function escHtmlBB(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
 async function savePayment() {
+  const eventIds = Array.from(document.querySelectorAll('.pm-event-cb:checked')).map(cb => cb.dataset.eventId);
   const data = {
     amount: parseFloat(document.getElementById('pm-amount').value),
     payment_date: document.getElementById('pm-date').value,
@@ -4937,6 +4981,7 @@ async function savePayment() {
     bank_account_id: document.getElementById('pm-bank').value || null,
     reference_number: document.getElementById('pm-ref').value.trim(),
     memo: document.getElementById('pm-memo').value.trim(),
+    event_ids: eventIds,
   };
   if (!data.amount || !data.payment_date) { toast('Amount and date are required', 'error'); return; }
   try {
