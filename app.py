@@ -3290,6 +3290,14 @@ def get_contractor(cid):
                                WHERE p.contractor_id=%s ORDER BY p.payment_date DESC, p.id DESC''', (cid,)).fetchall()
     conn.close()
     payments = [dict(p) for p in payments]
+    if payments:
+        conn2 = get_db()
+        for p in payments:
+            linked = conn2.execute('''SELECT e.name, e.event_date FROM bb_contractor_payment_events cpe
+                JOIN events e ON e.id = cpe.rolecall_event_id
+                WHERE cpe.payment_id=%s ORDER BY e.event_date''', (p['id'],)).fetchall()
+            p['linked_classes'] = [dict(l) for l in linked]
+        conn2.close()
     return jsonify({
         'contractor': scrub_contractor(ct),
         'documents': [dict(d) for d in docs],
