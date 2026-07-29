@@ -4885,12 +4885,15 @@ function renderContractorPayments(tc) {
     ${payments.length === 0 ? `<div class="empty"><h3>No payments recorded</h3></div>` : `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Recorded by</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Applied to</th><th>Reference</th><th>Recorded by</th><th>Status</th><th></th></tr></thead>
         <tbody>${payments.map(p => `
           <tr>
             <td class="td-muted">${fmtDate(p.payment_date)}</td>
             <td class="fw-600">${fmtMoney(p.amount)}</td>
             <td class="td-muted">${p.method}</td>
+            <td class="td-muted" style="font-size:12px">${(p.linked_classes && p.linked_classes.length)
+              ? p.linked_classes.map(l => escHtmlBB(l.name)).join(', ')
+              : '<span style="color:#94a3b8">— not linked to a class —</span>'}</td>
             <td class="td-muted">${p.reference_number || '—'}</td>
             <td class="td-muted">${p.paid_by_name || '—'}</td>
             <td>${p.status === 'void' ? '<span class="badge badge-denied">Void</span>' : '<span class="badge badge-approved">Paid</span>'}</td>
