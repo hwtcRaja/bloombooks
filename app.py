@@ -455,6 +455,21 @@ def init_db():
         created_at        TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
 
+    # Links a payment to specific RoleCall events it covers — e.g. paying for
+    # one class session, several sessions, or a whole program's worth at
+    # once. RoleCall shares this same database, so this is just a plain TEXT
+    # reference to events.id there (no real FK, since that table isn't ours
+    # to constrain against — RoleCall's own schema changes shouldn't be able
+    # to break BloomBooks migrations).
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_contractor_payment_events (
+        id                  SERIAL PRIMARY KEY,
+        payment_id          INTEGER NOT NULL REFERENCES bb_contractor_payments(id) ON DELETE CASCADE,
+        rolecall_event_id   TEXT NOT NULL,
+        created_at          TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS ix_bb_cpe_payment ON bb_contractor_payment_events(payment_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS ix_bb_cpe_event ON bb_contractor_payment_events(rolecall_event_id)')
+
     # ─── E-signature: templates & signing requests ─────────────────────────────
     c.execute('''CREATE TABLE IF NOT EXISTS bb_document_templates (
         id          SERIAL PRIMARY KEY,
@@ -3497,6 +3512,55 @@ def delete_contractor_bank_account(cid, bid):
     return jsonify({'ok': True})
 
 # ── Payments ─────────────────────────────────────────────────────────────────
+
+@app.route('/api/contractors/<int:cid>/payable-events', methods=['GET'])
+def get_contractor_payable_events(cid):
+    """Pulls the RoleCall volunteer linked to this contractor and shows their
+    paid-instruction programs, broken down by individual event/session —
+    whether time's actually been logged for each one, and whether it's
+    already been covered by a previous payment. RoleCall shares this same
+    database, so this queries its tables directly."""
+    u, err = require_contractor_access()
+    if err: return err
+    conn = get_db()
+    vol = conn.execute('SELECT id, name FROM volunteers WHERE bb_contractor_id=%s', (cid,)).fetchone()
+    if not vol:
+        conn.close()
+        return jsonify({'linked': False, 'programs': []})
+    programs = conn.execute('''SELECT id, name, instructor_expected_pay FROM youth_programs
+        WHERE instructor_id=%s AND is_paid_instruction=TRUE ORDER BY start_date DESC NULLS LAST''',
+        (vol['id'],)).fetchall()
+    result_programs = []
+    for p in programs:
+        events = conn.execute('''SELECT id, name, event_date FROM events
+            WHERE program_id=%s ORDER BY event_date''', (p['id'],)).fetchall()
+        event_list = []
+        for e in events:
+            logged = conn.execute('''SELECT COALESCE(SUM(hours),0) as t FROM hours
+                WHERE event_id=%s AND volunteer_id=%s AND pay_type='paid_instruction' ''',
+                (e['id'], vol['id'])).fetchone()
+            logged_hours = float(logged['t']) if logged else 0.0
+            paid_row = conn.execute('''SELECT cp.amount FROM bb_contractor_payment_events cpe
+                JOIN bb_contractor_payments cp ON cp.id = cpe.payment_id
+                WHERE cpe.rolecall_event_id=%s AND cp.status != 'void' LIMIT 1''', (e['id'],)).fetchone()
+            event_list.append({
+                'id': e['id'], 'name': e['name'], 'event_date': e['event_date'],
+                'logged_hours': round(logged_hours, 2),
+                'has_logged_time': logged_hours > 0,
+                'already_paid': bool(paid_row),
+            })
+        paid_event_count = sum(1 for e in event_list if e['already_paid'])
+        result_programs.append({
+            'program_id': p['id'], 'program_name': p['name'],
+            'expected_pay': float(p['instructor_expected_pay'] or 0),
+            'events': event_list,
+            'total_events': len(event_list),
+            'paid_event_count': paid_event_count,
+            'fully_paid': len(event_list) > 0 and paid_event_count == len(event_list),
+        })
+    conn.close()
+    return jsonify({'linked': True, 'volunteer_name': vol['name'], 'programs': result_programs})
+
 @app.route('/api/contractors/<int:cid>/payments', methods=['POST'])
 def add_contractor_payment(cid):
     u, err = require_contractor_access()
@@ -3508,6 +3572,7 @@ def add_contractor_payment(cid):
         amount = 0
     method = (data.get('method') or '').strip()
     payment_date = (data.get('payment_date') or '').strip()
+    event_ids = data.get('event_ids') or []
     if amount <= 0 or not method or not payment_date:
         return jsonify({'error': 'Amount, method, and payment date are required'}), 400
     conn = get_db()
@@ -3517,6 +3582,9 @@ def add_contractor_payment(cid):
         (cid, amount, method, data.get('bank_account_id') or None, payment_date, data.get('reference_number'),
          data.get('budget_id') or None, data.get('request_id') or None, data.get('memo'), u['id']))
     pid = c.fetchone()['id']
+    for eid in event_ids:
+        if eid:
+            conn.execute('INSERT INTO bb_contractor_payment_events (payment_id, rolecall_event_id) VALUES (%s,%s)', (pid, eid))
     conn.commit(); conn.close()
     log_action(u['id'], 'recorded_contractor_payment', 'contractor', cid, f"payment_id={pid} amount={amount} method={method}")
     return jsonify({'ok': True, 'id': pid})
@@ -3532,6 +3600,9 @@ def void_contractor_payment(pid):
         conn.close(); return jsonify({'error': 'Not found'}), 404
     conn.execute("UPDATE bb_contractor_payments SET status='void', void_reason=%s WHERE id=%s",
                  (data.get('reason', ''), pid))
+    # Free up the events this payment covered so they can be paid again —
+    # a void means the payment didn't actually happen (or was a mistake).
+    conn.execute('DELETE FROM bb_contractor_payment_events WHERE payment_id=%s', (pid,))
     conn.commit(); conn.close()
     log_action(u['id'], 'voided_contractor_payment', 'contractor', pay['contractor_id'], f"payment_id={pid}")
     return jsonify({'ok': True})
