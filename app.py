@@ -2493,7 +2493,8 @@ def list_ready_licensing_requests():
         rows = conn.execute('''SELECT id, production_id, production_name, production_type,
                                        licensor, venue_name, audience_capacity, number_of_shows,
                                        average_ticket_price_cents, production_start_date, production_end_date,
-                                       approved_to_produce_date, approved_to_produce_by
+                                       approved_to_produce_date, approved_to_produce_by,
+                                       rehearsal_days, rehearsal_start_time, rehearsal_end_time
                                FROM licensing_requests
                                WHERE contract_received=TRUE AND approved_to_produce=TRUE
                                  AND COALESCE(built_in_bloombooks,FALSE)=FALSE
@@ -2502,6 +2503,12 @@ def list_ready_licensing_requests():
         for r in rows:
             r = dict(r)
             r['estimated_ticket_sales'] = _rc_row_to_estimate(r)
+            try:
+                days = json.loads(r.get('rehearsal_days') or '[]')
+            except Exception:
+                days = []
+            r['rehearsals_per_week'] = len(days) if isinstance(days, list) else 0
+            r['rehearsal_hours_per_session'] = _pc_hours_between(r.get('rehearsal_start_time') or '', r.get('rehearsal_end_time') or '')
             items.append(r)
     except Exception as e:
         conn.close()
@@ -2514,9 +2521,9 @@ def list_ready_licensing_requests():
 def build_production_from_licensing():
     """Create a BloomBooks production from an approved-to-produce RoleCall
     licensing request, auto-filling what RoleCall has (name, ticket-price-based
-    estimate, rehearsal schedule if the show is linked to a RoleCall production)
-    and leaving License Cost / Venue Rate / Concessions / Enrollment for the
-    Resident Producer to fill in by hand."""
+    estimate, and the rehearsal schedule captured when the show was approved to
+    produce) and leaving License Cost / Venue Rate / Concessions / Enrollment
+    for the Resident Producer to fill in by hand."""
     err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
     if err: return err
     u = current_user()
@@ -2538,10 +2545,19 @@ def build_production_from_licensing():
         return jsonify({'error': 'Licensing request not found, not yet approved to produce, or already built'}), 404
     rc = dict(rc)
 
-    # Pull rehearsal schedule from the linked RoleCall production, if any.
+    # Rehearsal schedule: prefer what was captured on the licensing request itself
+    # at approve-to-produce time. Fall back to the linked RoleCall production's
+    # meeting schedule for shows approved before that capture step existed.
     rehearsals_per_week, hours_per_session = 0, 0
+    try:
+        days = json.loads(rc.get('rehearsal_days') or '[]')
+        rehearsals_per_week = len(days) if isinstance(days, list) else 0
+        hours_per_session = _pc_hours_between(rc.get('rehearsal_start_time') or '', rc.get('rehearsal_end_time') or '')
+    except Exception as e:
+        app.logger.warning(f'Licensing request rehearsal schedule parse failed for {lic_id}: {e}')
+
     rc_prod_id = rc.get('production_id')
-    if rc_prod_id:
+    if not rehearsals_per_week and rc_prod_id:
         try:
             rp = conn.execute('''SELECT meeting_days, meeting_start_time, meeting_end_time
                                  FROM productions WHERE id=%s''', (rc_prod_id,)).fetchone()
