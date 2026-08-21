@@ -1919,7 +1919,7 @@ async function showBuildShowModal() {
   const html = `
     <div class="modal-header"><span class="modal-title">Build show from RoleCall</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <p class="text-sm text-muted mb-12">Shows appear here once RoleCall has a signed contract on file <em>and</em> the board has approved moving forward. Ticket-price estimates and rehearsal schedule (if the show is linked to a RoleCall production) copy over automatically — License Cost, Venue Rate, and other hard costs you set here.</p>
+      <p class="text-sm text-muted mb-12">Shows appear here once RoleCall has a signed contract on file <em>and</em> the board has approved moving forward. Ticket-price estimates and the rehearsal schedule set at approval time copy over automatically — License Cost, Venue Rate, and other hard costs you set here.</p>
       <div id="bs-body"><div class="text-xs text-muted">Loading shows ready to build from RoleCall…</div></div>
     </div>`;
   showModal(html);
@@ -1930,7 +1930,11 @@ async function showBuildShowModal() {
       document.getElementById('bs-body').innerHTML = `<div class="text-sm text-muted">No shows are ready to build yet. A show shows up here once its contract is on file and it's been approved to produce in RoleCall.</div>`;
       return;
     }
-    document.getElementById('bs-body').innerHTML = items.map(it => `
+    document.getElementById('bs-body').innerHTML = items.map(it => {
+      let days = [];
+      try { days = JSON.parse(it.rehearsal_days || '[]'); } catch(e) {}
+      const hasSchedule = it.rehearsals_per_week > 0;
+      return `
       <div class="card mb-12"><div class="card-body">
         <div class="flex flex-center mb-8">
           <div>
@@ -1942,16 +1946,22 @@ async function showBuildShowModal() {
             <div class="fw-600">${fmtMoney(it.estimated_ticket_sales||0)}</div>
           </div>
         </div>
+        <div class="text-xs mb-8" style="color:${hasSchedule?'var(--ink3)':'var(--red)'}">
+          ${hasSchedule
+            ? `Rehearsals: ${it.rehearsals_per_week}/week (${days.join(', ')}), ${it.rehearsal_hours_per_session}hrs/session`
+            : `No rehearsal schedule on file — set one in RoleCall before building, or the studio charge will come in at $0.`}
+        </div>
         <div class="form-row">
           <div class="form-group"><label class="form-label">Season <span class="req">*</span></label>
             <input type="text" id="bs-season-${it.id}" class="form-input" placeholder="e.g. 2025-2026"></div>
           <div class="form-group"><label class="form-label">Category</label>
             <input type="text" id="bs-category-${it.id}" class="form-input" placeholder="e.g. RS, MS"></div>
         </div>
-        <div class="form-group"><label class="form-label">Rehearsal weeks <span class="text-xs text-muted">(used with the show's RoleCall rehearsal schedule to estimate the at-cost studio charge)</span></label>
+        <div class="form-group"><label class="form-label">Rehearsal weeks <span class="text-xs text-muted">(RoleCall doesn't track this — set how many weeks the rehearsal period runs)</span></label>
           <input type="number" id="bs-weeks-${it.id}" class="form-input" value="8" step="1" min="1"></div>
         <button class="btn btn-primary btn-sm" onclick="doBuildShow('${it.id}')">Build this show</button>
-      </div></div>`).join('');
+      </div></div>`;
+    }).join('');
   } catch(e) {
     document.getElementById('bs-body').innerHTML = `<div class="text-sm" style="color:var(--red)">${e.message}</div>`;
   }
