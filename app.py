@@ -625,6 +625,7 @@ def init_db():
         ("bb_productions",       "board_approved",             "INTEGER DEFAULT 0"),
         ("bb_productions",       "board_approved_at",          "TEXT"),
         ("bb_productions",       "board_approved_by",          "INTEGER"),
+        ("bb_pricing_settings",  "rental_rate_per_hour",       "REAL DEFAULT 20"),
     ]
     for table, column, col_type in migrations:
         c.execute("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name=%s AND column_name=%s",
@@ -2807,6 +2808,58 @@ def get_revenue_forecast(pid):
     return jsonify({'forecasted_revenue': forecasted, 'basis': basis,
                      'note': None if len(basis) == 3 else f'Only {len(basis)} comparable show(s) on record — average may not be reliable yet.'})
 
+def _is_rising_stars_category(category):
+    """Enrollment revenue only makes sense for Rising Stars-style programming,
+    not Mainstage — used to decide whether est_enrollment counts toward the
+    suggested total budget."""
+    if not category:
+        return False
+    c = category.strip().lower()
+    return c == 'rs' or 'rising' in c
+
+@app.route('/api/productions/<int:pid>/suggested-total-budget', methods=['GET'])
+def get_suggested_total_budget(pid):
+    """Suggested Total Budget = average of (a) this show's own estimated
+    revenue (ticket sales + concessions + enrollment, enrollment only counted
+    for Rising Stars-category shows) and (b) the average total budget of the
+    last 3 comparable (same-category) shows. Falls back to whichever signal
+    is actually available if only one is. Purely a starting point — the
+    Resident Producer can override it before presenting to the board."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    category = prod.get('category')
+
+    revenue_estimate = (prod.get('est_ticket_sales') or 0) + (prod.get('est_concessions') or 0)
+    if _is_rising_stars_category(category):
+        revenue_estimate += (prod.get('est_enrollment') or 0)
+    revenue_estimate = round(revenue_estimate, 2) if revenue_estimate else None
+
+    comp_avg = None
+    comps_basis = []
+    if category:
+        comps = conn.execute('''SELECT id, name, season, total_budget FROM bb_productions
+                                WHERE category=%s AND id!=%s AND total_budget>0 ORDER BY id DESC LIMIT 3''', (category, pid)).fetchall()
+        comps_basis = [dict(c) for c in comps]
+        if comps_basis:
+            comp_avg = round(sum(c['total_budget'] for c in comps_basis) / len(comps_basis), 2)
+    conn.close()
+
+    signals = [v for v in (revenue_estimate, comp_avg) if v]
+    suggested = round(sum(signals) / len(signals), 2) if signals else None
+
+    return jsonify({
+        'suggested_total_budget': suggested,
+        'revenue_estimate': revenue_estimate,
+        'comparable_avg_budget': comp_avg,
+        'comparable_basis': comps_basis,
+        'note': None if signals else 'No estimated revenue or comparable same-category shows on record yet — add historical shows (with a total budget set) or fill in revenue estimates to get a suggestion.'
+    })
+
 # ─── Receipt token / mobile receipt link ─────────────────────────────────────
 def ensure_receipt_token(user_id):
     conn = get_db()
@@ -3195,13 +3248,14 @@ def update_pricing_settings():
     row = conn.execute('SELECT id FROM bb_pricing_settings ORDER BY id LIMIT 1').fetchone()
     facility_budget_id = data.get('facility_budget_id') or None
     season_weeks = int(data.get('season_weeks', 36))
+    rental_rate_per_hour = float(data.get('rental_rate_per_hour', 20))
     if row:
         conn.execute('''UPDATE bb_pricing_settings SET facility_budget_id=%s, season_weeks=%s,
-            updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS') WHERE id=%s''',
-            (facility_budget_id, season_weeks, row['id']))
+            rental_rate_per_hour=%s, updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS') WHERE id=%s''',
+            (facility_budget_id, season_weeks, rental_rate_per_hour, row['id']))
     else:
-        conn.execute('INSERT INTO bb_pricing_settings (facility_budget_id, season_weeks) VALUES (%s,%s)',
-            (facility_budget_id, season_weeks))
+        conn.execute('INSERT INTO bb_pricing_settings (facility_budget_id, season_weeks, rental_rate_per_hour) VALUES (%s,%s,%s)',
+            (facility_budget_id, season_weeks, rental_rate_per_hour))
     conn.commit(); conn.close()
     return jsonify({'ok': True})
 
