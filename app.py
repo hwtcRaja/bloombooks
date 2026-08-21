@@ -8,7 +8,7 @@ import json
 import secrets
 import re
 import io
-from datetime import datetime
+from datetime import datetime, date
 import cloudinary
 import cloudinary.uploader
 import cloudinary.utils
@@ -618,6 +618,7 @@ def init_db():
         ("bb_productions",       "rehearsals_per_week",        "REAL DEFAULT 0"),
         ("bb_productions",       "rehearsal_weeks",            "REAL DEFAULT 0"),
         ("bb_productions",       "rehearsal_hours_per_session","REAL DEFAULT 0"),
+        ("bb_productions",       "rehearsal_weekly_hours",     "REAL DEFAULT 0"),
         ("bb_productions",       "studio_charge",              "REAL DEFAULT 0"),
         ("bb_productions",       "hard_costs_locked",          "INTEGER DEFAULT 0"),
         ("bb_productions",       "hard_costs_total",           "REAL DEFAULT 0"),
@@ -2473,6 +2474,55 @@ SUGGESTED_DEPARTMENT_SPLIT = [
     ('Contingency',          0.10),
 ]
 
+import math
+
+def _rc_rehearsal_schedule(rc):
+    """Turn a licensing request's rehearsal fields into a weekly-hours total and
+    a week count, for the studio charge calc. Prefers rehearsal_blocks (supports
+    multiple day/time combinations, e.g. Sat 11-2 AND Thu 5-6:30) + the rehearsal
+    period date range; falls back to the older single-block fields for shows
+    approved before rehearsal_blocks existed."""
+    weekly_hours = 0.0
+    sessions_per_week = 0
+    try:
+        blocks = json.loads(rc.get('rehearsal_blocks') or '[]')
+    except Exception:
+        blocks = []
+    if isinstance(blocks, list) and blocks:
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            days = b.get('days') or []
+            hrs = _pc_hours_between(b.get('start_time') or '', b.get('end_time') or '')
+            sessions_per_week += len(days) if isinstance(days, list) else 0
+            weekly_hours += (len(days) if isinstance(days, list) else 0) * hrs
+    else:
+        try:
+            legacy_days = json.loads(rc.get('rehearsal_days') or '[]')
+        except Exception:
+            legacy_days = []
+        if isinstance(legacy_days, list) and legacy_days:
+            hrs = _pc_hours_between(rc.get('rehearsal_start_time') or '', rc.get('rehearsal_end_time') or '')
+            sessions_per_week = len(legacy_days)
+            weekly_hours = len(legacy_days) * hrs
+
+    period_start = rc.get('rehearsal_period_start')
+    period_end = rc.get('rehearsal_period_end')
+    weeks = None
+    if period_start and period_end:
+        try:
+            sd = period_start if isinstance(period_start, date) else datetime.strptime(str(period_start), '%Y-%m-%d').date()
+            ed = period_end if isinstance(period_end, date) else datetime.strptime(str(period_end), '%Y-%m-%d').date()
+            weeks = max(1, math.ceil((ed - sd).days / 7))
+        except Exception:
+            weeks = None
+
+    return {
+        'rehearsal_weekly_hours': round(weekly_hours, 2),
+        'rehearsal_sessions_per_week': sessions_per_week,
+        'rehearsal_weeks_computed': weeks,
+    }
+
 def _rc_row_to_estimate(rc):
     """Estimate ticket sales from whatever RoleCall's licensing request has on
     file (average ticket price × audience capacity × number of shows). Returns
@@ -2494,6 +2544,7 @@ def list_ready_licensing_requests():
                                        licensor, venue_name, audience_capacity, number_of_shows,
                                        average_ticket_price_cents, production_start_date, production_end_date,
                                        approved_to_produce_date, approved_to_produce_by,
+                                       rehearsal_blocks, rehearsal_period_start, rehearsal_period_end,
                                        rehearsal_days, rehearsal_start_time, rehearsal_end_time
                                FROM licensing_requests
                                WHERE contract_received=TRUE AND approved_to_produce=TRUE
@@ -2503,12 +2554,8 @@ def list_ready_licensing_requests():
         for r in rows:
             r = dict(r)
             r['estimated_ticket_sales'] = _rc_row_to_estimate(r)
-            try:
-                days = json.loads(r.get('rehearsal_days') or '[]')
-            except Exception:
-                days = []
-            r['rehearsals_per_week'] = len(days) if isinstance(days, list) else 0
-            r['rehearsal_hours_per_session'] = _pc_hours_between(r.get('rehearsal_start_time') or '', r.get('rehearsal_end_time') or '')
+            sched = _rc_rehearsal_schedule(r)
+            r.update(sched)
             items.append(r)
     except Exception as e:
         conn.close()
@@ -2544,45 +2591,43 @@ def build_production_from_licensing():
         conn.close()
         return jsonify({'error': 'Licensing request not found, not yet approved to produce, or already built'}), 404
     rc = dict(rc)
-
-    # Rehearsal schedule: prefer what was captured on the licensing request itself
-    # at approve-to-produce time. Fall back to the linked RoleCall production's
-    # meeting schedule for shows approved before that capture step existed.
-    rehearsals_per_week, hours_per_session = 0, 0
-    try:
-        days = json.loads(rc.get('rehearsal_days') or '[]')
-        rehearsals_per_week = len(days) if isinstance(days, list) else 0
-        hours_per_session = _pc_hours_between(rc.get('rehearsal_start_time') or '', rc.get('rehearsal_end_time') or '')
-    except Exception as e:
-        app.logger.warning(f'Licensing request rehearsal schedule parse failed for {lic_id}: {e}')
-
     rc_prod_id = rc.get('production_id')
-    if not rehearsals_per_week and rc_prod_id:
+
+    # Rehearsal schedule: computed from the blocks + date range captured on the
+    # licensing request at approve-to-produce time (falls back to the older
+    # single-block fields, or the linked RoleCall production's meeting schedule,
+    # for shows approved before that capture step existed).
+    sched = _rc_rehearsal_schedule(rc)
+    weekly_hours = sched['rehearsal_weekly_hours']
+    sessions_per_week = sched['rehearsal_sessions_per_week']
+    if not weekly_hours and rc_prod_id:
         try:
             rp = conn.execute('''SELECT meeting_days, meeting_start_time, meeting_end_time
                                  FROM productions WHERE id=%s''', (rc_prod_id,)).fetchone()
             if rp:
                 rp = dict(rp)
                 days = json.loads(rp.get('meeting_days') or '[]')
-                rehearsals_per_week = len(days) if isinstance(days, list) else 0
-                hours_per_session = _pc_hours_between(rp.get('meeting_start_time') or '', rp.get('meeting_end_time') or '')
+                sessions_per_week = len(days) if isinstance(days, list) else 0
+                hrs = _pc_hours_between(rp.get('meeting_start_time') or '', rp.get('meeting_end_time') or '')
+                weekly_hours = sessions_per_week * hrs
         except Exception as e:
             app.logger.warning(f'RoleCall rehearsal schedule read failed for {rc_prod_id}: {e}')
 
-    rehearsal_weeks = float(data.get('rehearsal_weeks') or 8)
-    studio = _compute_studio_charge(conn, rehearsals_per_week, rehearsal_weeks, hours_per_session)
+    rehearsal_weeks = float(data.get('rehearsal_weeks') or sched['rehearsal_weeks_computed'] or 8)
+    studio = _compute_studio_charge(conn, weekly_hours, rehearsal_weeks)
     est_ticket_sales = _rc_row_to_estimate(rc)
+    avg_hours_per_session = round(weekly_hours / sessions_per_week, 2) if sessions_per_week else 0
 
     conn.execute('''INSERT INTO bb_productions
             (name, season, description, total_budget, status, category,
              source_licensing_request_id, source_rc_production_id,
              est_ticket_sales, rehearsals_per_week, rehearsal_weeks,
-             rehearsal_hours_per_session, studio_charge)
-        VALUES (%s,%s,%s,0,'active',%s,%s,%s,%s,%s,%s,%s,%s)''',
+             rehearsal_hours_per_session, rehearsal_weekly_hours, studio_charge)
+        VALUES (%s,%s,%s,0,'active',%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
         (rc['production_name'], season, f"Built from RoleCall licensing request {rc.get('ref_number','')}",
          category or None, lic_id, rc_prod_id,
-         est_ticket_sales, rehearsals_per_week, rehearsal_weeks,
-         hours_per_session, studio['studio_charge']))
+         est_ticket_sales, sessions_per_week, rehearsal_weeks,
+         avg_hours_per_session, weekly_hours, studio['studio_charge']))
     row = conn.execute('SELECT id FROM bb_productions WHERE source_licensing_request_id=%s ORDER BY id DESC LIMIT 1',
                         (lic_id,)).fetchone()
     prod_id = row['id']
@@ -2614,13 +2659,12 @@ def update_rehearsal_schedule(pid):
         conn.close(); return jsonify({'error': 'Not found'}), 404
     if dict(prod).get('hard_costs_locked'):
         conn.close(); return jsonify({'error': 'Hard costs are locked for this production'}), 409
-    rehearsals_per_week = float(d.get('rehearsals_per_week') or 0)
+    weekly_hours = float(d.get('rehearsal_weekly_hours') or 0)
     rehearsal_weeks = float(d.get('rehearsal_weeks') or 0)
-    hours_per_session = float(d.get('rehearsal_hours_per_session') or 0)
-    studio = _compute_studio_charge(conn, rehearsals_per_week, rehearsal_weeks, hours_per_session)
-    conn.execute('''UPDATE bb_productions SET rehearsals_per_week=%s, rehearsal_weeks=%s,
-        rehearsal_hours_per_session=%s, studio_charge=%s WHERE id=%s''',
-        (rehearsals_per_week, rehearsal_weeks, hours_per_session, studio['studio_charge'], pid))
+    studio = _compute_studio_charge(conn, weekly_hours, rehearsal_weeks)
+    conn.execute('''UPDATE bb_productions SET rehearsal_weekly_hours=%s, rehearsal_weeks=%s,
+        studio_charge=%s WHERE id=%s''',
+        (weekly_hours, rehearsal_weeks, studio['studio_charge'], pid))
     conn.commit(); conn.close()
     return jsonify({'ok': True, **studio})
 
@@ -3209,13 +3253,14 @@ def get_facility_cost():
     conn.close()
     return jsonify(result)
 
-def _compute_studio_charge(conn, rehearsals_per_week, rehearsal_weeks, hours_per_session):
+def _compute_studio_charge(conn, weekly_hours, rehearsal_weeks):
     """Rehearsal-space charge for a show, using the same at-cost $/hour the
     Pricing Calculator uses for everything else (prefers the budgeted rate;
-    falls back to the actual-spent rate if nothing's budgeted yet)."""
+    falls back to the actual-spent rate if nothing's budgeted yet). weekly_hours
+    is the total rehearsal hours per week across all day/time blocks combined."""
     fc = _facility_cost_result(conn)
     rate = fc.get('cost_per_hour_budgeted') or fc.get('cost_per_hour_spent') or 0
-    total_hours = float(rehearsals_per_week or 0) * float(rehearsal_weeks or 0) * float(hours_per_session or 0)
+    total_hours = float(weekly_hours or 0) * float(rehearsal_weeks or 0)
     charge = round(total_hours * rate, 2)
     return {'total_rehearsal_hours': round(total_hours, 1), 'cost_per_hour': rate, 'studio_charge': charge}
 
