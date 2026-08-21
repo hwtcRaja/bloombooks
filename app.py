@@ -606,6 +606,24 @@ def init_db():
         ("bb_users",             "receipt_token",     "TEXT"),
         ("bb_users",             "reimb_method",      "TEXT"),
         ("bb_users",             "reimb_handle",      "TEXT"),
+        # ─── Resident Producer / Build Show / budget approval workflow ─────────
+        ("bb_productions",       "category",                   "TEXT"),
+        ("bb_productions",       "source_licensing_request_id","TEXT"),
+        ("bb_productions",       "source_rc_production_id",    "TEXT"),
+        ("bb_productions",       "license_cost",               "REAL DEFAULT 0"),
+        ("bb_productions",       "venue_rate",                 "REAL DEFAULT 0"),
+        ("bb_productions",       "est_ticket_sales",           "REAL DEFAULT 0"),
+        ("bb_productions",       "est_concessions",            "REAL DEFAULT 0"),
+        ("bb_productions",       "est_enrollment",              "REAL DEFAULT 0"),
+        ("bb_productions",       "rehearsals_per_week",        "REAL DEFAULT 0"),
+        ("bb_productions",       "rehearsal_weeks",            "REAL DEFAULT 0"),
+        ("bb_productions",       "rehearsal_hours_per_session","REAL DEFAULT 0"),
+        ("bb_productions",       "studio_charge",              "REAL DEFAULT 0"),
+        ("bb_productions",       "hard_costs_locked",          "INTEGER DEFAULT 0"),
+        ("bb_productions",       "hard_costs_total",           "REAL DEFAULT 0"),
+        ("bb_productions",       "board_approved",             "INTEGER DEFAULT 0"),
+        ("bb_productions",       "board_approved_at",          "TEXT"),
+        ("bb_productions",       "board_approved_by",          "INTEGER"),
     ]
     for table, column, col_type in migrations:
         c.execute("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name=%s AND column_name=%s",
@@ -639,6 +657,12 @@ def require_auth(roles=None):
 
 # ─── Production / budget permission helpers ───────────────────────────────────
 ORG_APPROVER_ROLES = ('admin', 'treasurer', 'president')
+# Resident Producer has full authority over show setup and budget-setting (same as
+# admin/treasurer/president for productions/budgets specifically) but NOT over
+# org-wide things like user management, contractors, or reimbursement payout —
+# those stay on ORG_APPROVER_ROLES only. This lets HWTC onboard a Resident
+# Producer who isn't a board member without granting full admin rights.
+PRODUCTION_ADMIN_ROLES = ('admin', 'treasurer', 'president', 'resident_producer')
 
 def get_production_producers(pid):
     """Return the list of producer users (id/name/email) for a production."""
@@ -1175,7 +1199,7 @@ def create_budget():
     data = request.json
     prod_id   = data.get('production_id') or None
     parent_id = data.get('parent_id') or None
-    if u['role'] not in ('admin','treasurer','president','producer'):
+    if u['role'] not in ('admin','treasurer','president','resident_producer','producer'):
         if not prod_id or not is_producer_of(u['id'],int(prod_id)):
             return jsonify({'error':'Insufficient permissions'}),403
     # Parent categories have no amount of their own — children roll up to them
@@ -1194,7 +1218,7 @@ def update_budget(bid):
     b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
     if not b: conn.close(); return jsonify({'error':'Not found'}),404
     b = dict(b)
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','resident_producer'):
         if not b.get('production_id') or not is_producer_of(u['id'],b['production_id']):
             conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     data = request.json
@@ -1217,7 +1241,7 @@ def delete_budget(bid):
     b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
     if not b: conn.close(); return jsonify({'error':'Not found'}),404
     b = dict(b)
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','resident_producer'):
         if not b.get('production_id') or not is_producer_of(u['id'],b['production_id']):
             conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     conn.execute('UPDATE bb_purchase_requests SET budget_id=NULL WHERE budget_id=%s',(bid,))
@@ -1799,20 +1823,23 @@ def list_productions():
         prod['total_revenue_actual']   = act
         prod['net_cost'] = prod['total_spent'] - act
         prod['i_am_producer'] = any(m['user_id']==u['id'] and m['member_role']=='producer' for m in prod['members'])
+        prod['i_am_resident_producer'] = u['role'] == 'resident_producer' or \
+            any(m['user_id']==u['id'] and m['member_role']=='resident_producer' for m in prod['members'])
+        prod['remaining_balance'] = round((prod.get('total_budget') or 0) - (prod.get('hard_costs_total') or 0), 2)
         result.append(prod)
     conn.close()
     return jsonify(result)
 
 @app.route('/api/productions', methods=['POST'])
 def create_production():
-    err = require_auth(['admin','treasurer','president'])
+    err = require_auth(['admin','treasurer','president','resident_producer'])
     if err: return err
     data = request.json
     name,season = data.get('name','').strip(), data.get('season','').strip()
     if not name or not season: return jsonify({'error':'Name and season required'}),400
     conn = get_db()
-    conn.execute('INSERT INTO bb_productions (name,season,description,total_budget,status) VALUES (%s,%s,%s,%s,%s)',
-                 (name,season,data.get('description',''),float(data.get('total_budget',0)),'active'))
+    conn.execute('INSERT INTO bb_productions (name,season,description,total_budget,status,category) VALUES (%s,%s,%s,%s,%s,%s)',
+                 (name,season,data.get('description',''),float(data.get('total_budget',0)),'active',(data.get('category') or '').strip() or None))
     row = conn.execute('SELECT id FROM bb_productions WHERE name=%s AND season=%s ORDER BY id DESC LIMIT 1',(name,season)).fetchone()
     prod_id = row['id']
     if data.get('producer_id'):
@@ -1826,7 +1853,7 @@ def create_production():
 def delete_production(pid):
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','resident_producer'):
         return jsonify({'error':'Insufficient permissions'}),403
     conn = get_db()
     # Nullify production_id on requests and budgets rather than cascade-failing
@@ -1843,12 +1870,17 @@ def delete_production(pid):
 def update_production(pid):
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'],pid):
+    if u['role'] not in ('admin','treasurer','president','resident_producer') and not is_producer_of(u['id'],pid):
         return jsonify({'error':'Insufficient permissions'}),403
     data = request.json
     conn = get_db()
-    for f in ['name','season','description','total_budget','status']:
-        if f in data: conn.execute(f'UPDATE bb_productions SET {f}=%s WHERE id=%s',(data[f],pid))
+    prod = conn.execute('SELECT board_approved FROM bb_productions WHERE id=%s',(pid,)).fetchone()
+    locked = bool(prod and dict(prod).get('board_approved'))
+    for f in ['name','season','description','total_budget','status','category']:
+        if f in data:
+            if locked and f == 'total_budget':
+                continue  # total_budget changes go through /board-approve once locked
+            conn.execute(f'UPDATE bb_productions SET {f}=%s WHERE id=%s',(data[f],pid))
     conn.commit(); conn.close()
     return jsonify({'ok':True})
 
@@ -1856,7 +1888,7 @@ def update_production(pid):
 def add_production_member(pid):
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'],pid):
+    if u['role'] not in ('admin','treasurer','president','resident_producer') and not is_producer_of(u['id'],pid):
         return jsonify({'error':'Insufficient permissions'}),403
     data = request.json
     conn = get_db()
@@ -1871,7 +1903,7 @@ def add_production_member(pid):
 def update_production_member(pid, uid):
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'],pid):
+    if u['role'] not in ('admin','treasurer','president','resident_producer') and not is_producer_of(u['id'],pid):
         return jsonify({'error':'Insufficient permissions'}),403
     data = request.json or {}
     conn = get_db()
@@ -1884,7 +1916,7 @@ def update_production_member(pid, uid):
 def remove_production_member(pid, uid):
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'],pid):
+    if u['role'] not in ('admin','treasurer','president','resident_producer') and not is_producer_of(u['id'],pid):
         return jsonify({'error':'Insufficient permissions'}),403
     conn = get_db()
     conn.execute('DELETE FROM bb_production_members WHERE production_id=%s AND user_id=%s',(pid,uid))
@@ -1900,7 +1932,7 @@ def add_budget_member(bid):
     b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
     if not b: conn.close(); return jsonify({'error':'Not found'}),404
     b = dict(b)
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','resident_producer'):
         if not b.get('production_id') or not is_producer_of(u['id'],b['production_id']):
             conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     data = request.json
@@ -1919,7 +1951,7 @@ def remove_budget_member(bid, uid):
     b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s',(bid,)).fetchone()
     if not b: conn.close(); return jsonify({'error':'Not found'}),404
     b = dict(b)
-    if u['role'] not in ('admin','treasurer','president'):
+    if u['role'] not in ('admin','treasurer','president','resident_producer'):
         if not b.get('production_id') or not is_producer_of(u['id'],b['production_id']):
             conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     conn.execute('DELETE FROM bb_budget_members WHERE budget_id=%s AND user_id=%s',(bid,uid))
@@ -1929,7 +1961,7 @@ def remove_budget_member(bid, uid):
 # ─── Receipt token ────────────────────────────────────────────────────────────
 @app.route('/api/users/<int:uid>/receipt-token', methods=['GET'])
 def get_receipt_token(uid):
-    err = require_auth(['admin','treasurer','president'])
+    err = require_auth(['admin','treasurer','president','resident_producer'])
     if err: return err
     conn = get_db()
     u = conn.execute('SELECT receipt_token FROM bb_users WHERE id=%s',(uid,)).fetchone()
@@ -2277,7 +2309,7 @@ def list_revenue(pid):
     err = require_auth()
     if err: return err
     u = current_user()
-    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], pid):
+    if u['role'] not in ('admin','treasurer','president','resident_producer') and not is_producer_of(u['id'], pid):
         return jsonify({'error': 'Insufficient permissions'}), 403
     conn = get_db()
     rows = conn.execute('SELECT * FROM bb_production_revenue WHERE production_id=%s ORDER BY created_at DESC', (pid,)).fetchall()
@@ -2293,7 +2325,7 @@ def list_revenue(pid):
 def create_revenue(pid):
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], pid):
+    if u['role'] not in ('admin','treasurer','president','resident_producer') and not is_producer_of(u['id'], pid):
         return jsonify({'error': 'Insufficient permissions'}), 403
     data = request.json
     if not data.get('source'): return jsonify({'error': 'Source is required'}), 400
@@ -2312,7 +2344,7 @@ def create_revenue(pid):
 def update_revenue(pid, rid):
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], pid):
+    if u['role'] not in ('admin','treasurer','president','resident_producer') and not is_producer_of(u['id'], pid):
         return jsonify({'error': 'Insufficient permissions'}), 403
     data = request.json
     now = datetime.now().isoformat()
@@ -2333,7 +2365,7 @@ def update_revenue(pid, rid):
 def delete_revenue(pid, rid):
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ('admin','treasurer','president') and not is_producer_of(u['id'], pid):
+    if u['role'] not in ('admin','treasurer','president','resident_producer') and not is_producer_of(u['id'], pid):
         return jsonify({'error': 'Insufficient permissions'}), 403
     conn = get_db()
     conn.execute('DELETE FROM bb_production_revenue WHERE id=%s AND production_id=%s', (rid, pid))
@@ -2425,6 +2457,296 @@ def delete_rolecall_link(pid):
     conn.commit(); conn.close()
     return jsonify({'ok': True})
 
+# ─── Build Show: RoleCall licensing → BloomBooks production ───────────────────
+# A show becomes eligible here once RoleCall marks it approved_to_produce (which
+# itself requires contract_received=true). We do a one-time copy at build time —
+# not a live sync — because License Cost and Venue Rate have no home in RoleCall;
+# only ticket price/capacity/rehearsal schedule come from there. The one write
+# back to RoleCall (built_in_bloombooks) is a deliberate, narrow exception to the
+# "read-only" rule above, purely so an already-built show doesn't show up twice.
+SUGGESTED_DEPARTMENT_SPLIT = [
+    ('Sets & Scenic',        0.30),
+    ('Costumes',             0.20),
+    ('Props & Makeup',       0.10),
+    ('Music & Sound',        0.15),
+    ('Marketing & Programs', 0.15),
+    ('Contingency',          0.10),
+]
+
+def _rc_row_to_estimate(rc):
+    """Estimate ticket sales from whatever RoleCall's licensing request has on
+    file (average ticket price × audience capacity × number of shows). Returns
+    0 if the inputs aren't there — resident producer fills in the rest by hand."""
+    avg_cents = rc.get('average_ticket_price_cents') or 0
+    capacity = rc.get('audience_capacity') or 0
+    shows = rc.get('number_of_shows') or 0
+    return round((avg_cents/100.0) * capacity * shows, 2)
+
+@app.route('/api/rolecall/licensing-requests/ready', methods=['GET'])
+def list_ready_licensing_requests():
+    """Shows that are contract-signed + board-approved-to-produce in RoleCall,
+    and haven't been built out in BloomBooks yet."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    conn = get_db()
+    try:
+        rows = conn.execute('''SELECT id, production_id, production_name, production_type,
+                                       licensor, venue_name, audience_capacity, number_of_shows,
+                                       average_ticket_price_cents, production_start_date, production_end_date,
+                                       approved_to_produce_date, approved_to_produce_by
+                               FROM licensing_requests
+                               WHERE contract_received=TRUE AND approved_to_produce=TRUE
+                                 AND COALESCE(built_in_bloombooks,FALSE)=FALSE
+                               ORDER BY approved_to_produce_date DESC NULLS LAST''').fetchall()
+        items = []
+        for r in rows:
+            r = dict(r)
+            r['estimated_ticket_sales'] = _rc_row_to_estimate(r)
+            items.append(r)
+    except Exception as e:
+        conn.close()
+        app.logger.warning(f'RoleCall ready-licensing-requests read failed: {e}')
+        return jsonify({'error': 'Could not reach RoleCall data', 'items': []}), 200
+    conn.close()
+    return jsonify({'items': items})
+
+@app.route('/api/productions/build-from-licensing', methods=['POST'])
+def build_production_from_licensing():
+    """Create a BloomBooks production from an approved-to-produce RoleCall
+    licensing request, auto-filling what RoleCall has (name, ticket-price-based
+    estimate, rehearsal schedule if the show is linked to a RoleCall production)
+    and leaving License Cost / Venue Rate / Concessions / Enrollment for the
+    Resident Producer to fill in by hand."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    u = current_user()
+    data = request.json or {}
+    lic_id = data.get('licensing_request_id')
+    if not lic_id:
+        return jsonify({'error': 'licensing_request_id is required'}), 400
+    category = (data.get('category') or '').strip()
+    season = (data.get('season') or '').strip()
+    if not season:
+        return jsonify({'error': 'Season is required'}), 400
+
+    conn = get_db()
+    rc = conn.execute('''SELECT * FROM licensing_requests WHERE id=%s
+                         AND contract_received=TRUE AND approved_to_produce=TRUE
+                         AND COALESCE(built_in_bloombooks,FALSE)=FALSE''', (lic_id,)).fetchone()
+    if not rc:
+        conn.close()
+        return jsonify({'error': 'Licensing request not found, not yet approved to produce, or already built'}), 404
+    rc = dict(rc)
+
+    # Pull rehearsal schedule from the linked RoleCall production, if any.
+    rehearsals_per_week, hours_per_session = 0, 0
+    rc_prod_id = rc.get('production_id')
+    if rc_prod_id:
+        try:
+            rp = conn.execute('''SELECT meeting_days, meeting_start_time, meeting_end_time
+                                 FROM productions WHERE id=%s''', (rc_prod_id,)).fetchone()
+            if rp:
+                rp = dict(rp)
+                days = json.loads(rp.get('meeting_days') or '[]')
+                rehearsals_per_week = len(days) if isinstance(days, list) else 0
+                hours_per_session = _pc_hours_between(rp.get('meeting_start_time') or '', rp.get('meeting_end_time') or '')
+        except Exception as e:
+            app.logger.warning(f'RoleCall rehearsal schedule read failed for {rc_prod_id}: {e}')
+
+    rehearsal_weeks = float(data.get('rehearsal_weeks') or 8)
+    studio = _compute_studio_charge(conn, rehearsals_per_week, rehearsal_weeks, hours_per_session)
+    est_ticket_sales = _rc_row_to_estimate(rc)
+
+    conn.execute('''INSERT INTO bb_productions
+            (name, season, description, total_budget, status, category,
+             source_licensing_request_id, source_rc_production_id,
+             est_ticket_sales, rehearsals_per_week, rehearsal_weeks,
+             rehearsal_hours_per_session, studio_charge)
+        VALUES (%s,%s,%s,0,'active',%s,%s,%s,%s,%s,%s,%s,%s)''',
+        (rc['production_name'], season, f"Built from RoleCall licensing request {rc.get('ref_number','')}",
+         category or None, lic_id, rc_prod_id,
+         est_ticket_sales, rehearsals_per_week, rehearsal_weeks,
+         hours_per_session, studio['studio_charge']))
+    row = conn.execute('SELECT id FROM bb_productions WHERE source_licensing_request_id=%s ORDER BY id DESC LIMIT 1',
+                        (lic_id,)).fetchone()
+    prod_id = row['id']
+
+    if data.get('add_me_as_resident_producer', True) and u['role'] == 'resident_producer':
+        conn.execute('INSERT INTO bb_production_members (production_id,user_id,member_role) VALUES (%s,%s,%s)',
+                     (prod_id, u['id'], 'resident_producer'))
+
+    # Narrow, deliberate write back to RoleCall so this doesn't get imported twice.
+    try:
+        conn.execute("UPDATE licensing_requests SET built_in_bloombooks=TRUE WHERE id=%s", (lic_id,))
+    except Exception as e:
+        app.logger.warning(f'Could not flag licensing_request {lic_id} as built: {e}')
+
+    conn.commit(); conn.close()
+    log_action(u['id'], 'built_show_from_licensing', 'production', prod_id, rc['production_name'])
+    return jsonify({'ok': True, 'id': prod_id, 'studio_charge': studio, 'estimated_ticket_sales': est_ticket_sales})
+
+@app.route('/api/productions/<int:pid>/rehearsal-schedule', methods=['PUT'])
+def update_rehearsal_schedule(pid):
+    """Edit the rehearsal cadence used to charge the show for studio use, and
+    recompute the at-cost charge."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    d = request.json or {}
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    if dict(prod).get('hard_costs_locked'):
+        conn.close(); return jsonify({'error': 'Hard costs are locked for this production'}), 409
+    rehearsals_per_week = float(d.get('rehearsals_per_week') or 0)
+    rehearsal_weeks = float(d.get('rehearsal_weeks') or 0)
+    hours_per_session = float(d.get('rehearsal_hours_per_session') or 0)
+    studio = _compute_studio_charge(conn, rehearsals_per_week, rehearsal_weeks, hours_per_session)
+    conn.execute('''UPDATE bb_productions SET rehearsals_per_week=%s, rehearsal_weeks=%s,
+        rehearsal_hours_per_session=%s, studio_charge=%s WHERE id=%s''',
+        (rehearsals_per_week, rehearsal_weeks, hours_per_session, studio['studio_charge'], pid))
+    conn.commit(); conn.close()
+    return jsonify({'ok': True, **studio})
+
+@app.route('/api/productions/<int:pid>/hard-costs', methods=['PUT'])
+def set_hard_costs(pid):
+    """Resident Producer locks in License Cost + Venue Rate (the studio charge
+    is already computed from the rehearsal schedule). Sum becomes hard_costs_total,
+    which determines the remaining balance available for department allocations."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    d = request.json or {}
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    if prod.get('board_approved'):
+        conn.close(); return jsonify({'error': 'Budget is already board-approved and locked'}), 409
+    license_cost = float(d.get('license_cost', prod.get('license_cost') or 0))
+    venue_rate = float(d.get('venue_rate', prod.get('venue_rate') or 0))
+    est_concessions = float(d.get('est_concessions', prod.get('est_concessions') or 0))
+    est_enrollment = float(d.get('est_enrollment', prod.get('est_enrollment') or 0))
+    hard_costs_total = round(license_cost + venue_rate + (prod.get('studio_charge') or 0), 2)
+    conn.execute('''UPDATE bb_productions SET license_cost=%s, venue_rate=%s, est_concessions=%s,
+        est_enrollment=%s, hard_costs_total=%s WHERE id=%s''',
+        (license_cost, venue_rate, est_concessions, est_enrollment, hard_costs_total, pid))
+    conn.commit(); conn.close()
+    return jsonify({'ok': True, 'hard_costs_total': hard_costs_total})
+
+@app.route('/api/productions/<int:pid>/board-approve', methods=['POST'])
+def board_approve_production(pid):
+    """Board approves the overall number: total budget minus hard costs = the
+    remaining balance the Resident Producer can then chunk across departments.
+    Locks hard costs (and the total budget) against further changes."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    u = current_user()
+    d = request.json or {}
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    total_budget = float(d.get('total_budget', prod.get('total_budget') or 0))
+    if total_budget < (prod.get('hard_costs_total') or 0):
+        conn.close(); return jsonify({'error': 'Total budget is less than the hard costs already set'}), 400
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn.execute('''UPDATE bb_productions SET total_budget=%s, hard_costs_locked=1,
+        board_approved=1, board_approved_at=%s, board_approved_by=%s WHERE id=%s''',
+        (total_budget, now, u['id'], pid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'board_approved_production', 'production', pid, f'Total budget ${total_budget:,.2f}')
+    return jsonify({'ok': True, 'remaining_balance': round(total_budget - (prod.get('hard_costs_total') or 0), 2)})
+
+@app.route('/api/productions/<int:pid>/suggested-allocations', methods=['GET'])
+def get_suggested_allocations(pid):
+    """Suggested department split of the remaining balance (after hard costs).
+    Purely advisory — the Resident Producer edits, removes, or adds lines before
+    actually creating the budgets via POST /allocations."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    conn.close()
+    if not prod:
+        return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    remaining = round((prod.get('total_budget') or 0) - (prod.get('hard_costs_total') or 0), 2)
+    suggestions = [{'name': name, 'amount': round(remaining * pct, 2)} for name, pct in SUGGESTED_DEPARTMENT_SPLIT]
+    return jsonify({'remaining_balance': remaining, 'suggestions': suggestions})
+
+@app.route('/api/productions/<int:pid>/allocations', methods=['POST'])
+def create_allocations(pid):
+    """Turn a (possibly edited) list of department lines into real bb_budgets
+    rows for the production. Requires board approval first."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    u = current_user()
+    d = request.json or {}
+    allocations = d.get('allocations') or []
+    if not allocations:
+        return jsonify({'error': 'At least one allocation is required'}), 400
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    if not prod.get('board_approved'):
+        conn.close(); return jsonify({'error': 'Board must approve the overall budget before allocating departments'}), 409
+    remaining = round((prod.get('total_budget') or 0) - (prod.get('hard_costs_total') or 0), 2)
+    requested = round(sum(float(a.get('amount') or 0) for a in allocations), 2)
+    if requested > remaining + 0.01:
+        conn.close()
+        return jsonify({'error': f'Allocations total ${requested:,.2f}, which exceeds the ${remaining:,.2f} remaining balance'}), 400
+    created = []
+    for a in allocations:
+        name = (a.get('name') or '').strip()
+        amount = float(a.get('amount') or 0)
+        if not name:
+            continue
+        conn.execute('INSERT INTO bb_budgets (name,area,season,total_amount,production_id) VALUES (%s,%s,%s,%s,%s)',
+                     (name, name, prod.get('season',''), amount, pid))
+        created.append({'name': name, 'amount': amount})
+    conn.commit(); conn.close()
+    log_action(u['id'], 'created_budget_allocations', 'production', pid, f'{len(created)} department budgets')
+    return jsonify({'ok': True, 'created': created})
+
+@app.route('/api/productions/<int:pid>/revenue-forecast', methods=['GET'])
+def get_revenue_forecast(pid):
+    """Forecasted Revenue = average actual revenue of the last 3 completed
+    productions in the same category (RS, MS, etc.) — distinct from Expected
+    Revenue, which is this show's own revenue-line entries."""
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    if u['role'] not in ORG_APPROVER_ROLES and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    category = prod.get('category')
+    if not category:
+        conn.close()
+        return jsonify({'forecasted_revenue': None, 'basis': [], 'note': 'This show has no category set, so there is nothing comparable to average.'})
+    comps = conn.execute('''SELECT id, name, season FROM bb_productions
+                            WHERE category=%s AND id!=%s ORDER BY id DESC LIMIT 3''', (category, pid)).fetchall()
+    comps = [dict(c) for c in comps]
+    basis = []
+    for c in comps:
+        rev = conn.execute('SELECT COALESCE(SUM(actual),0) AS actual FROM bb_production_revenue WHERE production_id=%s', (c['id'],)).fetchone()
+        actual = rev['actual'] or 0
+        rc_line = rolecall_revenue_line(conn, c['id'])
+        if rc_line:
+            actual += rc_line['actual']
+        basis.append({'id': c['id'], 'name': c['name'], 'season': c['season'], 'actual_revenue': round(actual, 2)})
+    conn.close()
+    forecasted = round(sum(b['actual_revenue'] for b in basis) / len(basis), 2) if basis else None
+    return jsonify({'forecasted_revenue': forecasted, 'basis': basis,
+                     'note': None if len(basis) == 3 else f'Only {len(basis)} comparable show(s) on record — average may not be reliable yet.'})
+
 # ─── Receipt token / mobile receipt link ─────────────────────────────────────
 def ensure_receipt_token(user_id):
     conn = get_db()
@@ -2439,7 +2761,7 @@ def ensure_receipt_token(user_id):
 
 @app.route('/api/users/<int:uid>', methods=['DELETE'])
 def delete_user(uid):
-    err = require_auth(['admin','treasurer','president'])
+    err = require_auth(['admin','treasurer','president','resident_producer'])
     if err: return err
     u = current_user()
     if u['id'] == uid:
@@ -2452,14 +2774,14 @@ def delete_user(uid):
     log_action(u['id'], 'deleted_user', 'user', uid)
     return jsonify({'ok': True})
 def get_receipt_token(uid):
-    err = require_auth(['admin','treasurer','president'])
+    err = require_auth(['admin','treasurer','president','resident_producer'])
     if err: return err
     token = ensure_receipt_token(uid)
     return jsonify({'token': token, 'link': f"{APP_URL}/receipt/{token}"})
 
 @app.route('/api/users/<int:uid>/receipt-token/regenerate', methods=['POST'])
 def regenerate_receipt_token(uid):
-    err = require_auth(['admin','treasurer','president'])
+    err = require_auth(['admin','treasurer','president','resident_producer'])
     if err: return err
     token = secrets.token_urlsafe(24)
     conn = get_db()
@@ -2778,7 +3100,7 @@ def get_space_capacity_hours():
 
 @app.route('/api/space-capacity-hours', methods=['PUT'])
 def update_space_capacity_hours():
-    err = require_auth(roles=['admin','treasurer','president','producer'])
+    err = require_auth(roles=['admin','treasurer','president','resident_producer','producer'])
     if err: return err
     data = request.json or {}
     conn = get_db()
@@ -2806,7 +3128,7 @@ def get_pricing_settings():
 
 @app.route('/api/pricing-settings', methods=['PUT'])
 def update_pricing_settings():
-    err = require_auth(roles=['admin','treasurer','president','producer'])
+    err = require_auth(roles=['admin','treasurer','president','resident_producer','producer'])
     if err: return err
     data = request.json or {}
     conn = get_db()
@@ -2823,12 +3145,9 @@ def update_pricing_settings():
     conn.commit(); conn.close()
     return jsonify({'ok': True})
 
-@app.route('/api/pricing-calc/facility-cost', methods=['GET'])
-def get_facility_cost():
-    err = require_auth()
-    if err: return err
-    conn = get_db()
-
+def _facility_cost_result(conn):
+    """Shared calc behind /api/pricing-calc/facility-cost — also used by the
+    Build Show rehearsal-space charge calculation so both stay in sync."""
     settings = conn.execute('SELECT * FROM bb_pricing_settings ORDER BY id LIMIT 1').fetchone()
     settings = dict(settings) if settings else {'facility_budget_id': None, 'season_weeks': 36}
     season_weeks = settings.get('season_weeks') or 36
@@ -2863,8 +3182,26 @@ def get_facility_cost():
                 result['cost_per_hour_budgeted'] = round(rollup['budgeted']/total_possible_hours, 2)
                 if rollup['spent'] > 0:
                     result['cost_per_hour_spent'] = round(rollup['spent']/total_possible_hours, 2)
+    return result
+
+@app.route('/api/pricing-calc/facility-cost', methods=['GET'])
+def get_facility_cost():
+    err = require_auth()
+    if err: return err
+    conn = get_db()
+    result = _facility_cost_result(conn)
     conn.close()
     return jsonify(result)
+
+def _compute_studio_charge(conn, rehearsals_per_week, rehearsal_weeks, hours_per_session):
+    """Rehearsal-space charge for a show, using the same at-cost $/hour the
+    Pricing Calculator uses for everything else (prefers the budgeted rate;
+    falls back to the actual-spent rate if nothing's budgeted yet)."""
+    fc = _facility_cost_result(conn)
+    rate = fc.get('cost_per_hour_budgeted') or fc.get('cost_per_hour_spent') or 0
+    total_hours = float(rehearsals_per_week or 0) * float(rehearsal_weeks or 0) * float(hours_per_session or 0)
+    charge = round(total_hours * rate, 2)
+    return {'total_rehearsal_hours': round(total_hours, 1), 'cost_per_hour': rate, 'studio_charge': charge}
 
 # ─── E-signature: templates, PDF generation, signing requests ─────────────────
 def render_merge(body, values):
