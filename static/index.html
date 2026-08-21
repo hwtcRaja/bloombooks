@@ -2221,8 +2221,9 @@ async function renderBudgetApprovalTab() {
     <div class="card mb-16"><div class="card-header"><span class="card-title">Total budget &amp; board approval</span></div>
       <div class="card-body">
         <div class="form-group"><label class="form-label">Total budget (presented to board)</label>
-          <input type="number" id="ba-total" class="form-input" value="${p.total_budget||0}" step="0.01" ${approved?'disabled':''}></div>
-        <div class="text-sm mb-8">Remaining balance for departments: <span class="fw-600">${fmtMoney(remaining)}</span></div>
+          <input type="number" id="ba-total" class="form-input" value="${p.total_budget||0}" step="0.01" ${approved?'disabled':''} oninput="updateRemainingBalancePreview(${p.id})"></div>
+        <div class="text-xs text-muted mb-8" id="ba-total-hint"></div>
+        <div class="text-sm mb-8" id="ba-remaining">Remaining balance for departments: <span class="fw-600">${fmtMoney(remaining)}</span></div>
         ${approved
           ? `<span class="badge badge-approved">Board approved${p.board_approved_at?` — ${fmtDate(p.board_approved_at)}`:''}</span>`
           : `<button class="btn btn-primary btn-sm" onclick="boardApprove(${p.id})">Approve budget (board sign-off)</button>`}
@@ -2242,6 +2243,34 @@ async function renderBudgetApprovalTab() {
       </div></div>`;
 
   if (approved) { _allocRows = []; renderAllocRows(); }
+  else if (!p.total_budget) { loadSuggestedTotalBudget(p.id); }
+}
+
+function updateRemainingBalancePreview(pid) {
+  const p = _currentProd;
+  const total = parseFloat(document.getElementById('ba-total')?.value || 0);
+  const remaining = total - (p.hard_costs_total || 0);
+  const el = document.getElementById('ba-remaining');
+  if (el) el.innerHTML = `Remaining balance for departments: <span class="fw-600">${fmtMoney(remaining)}</span>`;
+}
+
+async function loadSuggestedTotalBudget(pid) {
+  try {
+    const s = await api('GET', `/productions/${pid}/suggested-total-budget`);
+    const hintEl = document.getElementById('ba-total-hint');
+    const totalEl = document.getElementById('ba-total');
+    if (!hintEl || !totalEl) return;
+    if (s.suggested_total_budget) {
+      totalEl.value = s.suggested_total_budget;
+      updateRemainingBalancePreview(pid);
+      const parts = [];
+      if (s.revenue_estimate) parts.push(`est. revenue ${fmtMoney(s.revenue_estimate)}`);
+      if (s.comparable_avg_budget) parts.push(`avg of last ${s.comparable_basis.length} comparable show${s.comparable_basis.length!==1?'s':''} ${fmtMoney(s.comparable_avg_budget)}`);
+      hintEl.textContent = `Suggested from ${parts.join(' and ')} — edit as needed.`;
+    } else if (s.note) {
+      hintEl.textContent = s.note;
+    }
+  } catch(e) { /* suggestion is a nicety, fail quietly */ }
 }
 
 async function recalcStudioCharge(pid) {
@@ -3390,16 +3419,25 @@ function pcRenderPage() {
 
   const rentalCard = `
     <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><div class="card-title">External Rental Rate Calculator</div></div>
+      <div class="card-header"><div class="card-title">External Rental Rate</div></div>
       <div class="card-body">
-        <p style="font-size:13px;color:var(--ink3);margin-bottom:12px">Suggests an hourly rate for renting the space out to a partner or outside group.</p>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;align-items:end;margin-bottom:14px">
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Standard Rental Rate ($/hr)</label>
+            <input type="number" id="pc-rental-rate" class="form-input" value="${pcSettings.rental_rate_per_hour ?? 20}" min="0" step="0.01"/>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="pcSaveRentalRate()">Save</button>
+        </div>
+        <span id="pc-rental-rate-status" style="font-size:12px;color:var(--teal)"></span>
+        <div style="margin-top:10px;padding:14px 16px;background:var(--cream2);border-radius:var(--r-sm);margin-bottom:16px">
+          <div style="font-size:11px;text-transform:uppercase;color:var(--ink3);font-weight:700">Standard Rate</div>
+          <div style="font-size:26px;font-weight:800">$${(Number(pcSettings.rental_rate_per_hour ?? 20)).toFixed(2)}/hr</div>
+          <div style="font-size:12px;color:var(--ink3);margin-top:4px" id="pc-rental-total-preview"></div>
+        </div>
+        <p style="font-size:13px;color:var(--ink3);margin-bottom:12px">Sanity-check against your real at-cost rate — how much margin the standard rate actually leaves once studio costs are covered.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
           <div class="form-group" style="margin:0"><label class="form-label">Hours Requested</label><input type="number" id="rc-hours" class="form-input" value="3" min="0"/></div>
-          <div class="form-group" style="margin:0"><label class="form-label">Target Profit Margin %</label><input type="number" id="rc-margin" class="form-input" value="30" min="0"/></div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Cost per Hour to Run the Space</label>
-          <input type="number" id="rc-cost-per-hour" class="form-input" style="max-width:180px" value="${defaultCostPerHour}" step="0.01"/>
+          <div class="form-group" style="margin:0"><label class="form-label">Cost per Hour to Run the Space</label><input type="number" id="rc-cost-per-hour" class="form-input" value="${defaultCostPerHour}" step="0.01"/></div>
         </div>
         <div id="rc-result" style="margin-top:12px"></div>
       </div>
@@ -3410,9 +3448,11 @@ function pcRenderPage() {
   ['pc-sessions','pc-hours-per-session','pc-enrollment','pc-margin','pc-total-hours-override','pc-price-per-student','pc-other-costs','pc-cost-per-hour'].forEach(id => {
     const el = document.getElementById(id); if (el) el.oninput = pcCalcProgramPricing;
   });
-  ['rc-hours','rc-margin','rc-cost-per-hour'].forEach(id => {
+  ['rc-hours','rc-cost-per-hour'].forEach(id => {
     const el = document.getElementById(id); if (el) el.oninput = pcCalcRentalRate;
   });
+  const rentalRateEl = document.getElementById('pc-rental-rate');
+  if (rentalRateEl) rentalRateEl.oninput = pcCalcRentalRate;
   pcSetMode(pcMode);
   pcCalcRentalRate();
 }
@@ -3533,19 +3573,40 @@ function pcCalcRentalRate() {
   const el = document.getElementById('rc-result');
   if (!el) return;
   const hours = parseFloat(document.getElementById('rc-hours').value) || 0;
-  const marginPct = parseFloat(document.getElementById('rc-margin').value) || 0;
   const costPerHour = parseFloat(document.getElementById('rc-cost-per-hour').value) || 0;
+  const standardRate = parseFloat((document.getElementById('pc-rental-rate')||{}).value ?? pcSettings.rental_rate_per_hour ?? 20) || 0;
+
+  const previewEl = document.getElementById('pc-rental-total-preview');
+  if (previewEl) previewEl.textContent = hours > 0 ? `For ${hours} hours: ${pcDollars(standardRate * hours)} total` : '';
+
   if (hours<=0 || costPerHour<=0) {
-    el.innerHTML = '<p style="font-size:13px;color:var(--ink3);font-style:italic">Fill in the numbers above to see a suggested rate.</p>';
+    el.innerHTML = '<p style="font-size:13px;color:var(--ink3);font-style:italic">Fill in hours and cost per hour to see how the standard rate compares to cost.</p>';
     return;
   }
-  const suggestedHourlyRate = costPerHour / (1 - (marginPct/100));
-  const suggestedTotal = suggestedHourlyRate * hours;
-  el.innerHTML = `<div style="border:1px solid var(--teal);border-radius:var(--r-sm);padding:14px 16px;background:var(--cream2)">
-    <div style="font-size:11px;font-weight:700;color:var(--teal2);text-transform:uppercase">Suggested Hourly Rate</div>
-    <div style="font-size:26px;font-weight:800;color:var(--teal2)">$${suggestedHourlyRate.toFixed(2)}/hr</div>
-    <div style="font-size:12px;color:var(--ink3);margin-top:8px">For ${hours} hours: ${pcDollars(suggestedTotal)} total</div>
+  const marginOverCost = standardRate - costPerHour;
+  const marginPct = costPerHour > 0 ? (marginOverCost / standardRate) * 100 : 0;
+  const covers = marginOverCost >= 0;
+  el.innerHTML = `<div style="border:1px solid ${covers?'var(--teal)':'var(--red)'};border-radius:var(--r-sm);padding:14px 16px;background:${covers?'var(--cream2)':'#fdeeee'}">
+    <div style="font-size:11px;font-weight:700;color:${covers?'var(--teal2)':'var(--red)'};text-transform:uppercase">${covers?'Standard Rate Covers Cost':'Standard Rate Is Below Cost'}</div>
+    <div style="font-size:18px;font-weight:800;margin-top:4px">$${standardRate.toFixed(2)}/hr rate vs $${costPerHour.toFixed(2)}/hr cost</div>
+    <div style="font-size:12px;color:var(--ink3);margin-top:8px">${covers
+      ? `Margin: $${marginOverCost.toFixed(2)}/hr (${marginPct.toFixed(0)}% of the rate) — $${(marginOverCost*hours).toFixed(2)} over cost for ${hours} hours`
+      : `Losing $${Math.abs(marginOverCost).toFixed(2)}/hr against actual studio cost — $${Math.abs(marginOverCost*hours).toFixed(2)} short for ${hours} hours`}</div>
   </div>`;
+}
+
+async function pcSaveRentalRate() {
+  const rental_rate_per_hour = parseFloat(document.getElementById('pc-rental-rate').value) || 0;
+  try {
+    await api('PUT','/pricing-settings',{
+      facility_budget_id: pcSettings.facility_budget_id || null,
+      season_weeks: pcSettings.season_weeks || 36,
+      rental_rate_per_hour
+    });
+    document.getElementById('pc-rental-rate-status').textContent = '✓ Saved';
+    pcSettings.rental_rate_per_hour = rental_rate_per_hour;
+    pcCalcRentalRate();
+  } catch(e) { toast(e.message,'error'); }
 }
 
 // ── Profile ───────────────────────────────────────────────────────────────────
