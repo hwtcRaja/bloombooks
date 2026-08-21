@@ -1786,9 +1786,10 @@ async function doDeleteBudget(id) {
 let _prodAllUsers = [];
 
 async function renderProductions() {
-  const canCreate = ['admin','treasurer','president'].includes(currentUser.role);
+  const canCreate = ['admin','treasurer','president','resident_producer'].includes(currentUser.role);
   document.getElementById('tb-actions').innerHTML = canCreate
-    ? `<button class="btn btn-primary btn-sm" onclick="showProductionModal()">+ New production</button>` : '';
+    ? `<button class="btn btn-outline btn-sm" onclick="showBuildShowModal()">Build show from RoleCall</button>
+       <button class="btn btn-primary btn-sm" onclick="showProductionModal()">+ New production</button>` : '';
   try {
     const [prods, allUsers] = await Promise.all([
       api('GET', '/productions'),
@@ -1819,6 +1820,7 @@ async function renderProductions() {
             <div class="flex gap-8 mt-4 flex-wrap">
               <span class="badge ${p.status==='active'?'badge-approved':'badge-denied'}">${p.status}</span>
               <span class="text-xs text-muted">${p.season}</span>
+              ${p.category ? `<span class="badge badge-treasurer">${p.category}</span>` : ''}
               ${p.description ? `<span class="text-xs text-muted">· ${p.description}</span>` : ''}
             </div>
           </div>
@@ -1880,6 +1882,8 @@ function showProductionModal() {
         <div class="form-group"><label class="form-label">Total budget envelope</label>
           <input type="number" id="p-budget" class="form-input" placeholder="0.00" step="0.01"></div>
       </div>
+      <div class="form-group"><label class="form-label">Category <span class="text-xs text-muted">(used to find comparable shows for revenue forecasting — e.g. RS, MS, Youth)</span></label>
+        <input type="text" id="p-category" class="form-input" placeholder="e.g. RS, MS"></div>
       <div class="form-group"><label class="form-label">Description</label>
         <textarea id="p-desc" class="form-textarea" placeholder="Brief description"></textarea></div>
       <div id="p-error" class="form-error hidden"></div>
@@ -1895,18 +1899,79 @@ async function createProduction() {
   const name   = document.getElementById('p-name').value.trim();
   const season = document.getElementById('p-season').value.trim();
   const budget = parseFloat(document.getElementById('p-budget').value||0);
+  const category = document.getElementById('p-category').value.trim();
   const desc   = document.getElementById('p-desc').value.trim();
   const errEl  = document.getElementById('p-error');
   errEl.classList.add('hidden');
   if (!name || !season) { errEl.textContent='Name and season are required'; errEl.classList.remove('hidden'); return; }
   try {
-    const d = await api('POST', '/productions', {name, season, description:desc, total_budget:budget});
+    const d = await api('POST', '/productions', {name, season, description:desc, total_budget:budget, category});
     toast('Production created!', 'success');
     closeModal();
     await loadBudgets();
     await renderProductions();
     openProductionDetail(d.id);
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+// ── Build Show: pull a board-approved-to-produce show in from RoleCall ────────
+async function showBuildShowModal() {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Build show from RoleCall</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm text-muted mb-12">Shows appear here once RoleCall has a signed contract on file <em>and</em> the board has approved moving forward. Ticket-price estimates and rehearsal schedule (if the show is linked to a RoleCall production) copy over automatically — License Cost, Venue Rate, and other hard costs you set here.</p>
+      <div id="bs-body"><div class="text-xs text-muted">Loading shows ready to build from RoleCall…</div></div>
+    </div>`;
+  showModal(html);
+  try {
+    const list = await api('GET', '/rolecall/licensing-requests/ready');
+    const items = (list && list.items) || [];
+    if (items.length === 0) {
+      document.getElementById('bs-body').innerHTML = `<div class="text-sm text-muted">No shows are ready to build yet. A show shows up here once its contract is on file and it's been approved to produce in RoleCall.</div>`;
+      return;
+    }
+    document.getElementById('bs-body').innerHTML = items.map(it => `
+      <div class="card mb-12"><div class="card-body">
+        <div class="flex flex-center mb-8">
+          <div>
+            <div class="fw-600">${it.production_name}</div>
+            <div class="text-xs text-muted">${it.licensor||''}${it.venue_name?` · ${it.venue_name}`:''}${it.production_start_date?` · ${fmtDate(it.production_start_date)}`:''}</div>
+          </div>
+          <div style="margin-left:auto;text-align:right">
+            <div class="text-xs text-muted">Est. ticket sales</div>
+            <div class="fw-600">${fmtMoney(it.estimated_ticket_sales||0)}</div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Season <span class="req">*</span></label>
+            <input type="text" id="bs-season-${it.id}" class="form-input" placeholder="e.g. 2025-2026"></div>
+          <div class="form-group"><label class="form-label">Category</label>
+            <input type="text" id="bs-category-${it.id}" class="form-input" placeholder="e.g. RS, MS"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Rehearsal weeks <span class="text-xs text-muted">(used with the show's RoleCall rehearsal schedule to estimate the at-cost studio charge)</span></label>
+          <input type="number" id="bs-weeks-${it.id}" class="form-input" value="8" step="1" min="1"></div>
+        <button class="btn btn-primary btn-sm" onclick="doBuildShow('${it.id}')">Build this show</button>
+      </div></div>`).join('');
+  } catch(e) {
+    document.getElementById('bs-body').innerHTML = `<div class="text-sm" style="color:var(--red)">${e.message}</div>`;
+  }
+}
+
+async function doBuildShow(licId) {
+  const season   = document.getElementById(`bs-season-${licId}`).value.trim();
+  const category = document.getElementById(`bs-category-${licId}`).value.trim();
+  const weeks    = parseFloat(document.getElementById(`bs-weeks-${licId}`).value || 8);
+  if (!season) { toast('Season is required', 'error'); return; }
+  try {
+    const d = await api('POST', '/productions/build-from-licensing', {
+      licensing_request_id: licId, season, category, rehearsal_weeks: weeks
+    });
+    toast('Show built! Set hard costs next.', 'success');
+    closeModal();
+    await loadBudgets();
+    await renderProductions();
+    openProductionDetail(d.id);
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ── Production detail (tabbed) ────────────────────────────────────────────────
@@ -1928,8 +1993,8 @@ function renderProductionDetail() {
   const totalBudget = p.budgets.reduce((s,b)=>s+b.total_amount,0);
   const totalSpent  = p.total_spent||0;
   const pct = totalBudget>0?Math.min(100,(totalSpent/totalBudget)*100):0;
-  const tabs = ['departments','team','revenue','settings'];
-  const tabLabels = {departments:'Departments', team:'Team', revenue:'Revenue', settings:'Settings'};
+  const tabs = ['departments','team','revenue','budget','settings'];
+  const tabLabels = {departments:'Departments', team:'Team', revenue:'Revenue', budget:'Budget Approval', settings:'Settings'};
   document.getElementById('tb-title').textContent = p.name;
   document.getElementById('tb-actions').innerHTML = `<button class="btn btn-outline btn-sm" onclick="nav('productions')">← All productions</button>`;
   document.getElementById('content').innerHTML = `
@@ -1955,8 +2020,7 @@ function renderProductionDetail() {
 
 function switchProdTab(tab) {
   _prodTab = tab;
-  const labels = {departments:'Departments', team:'Team', settings:'Settings'};
-  ['departments','team','settings'].forEach(t => {
+  ['departments','team','revenue','budget','settings'].forEach(t => {
     const btn = document.getElementById(`tab-btn-${t}`);
     if (!btn) return;
     btn.style.fontWeight = t===tab?'600':'400';
@@ -2039,6 +2103,8 @@ function renderProdTab() {
 
   } else if (_prodTab === 'revenue') {
     renderRevenueTab();
+  } else if (_prodTab === 'budget') {
+    renderBudgetApprovalTab();
   } else {
     tc.innerHTML = `
       <div class="card"><div class="card-header"><span class="card-title">Production settings</span></div>
@@ -2049,8 +2115,10 @@ function renderProdTab() {
             <div class="form-group"><label class="form-label">Season</label>
               <input type="text" id="ps-season" class="form-input" value="${p.season}"></div>
             <div class="form-group"><label class="form-label">Total budget</label>
-              <input type="number" id="ps-budget" class="form-input" value="${p.total_budget||0}" step="0.01"></div>
+              <input type="number" id="ps-budget" class="form-input" value="${p.total_budget||0}" step="0.01" ${p.board_approved?'disabled':''}></div>
           </div>
+          <div class="form-group"><label class="form-label">Category <span class="text-xs text-muted">(used for revenue forecasting)</span></label>
+            <input type="text" id="ps-category" class="form-input" value="${p.category||''}" placeholder="e.g. RS, MS"></div>
           <div class="form-group"><label class="form-label">Description</label>
             <textarea id="ps-desc" class="form-textarea">${p.description||''}</textarea></div>
           <div class="form-group"><label class="form-label">Status</label>
@@ -2077,6 +2145,195 @@ const REVENUE_SOURCES = [
   'Grants', 'Donations', 'Sponsorships', 'Matching Gifts', 'Other'
 ];
 
+// ── Budget Approval tab ────────────────────────────────────────────────────
+let _allocRows = [];
+
+async function renderBudgetApprovalTab() {
+  const p = _currentProd;
+  const canSet = ['admin','treasurer','president','resident_producer'].includes(currentUser.role);
+  const tc = document.getElementById('prod-tab-content');
+  tc.innerHTML = '<div class="text-xs text-muted">Loading budget approval…</div>';
+
+  if (!canSet) {
+    const remaining = (p.total_budget||0) - (p.hard_costs_total||0);
+    tc.innerHTML = `
+      <div class="card"><div class="card-body">
+        <div class="text-xs text-muted fw-600 mb-8">BUDGET STATUS</div>
+        <div class="fw-600" style="font-size:20px">${fmtMoney(p.total_budget||0)} total</div>
+        <div class="text-xs text-muted mb-8">Hard costs ${fmtMoney(p.hard_costs_total||0)} · Remaining ${fmtMoney(remaining)}</div>
+        <span class="badge ${p.board_approved?'badge-approved':'badge-denied'}">${p.board_approved?'Board approved':'Awaiting board approval'}</span>
+        <p class="text-xs text-muted mt-12">Only the Resident Producer or an org officer can set hard costs or department allocations for this show.</p>
+      </div></div>`;
+    return;
+  }
+
+  const locked = !!p.hard_costs_locked;
+  const approved = !!p.board_approved;
+  const hardCostsTotal = p.hard_costs_total || 0;
+  const remaining = (p.total_budget||0) - hardCostsTotal;
+
+  tc.innerHTML = `
+    <div class="card mb-16"><div class="card-header"><span class="card-title">Rehearsal &amp; studio charge</span></div>
+      <div class="card-body">
+        <p class="text-xs text-muted mb-12">Charges the show for studio use at cost, using the same $/hour rate as the Pricing Calculator.</p>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Rehearsals / week</label>
+            <input type="number" id="ba-rpw" class="form-input" value="${p.rehearsals_per_week||0}" step="1" min="0" ${locked?'disabled':''}></div>
+          <div class="form-group"><label class="form-label">Weeks</label>
+            <input type="number" id="ba-weeks" class="form-input" value="${p.rehearsal_weeks||0}" step="1" min="0" ${locked?'disabled':''}></div>
+          <div class="form-group"><label class="form-label">Hours / session</label>
+            <input type="number" id="ba-hrs" class="form-input" value="${p.rehearsal_hours_per_session||0}" step="0.25" min="0" ${locked?'disabled':''}></div>
+        </div>
+        ${!locked ? `<button class="btn btn-outline btn-sm" onclick="recalcStudioCharge(${p.id})">Recalculate charge</button>` : ''}
+        <div class="text-sm mt-8">Studio charge: <span class="fw-600">${fmtMoney(p.studio_charge||0)}</span></div>
+      </div></div>
+
+    <div class="card mb-16"><div class="card-header"><span class="card-title">Hard costs</span></div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">License cost</label>
+            <input type="number" id="ba-license" class="form-input" value="${p.license_cost||0}" step="0.01" ${locked?'disabled':''}></div>
+          <div class="form-group"><label class="form-label">Performance venue rate</label>
+            <input type="number" id="ba-venue" class="form-input" value="${p.venue_rate||0}" step="0.01" ${locked?'disabled':''}></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Estimated concessions</label>
+            <input type="number" id="ba-concessions" class="form-input" value="${p.est_concessions||0}" step="0.01" ${locked?'disabled':''}></div>
+          <div class="form-group"><label class="form-label">Estimated enrollment revenue</label>
+            <input type="number" id="ba-enrollment" class="form-input" value="${p.est_enrollment||0}" step="0.01" ${locked?'disabled':''}></div>
+        </div>
+        <div class="text-xs text-muted mb-8">Estimated ticket sales (from RoleCall): <span class="fw-600">${fmtMoney(p.est_ticket_sales||0)}</span></div>
+        ${!locked ? `<button class="btn btn-outline btn-sm" onclick="saveHardCosts(${p.id})">Save hard costs</button>` : `<div class="text-xs text-muted">Hard costs are locked (board-approved).</div>`}
+        <div class="text-sm mt-8">Hard costs total (license + venue + studio charge): <span class="fw-600">${fmtMoney(hardCostsTotal)}</span></div>
+      </div></div>
+
+    <div class="card mb-16"><div class="card-header"><span class="card-title">Total budget &amp; board approval</span></div>
+      <div class="card-body">
+        <div class="form-group"><label class="form-label">Total budget (presented to board)</label>
+          <input type="number" id="ba-total" class="form-input" value="${p.total_budget||0}" step="0.01" ${approved?'disabled':''}></div>
+        <div class="text-sm mb-8">Remaining balance for departments: <span class="fw-600">${fmtMoney(remaining)}</span></div>
+        ${approved
+          ? `<span class="badge badge-approved">Board approved${p.board_approved_at?` — ${fmtDate(p.board_approved_at)}`:''}</span>`
+          : `<button class="btn btn-primary btn-sm" onclick="boardApprove(${p.id})">Approve budget (board sign-off)</button>`}
+      </div></div>
+
+    <div class="card"><div class="card-header"><span class="card-title">Department allocations</span></div>
+      <div class="card-body">
+        ${!approved
+          ? `<div class="text-xs text-muted">Board must approve the overall budget before allocating departments.</div>`
+          : `<div class="flex mb-12" style="gap:8px">
+              <button class="btn btn-outline btn-sm" onclick="loadSuggestedAllocations(${p.id})">Use suggested split</button>
+              <button class="btn btn-outline btn-sm" onclick="addAllocRow()">+ Add line</button>
+            </div>
+            <div id="ba-alloc-rows"></div>
+            <div class="text-sm mt-8" id="ba-alloc-total"></div>
+            <button class="btn btn-primary btn-sm mt-8" onclick="submitAllocations(${p.id})">Create department budgets</button>`}
+      </div></div>`;
+
+  if (approved) { _allocRows = []; renderAllocRows(); }
+}
+
+async function recalcStudioCharge(pid) {
+  const rehearsals_per_week = parseFloat(document.getElementById('ba-rpw').value||0);
+  const rehearsal_weeks = parseFloat(document.getElementById('ba-weeks').value||0);
+  const rehearsal_hours_per_session = parseFloat(document.getElementById('ba-hrs').value||0);
+  try {
+    await api('PUT', `/productions/${pid}/rehearsal-schedule`, {rehearsals_per_week, rehearsal_weeks, rehearsal_hours_per_session});
+    toast('Studio charge recalculated', 'success');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(x=>x.id===pid);
+    renderBudgetApprovalTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function saveHardCosts(pid) {
+  const license_cost = parseFloat(document.getElementById('ba-license').value||0);
+  const venue_rate = parseFloat(document.getElementById('ba-venue').value||0);
+  const est_concessions = parseFloat(document.getElementById('ba-concessions').value||0);
+  const est_enrollment = parseFloat(document.getElementById('ba-enrollment').value||0);
+  try {
+    await api('PUT', `/productions/${pid}/hard-costs`, {license_cost, venue_rate, est_concessions, est_enrollment});
+    toast('Hard costs saved', 'success');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(x=>x.id===pid);
+    renderBudgetApprovalTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function boardApprove(pid) {
+  const total_budget = parseFloat(document.getElementById('ba-total').value||0);
+  if (!confirm(`Lock in a total budget of ${fmtMoney(total_budget)} and hard costs? This can't be undone from here.`)) return;
+  try {
+    await api('POST', `/productions/${pid}/board-approve`, {total_budget});
+    toast('Budget approved!', 'success');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(x=>x.id===pid);
+    renderBudgetApprovalTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadSuggestedAllocations(pid) {
+  try {
+    const d = await api('GET', `/productions/${pid}/suggested-allocations`);
+    _allocRows = (d.suggestions||[]).map(s=>({name:s.name, amount:s.amount}));
+    renderAllocRows();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function addAllocRow() {
+  _allocRows.push({name:'', amount:0});
+  renderAllocRows();
+}
+
+function removeAllocRow(idx) {
+  _allocRows.splice(idx,1);
+  renderAllocRows();
+}
+
+function updateAllocRow(idx, field, val) {
+  _allocRows[idx][field] = field==='amount' ? parseFloat(val||0) : val;
+  renderAllocTotal();
+}
+
+function renderAllocRows() {
+  const wrap = document.getElementById('ba-alloc-rows');
+  if (!wrap) return;
+  wrap.innerHTML = _allocRows.map((r,idx) => `
+    <div class="form-row" style="align-items:flex-end">
+      <div class="form-group"><label class="form-label">${idx===0?'Department':''}</label>
+        <input type="text" class="form-input" value="${(r.name||'').replace(/"/g,'&quot;')}" oninput="updateAllocRow(${idx},'name',this.value)"></div>
+      <div class="form-group" style="max-width:160px"><label class="form-label">${idx===0?'Amount':''}</label>
+        <input type="number" class="form-input" value="${r.amount||0}" step="0.01" oninput="updateAllocRow(${idx},'amount',this.value)"></div>
+      <button class="btn btn-danger btn-sm" style="margin-bottom:16px" onclick="removeAllocRow(${idx})">×</button>
+    </div>`).join('');
+  renderAllocTotal();
+}
+
+function renderAllocTotal() {
+  const el = document.getElementById('ba-alloc-total');
+  if (!el) return;
+  const p = _currentProd;
+  const remaining = (p.total_budget||0) - (p.hard_costs_total||0);
+  const total = _allocRows.reduce((s,r)=>s+(r.amount||0),0);
+  el.innerHTML = `Allocated: <span class="fw-600">${fmtMoney(total)}</span> of ${fmtMoney(remaining)} remaining`
+    + (total > remaining + 0.01 ? ` <span style="color:var(--red)">— over by ${fmtMoney(total-remaining)}</span>` : '');
+}
+
+async function submitAllocations(pid) {
+  const allocations = _allocRows.filter(r=>r.name && r.name.trim());
+  if (allocations.length === 0) { toast('Add at least one department line', 'error'); return; }
+  try {
+    const d = await api('POST', `/productions/${pid}/allocations`, {allocations});
+    toast(`Created ${d.created.length} department budget${d.created.length!==1?'s':''}!`, 'success');
+    _allocRows = [];
+    await loadBudgets();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(x=>x.id===pid);
+    _prodTab = 'departments';
+    renderProductionDetail();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 async function renderRevenueTab() {
   const p = _currentProd;
   const canManage = ['admin','treasurer','president'].includes(currentUser.role) || p.i_am_producer;
@@ -2084,7 +2341,10 @@ async function renderRevenueTab() {
   tc.innerHTML = '<div class="text-xs text-muted">Loading revenue...</div>';
 
   try {
-    const entries = await api('GET', `/productions/${p.id}/revenue`);
+    const [entries, forecast] = await Promise.all([
+      api('GET', `/productions/${p.id}/revenue`),
+      api('GET', `/productions/${p.id}/revenue-forecast`).catch(()=>null)
+    ]);
     const totalExpected = entries.reduce((s,r) => s+r.expected, 0);
     const totalActual   = entries.reduce((s,r) => s+r.actual, 0);
     const totalSpent    = p.total_spent || 0;
@@ -2110,6 +2370,14 @@ async function renderRevenueTab() {
           </div>
         </div>
       </div>
+
+      ${forecast && forecast.forecasted_revenue !== null ? `
+      <div class="card mb-16"><div class="card-body">
+        <div class="text-xs text-muted fw-600 mb-4">FORECASTED REVENUE <span class="text-xs text-muted fw-400" style="text-transform:none">— average of the last ${forecast.basis.length} comparable show${forecast.basis.length!==1?'s':''}${p.category?` (category: ${p.category})`:''}, distinct from Expected Revenue above</span></div>
+        <div class="fw-600" style="font-size:18px">${fmtMoney(forecast.forecasted_revenue)}</div>
+        <div class="text-xs text-muted mt-4">${forecast.basis.map(b=>`${b.name} (${b.season}): ${fmtMoney(b.actual_revenue)}`).join(' · ')}</div>
+        ${forecast.note ? `<div class="text-xs text-muted mt-4">${forecast.note}</div>` : ''}
+      </div></div>` : forecast && forecast.note ? `<div class="card mb-16"><div class="card-body"><div class="text-xs text-muted">${forecast.note}</div></div></div>` : ''}
 
       ${canManage ? `<div class="flex mb-12" style="gap:8px">
         ${['admin','treasurer','president'].includes(currentUser.role)
@@ -2556,6 +2824,7 @@ async function saveProductionSettings(pid) {
     name: document.getElementById('ps-name').value.trim(),
     season: document.getElementById('ps-season').value.trim(),
     total_budget: parseFloat(document.getElementById('ps-budget').value||0),
+    category: document.getElementById('ps-category').value.trim(),
     description: document.getElementById('ps-desc').value.trim(),
     status: document.getElementById('ps-status').value,
   };
@@ -3381,6 +3650,8 @@ async function renderUsers() {
               <td>${canManage ? `
                   <select class="form-select" style="font-size:12px;padding:4px 8px" onchange="updateUserRole(${u.id}, this.value)">
                     <option ${u.role==='volunteer'?'selected':''} value="volunteer">Volunteer</option>
+                    <option ${u.role==='producer'?'selected':''} value="producer">Producer</option>
+                    <option ${u.role==='resident_producer'?'selected':''} value="resident_producer">Resident Producer</option>
                     <option ${u.role==='treasurer'?'selected':''} value="treasurer">Treasurer</option>
                     <option ${u.role==='president'?'selected':''} value="president">President</option>
                     <option ${u.role==='admin'?'selected':''} value="admin">Admin</option>
@@ -3567,6 +3838,7 @@ function showAddUserModal() {
           <select id="new-role" class="form-select">
             <option value="volunteer">Volunteer</option>
             <option value="producer">Producer</option>
+            <option value="resident_producer">Resident Producer</option>
             <option value="treasurer">Treasurer</option>
             <option value="president">President</option>
             <option value="admin">Admin</option>
