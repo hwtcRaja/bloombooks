@@ -1931,9 +1931,12 @@ async function showBuildShowModal() {
       return;
     }
     document.getElementById('bs-body').innerHTML = items.map(it => {
-      let days = [];
-      try { days = JSON.parse(it.rehearsal_days || '[]'); } catch(e) {}
-      const hasSchedule = it.rehearsals_per_week > 0;
+      let blocks = [];
+      try { blocks = JSON.parse(it.rehearsal_blocks || '[]'); } catch(e) {}
+      const hasSchedule = it.rehearsal_weekly_hours > 0;
+      const blockLines = blocks.map(b => `${(b.days||[]).join('/')} ${b.start_time}\u2013${b.end_time}`).join(', ');
+      const period = it.rehearsal_period_start ? `${it.rehearsal_period_start} \u2013 ${it.rehearsal_period_end}` : '';
+      const computedWeeks = it.rehearsal_weeks_computed || 8;
       return `
       <div class="card mb-12"><div class="card-body">
         <div class="flex flex-center mb-8">
@@ -1948,7 +1951,7 @@ async function showBuildShowModal() {
         </div>
         <div class="text-xs mb-8" style="color:${hasSchedule?'var(--ink3)':'var(--red)'}">
           ${hasSchedule
-            ? `Rehearsals: ${it.rehearsals_per_week}/week (${days.join(', ')}), ${it.rehearsal_hours_per_session}hrs/session`
+            ? `Rehearsals: ${blockLines} (${it.rehearsal_weekly_hours} hrs/week)${period?' · '+period:''}`
             : `No rehearsal schedule on file — set one in RoleCall before building, or the studio charge will come in at $0.`}
         </div>
         <div class="form-row">
@@ -1957,8 +1960,8 @@ async function showBuildShowModal() {
           <div class="form-group"><label class="form-label">Category</label>
             <input type="text" id="bs-category-${it.id}" class="form-input" placeholder="e.g. RS, MS"></div>
         </div>
-        <div class="form-group"><label class="form-label">Rehearsal weeks <span class="text-xs text-muted">(RoleCall doesn't track this — set how many weeks the rehearsal period runs)</span></label>
-          <input type="number" id="bs-weeks-${it.id}" class="form-input" value="8" step="1" min="1"></div>
+        <div class="form-group"><label class="form-label">Rehearsal weeks <span class="text-xs text-muted">${it.rehearsal_weeks_computed?'(from the rehearsal period dates \u2014 adjust if needed)':'(RoleCall has no date range on file for this show, so this is a guess \u2014 set one)'}</span></label>
+          <input type="number" id="bs-weeks-${it.id}" class="form-input" value="${computedWeeks}" step="1" min="1"></div>
         <button class="btn btn-primary btn-sm" onclick="doBuildShow('${it.id}')">Build this show</button>
       </div></div>`;
     }).join('');
@@ -2185,14 +2188,12 @@ async function renderBudgetApprovalTab() {
   tc.innerHTML = `
     <div class="card mb-16"><div class="card-header"><span class="card-title">Rehearsal &amp; studio charge</span></div>
       <div class="card-body">
-        <p class="text-xs text-muted mb-12">Charges the show for studio use at cost, using the same $/hour rate as the Pricing Calculator.</p>
+        <p class="text-xs text-muted mb-12">Charges the show for studio use at cost, using the same $/hour rate as the Pricing Calculator. The weekly hours and week count come from RoleCall's rehearsal schedule when the show was approved to produce — adjust here if needed.</p>
         <div class="form-row">
-          <div class="form-group"><label class="form-label">Rehearsals / week</label>
-            <input type="number" id="ba-rpw" class="form-input" value="${p.rehearsals_per_week||0}" step="1" min="0" ${locked?'disabled':''}></div>
+          <div class="form-group"><label class="form-label">Total rehearsal hours / week</label>
+            <input type="number" id="ba-weekly-hrs" class="form-input" value="${p.rehearsal_weekly_hours||0}" step="0.25" min="0" ${locked?'disabled':''}></div>
           <div class="form-group"><label class="form-label">Weeks</label>
             <input type="number" id="ba-weeks" class="form-input" value="${p.rehearsal_weeks||0}" step="1" min="0" ${locked?'disabled':''}></div>
-          <div class="form-group"><label class="form-label">Hours / session</label>
-            <input type="number" id="ba-hrs" class="form-input" value="${p.rehearsal_hours_per_session||0}" step="0.25" min="0" ${locked?'disabled':''}></div>
         </div>
         ${!locked ? `<button class="btn btn-outline btn-sm" onclick="recalcStudioCharge(${p.id})">Recalculate charge</button>` : ''}
         <div class="text-sm mt-8">Studio charge: <span class="fw-600">${fmtMoney(p.studio_charge||0)}</span></div>
@@ -2244,11 +2245,10 @@ async function renderBudgetApprovalTab() {
 }
 
 async function recalcStudioCharge(pid) {
-  const rehearsals_per_week = parseFloat(document.getElementById('ba-rpw').value||0);
+  const rehearsal_weekly_hours = parseFloat(document.getElementById('ba-weekly-hrs').value||0);
   const rehearsal_weeks = parseFloat(document.getElementById('ba-weeks').value||0);
-  const rehearsal_hours_per_session = parseFloat(document.getElementById('ba-hrs').value||0);
   try {
-    await api('PUT', `/productions/${pid}/rehearsal-schedule`, {rehearsals_per_week, rehearsal_weeks, rehearsal_hours_per_session});
+    await api('PUT', `/productions/${pid}/rehearsal-schedule`, {rehearsal_weekly_hours, rehearsal_weeks});
     toast('Studio charge recalculated', 'success');
     const prods = await api('GET', '/productions');
     _currentProd = prods.find(x=>x.id===pid);
