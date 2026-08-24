@@ -3656,18 +3656,20 @@ def build_download_filename(contractor_name, doc_type, doc_title):
         doc_slug = _slug_segment(os.path.splitext(doc_title or '')[0]) or _slug_segment(doc_type) or 'document'
     return '.'.join([p for p in (first, last, doc_slug) if p])
 
-def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None, access_type='private', version=None):
-    """Time-limited download link for a restricted Cloudinary asset.
+def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None, access_type='private', version=None, inline=False):
+    """Time-limited link for a restricted Cloudinary asset.
     - 'authenticated' assets: delivered via a normal signed CDN URL, which supports a custom
       download filename via the fl_attachment:<name> transformation flag. This requires the
       asset's REAL version number (as returned by the upload call) — without it, the SDK
       falls back to a placeholder "v1" that doesn't match the asset Cloudinary actually has,
       and the signature check fails with "Unauthenticated access" even though the URL looks
-      well-formed.
+      well-formed. inline=True omits the attachment flag entirely, so the browser renders the
+      file (e.g. a PDF viewer) instead of forcing a download — only supported for this type.
     - 'private' assets (legacy — uploaded before this fix): NOT servable through the CDN at all.
       Must go through Cloudinary's separate /download API (private_download_url), which only
       supports a boolean attachment flag — Cloudinary always names the file after its own
-      internal ID, with no way to override it. Kept only so older documents still download."""
+      internal ID, with no way to override it, and there's no inline-view option. Kept only
+      so older documents still download; inline=True is not honored for these."""
     safe_name = None
     if download_name:
         cleaned = re.sub(r'[\\/:"*?<>|]+', ' ', download_name).strip()
@@ -3682,7 +3684,9 @@ def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None,
         # instead of erroring out.
         can_use_flags = (resource_type or 'image') != 'raw'
         flags_value = None
-        if can_use_flags:
+        if inline:
+            flags_value = None  # no attachment flag at all — browser renders it inline
+        elif can_use_flags:
             if safe_name:
                 # Cloudinary's transformation syntax splits on '.' to separate multiple
                 # flags, so a literal dot inside the filename (e.g. "jane.smith.w9") gets
@@ -3705,6 +3709,9 @@ def signed_doc_url(public_id, resource_type='raw', fmt=None, download_name=None,
             expires_at=int(time.time()) + 300,
         )
         return url
+
+    if inline:
+        raise ValueError('Preview isn\'t available for this document — it was uploaded before in-browser viewing was supported. Download it instead.')
 
     return cloudinary.utils.private_download_url(
         public_id,
@@ -3900,6 +3907,7 @@ def upload_contractor_document(cid):
 def download_contractor_document(cid, did):
     u, err = require_contractor_access()
     if err: return err
+    inline = request.args.get('inline') == '1'
     conn = get_db()
     doc = conn.execute('''SELECT d.*, c.name AS contractor_name FROM bb_contractor_documents d
                           JOIN bb_contractors c ON c.id = d.contractor_id
@@ -3911,10 +3919,12 @@ def download_contractor_document(cid, did):
         download_name = build_download_filename(doc['contractor_name'], doc['doc_type'], doc['filename'])
         url = signed_doc_url(doc['cloud_public_id'], doc['resource_type'], doc['format'],
                               download_name=download_name, access_type=doc['access_type'] or 'private',
-                              version=doc['cloud_version'])
+                              version=doc['cloud_version'], inline=inline)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    log_action(u['id'], 'downloaded_contractor_document', 'contractor', cid, f"doc_type={doc['doc_type']}")
+    log_action(u['id'], 'viewed_contractor_document' if inline else 'downloaded_contractor_document', 'contractor', cid, f"doc_type={doc['doc_type']}")
     return jsonify({'url': url})
 
 @app.route('/api/contractors/<int:cid>/documents/<int:did>', methods=['DELETE'])
