@@ -5251,7 +5251,7 @@ function renderContractorPayments(tc) {
             <td class="td-muted">${p.reference_number || '—'}</td>
             <td class="td-muted">${p.paid_by_name || '—'}</td>
             <td>${p.status === 'void' ? '<span class="badge badge-denied">Void</span>' : '<span class="badge badge-approved">Paid</span>'}</td>
-            <td>${p.status !== 'void' ? `<button class="btn btn-outline btn-sm" onclick="voidPayment(${p.id})">Void</button>` : ''}</td>
+            <td>${p.status !== 'void' ? `<button class="btn btn-outline btn-sm" onclick="showEditPaymentClassesModal(${p.id})">Edit classes</button> <button class="btn btn-outline btn-sm" onclick="voidPayment(${p.id})">Void</button>` : ''}</td>
           </tr>`).join('')}
         </tbody>
       </table>
@@ -5302,25 +5302,89 @@ function renderPayableEventsPicker(payable) {
   }
   return `
     <div class="form-group" style="margin-top:8px">
-      <label class="form-label">Apply to specific classes <span class="td-muted" style="font-weight:400">(optional — for your own tracking, doesn't affect the amount)</span></label>
+      <label class="form-label">Apply to specific classes <span class="td-muted" style="font-weight:400">(checking boxes below can suggest an amount \u2014 doesn't change what actually gets recorded unless you click "Use suggested amount")</span></label>
       ${payable.programs.map(p => `
         <div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:8px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
             <span style="font-weight:600;font-size:13px">${escHtmlBB(p.program_name)}</span>
-            <span class="td-muted" style="font-size:12px">Expected: ${fmtMoney(p.expected_pay)}${p.fully_paid ? ' · <span style="color:#166534;font-weight:600">All sessions paid</span>' : ''}</span>
+            <span class="td-muted" style="font-size:12px">${p.pay_rate_type==='per_class' ? `${fmtMoney(p.pay_rate_amount)}/class` : `${fmtMoney(p.pay_rate_amount)}/hr \u00d7 ${p.session_hours}h = ${fmtMoney(p.suggested_per_session)}/session`}${p.fully_paid ? ' · <span style="color:#166534;font-weight:600">All sessions paid</span>' : ''}</span>
           </div>
           ${p.events.map(e => `
             <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;${e.already_paid ? 'opacity:0.55' : 'cursor:pointer'}">
-              <input type="checkbox" class="pm-event-cb" data-event-id="${e.id}" ${e.already_paid ? 'disabled' : ''}>
+              <input type="checkbox" class="pm-event-cb" data-event-id="${e.id}" data-suggested-amount="${e.suggested_amount}" ${e.already_paid ? 'disabled' : ''} onchange="updateSuggestedPaymentTotal()">
               <span style="flex:1">${escHtmlBB(e.name)} ${e.event_date ? '· ' + fmtDate(e.event_date) : ''}</span>
               ${e.already_paid
                 ? '<span class="td-muted" style="font-size:11px">Paid</span>'
-                : (e.has_logged_time
-                    ? `<span style="color:#166534;font-size:11px">✓ ${e.logged_hours}h logged</span>`
-                    : '<span style="color:#b45309;font-size:11px">⚠ No time logged</span>')}
+                : `<span class="td-muted" style="font-size:11px">${fmtMoney(e.suggested_amount)}</span>`}
             </label>`).join('')}
         </div>`).join('')}
+      <div id="pm-suggested-total" style="font-size:12px;color:var(--ink3);margin-top:4px"></div>
     </div>`;
+}
+
+function updateSuggestedPaymentTotal() {
+  const boxes = Array.from(document.querySelectorAll('.pm-event-cb:checked'));
+  const el = document.getElementById('pm-suggested-total');
+  if (!el) return;
+  if (!boxes.length) { el.innerHTML = ''; return; }
+  const total = boxes.reduce((s, cb) => s + (parseFloat(cb.dataset.suggestedAmount) || 0), 0);
+  el.innerHTML = `Suggested total for ${boxes.length} checked session${boxes.length!==1?'s':''}: <strong>${fmtMoney(total)}</strong> — <a href="#" onclick="event.preventDefault();document.getElementById('pm-amount').value=${total.toFixed(2)}">Use suggested amount</a>`;
+}
+
+async function showEditPaymentClassesModal(pid) {
+  const payment = (_currentContractor.payments || []).find(p => p.id === pid);
+  showModal('<div class="modal-body"><p class="td-muted">Loading…</p></div>');
+  let payable = { linked: false, programs: [] };
+  try {
+    payable = await api('GET', `/contractors/${_currentContractor.contractor.id}/payable-events?exclude_payment_id=${pid}`);
+  } catch (e) { /* non-fatal */ }
+  const html = `
+    <div class="modal-header"><span class="modal-title">Edit classes for this payment</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="text-sm text-muted mb-12">${payment ? `${fmtMoney(payment.amount)} on ${fmtDate(payment.payment_date)} (${payment.method})` : ''} — this only changes which classes the payment is applied to, not the amount, date, or method.</div>
+      ${renderEditableEventsPicker(payable)}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditedPaymentClasses(${pid})">Save</button>
+    </div>`;
+  showModal(html);
+}
+
+function renderEditableEventsPicker(payable) {
+  if (!payable.linked) {
+    return `<div class="td-muted" style="font-size:13px">Not linked to a RoleCall instructor.</div>`;
+  }
+  if (!payable.programs.length) {
+    return `<div class="td-muted" style="font-size:13px">No paid instructional courses currently assigned to ${payable.volunteer_name} in RoleCall.</div>`;
+  }
+  return payable.programs.map(p => `
+    <div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-weight:600;font-size:13px">${escHtmlBB(p.program_name)}</span>
+        <span class="td-muted" style="font-size:12px">${p.pay_rate_type==='per_class' ? `${fmtMoney(p.pay_rate_amount)}/class` : `${fmtMoney(p.pay_rate_amount)}/hr \u00d7 ${p.session_hours}h = ${fmtMoney(p.suggested_per_session)}/session`}</span>
+      </div>
+      ${p.events.map(e => `
+        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;${e.already_paid ? 'opacity:0.55' : 'cursor:pointer'}">
+          <input type="checkbox" class="pm-edit-event-cb" data-event-id="${e.id}" ${e.linked_to_this_payment ? 'checked' : ''} ${e.already_paid ? 'disabled' : ''}>
+          <span style="flex:1">${escHtmlBB(e.name)} ${e.event_date ? '· ' + fmtDate(e.event_date) : ''}</span>
+          ${e.already_paid
+            ? '<span class="td-muted" style="font-size:11px">Paid on another payment</span>'
+            : `<span class="td-muted" style="font-size:11px">${fmtMoney(e.suggested_amount)}</span>`}
+        </label>`).join('')}
+    </div>`).join('');
+}
+
+async function saveEditedPaymentClasses(pid) {
+  const eventIds = Array.from(document.querySelectorAll('.pm-edit-event-cb:checked')).map(cb => cb.dataset.eventId);
+  try {
+    await api('PUT', `/contractors/payments/${pid}/events`, {event_ids: eventIds});
+    toast('Classes updated!', 'success');
+    closeModal();
+    await openContractorDetail(_currentContractor.contractor.id);
+    _contractorTab = 'payments';
+    renderContractorDetail();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function escHtmlBB(s) {
