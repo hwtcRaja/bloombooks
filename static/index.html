@@ -5300,9 +5300,16 @@ function renderPayableEventsPicker(payable) {
   if (!payable.programs.length) {
     return `<div class="form-group" style="margin-top:8px"><div class="td-muted" style="font-size:13px">No paid instructional courses currently assigned to ${payable.volunteer_name} in RoleCall.</div></div>`;
   }
+  const allUnpaid = payable.programs.flatMap(p => p.events.filter(e => !e.already_paid));
+  const totalUnpaid = allUnpaid.reduce((s, e) => s + (e.suggested_amount || 0), 0);
   return `
     <div class="form-group" style="margin-top:8px">
       <label class="form-label">Apply to specific classes <span class="td-muted" style="font-weight:400">(checking boxes below can suggest an amount \u2014 doesn't change what actually gets recorded unless you click "Use suggested amount")</span></label>
+      ${allUnpaid.length ? `
+        <div style="display:flex;justify-content:space-between;align-items:center;background:#f8fafc;border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:10px">
+          <span style="font-size:13px"><strong>${allUnpaid.length}</strong> unpaid session${allUnpaid.length!==1?'s':''} \u2014 <strong>${fmtMoney(totalUnpaid)}</strong> outstanding</span>
+          <button type="button" class="btn btn-outline btn-sm" onclick="selectAllUnpaidSessions()">Select all unpaid</button>
+        </div>` : `<div class="td-muted" style="font-size:13px;margin-bottom:10px">Everything currently assigned to ${payable.volunteer_name} has been paid.</div>`}
       ${payable.programs.map(p => `
         <div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px 12px;margin-bottom:8px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -5320,6 +5327,11 @@ function renderPayableEventsPicker(payable) {
         </div>`).join('')}
       <div id="pm-suggested-total" style="font-size:12px;color:var(--ink3);margin-top:4px"></div>
     </div>`;
+}
+
+function selectAllUnpaidSessions() {
+  document.querySelectorAll('.pm-event-cb:not(:disabled)').forEach(cb => { cb.checked = true; });
+  updateSuggestedPaymentTotal();
 }
 
 function updateSuggestedPaymentTotal() {
