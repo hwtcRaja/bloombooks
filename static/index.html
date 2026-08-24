@@ -4813,6 +4813,9 @@ function renderContractorDocuments(tc) {
             <td class="td-muted">${d.filename || '—'}</td>
             <td class="td-muted">${fmtDate(d.uploaded_at)}</td>
             <td style="white-space:nowrap">
+              ${d.access_type === 'authenticated'
+                ? `<button class="btn btn-outline btn-sm" onclick="viewContractorDoc(${d.id})">View</button>`
+                : `<button class="btn btn-outline btn-sm" disabled title="This document was uploaded before in-browser preview was supported — download it instead">View</button>`}
               <button class="btn btn-outline btn-sm" onclick="downloadContractorDoc(${d.id})">Download</button>
               <button class="btn btn-outline btn-sm" onclick="deleteContractorDoc(${d.id})">Delete</button>
             </td>
@@ -5060,6 +5063,13 @@ async function uploadContractorDoc(input) {
 async function downloadContractorDoc(did) {
   try {
     const d = await api('GET', `/contractors/${_currentContractor.contractor.id}/documents/${did}/download`);
+    window.open(d.url, '_blank');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function viewContractorDoc(did) {
+  try {
+    const d = await api('GET', `/contractors/${_currentContractor.contractor.id}/documents/${did}/download?inline=1`);
     window.open(d.url, '_blank');
   } catch (e) { toast(e.message, 'error'); }
 }
