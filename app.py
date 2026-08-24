@@ -4019,43 +4019,71 @@ def delete_contractor_bank_account(cid, bid):
 @app.route('/api/contractors/<int:cid>/payable-events', methods=['GET'])
 def get_contractor_payable_events(cid):
     """Pulls the RoleCall volunteer linked to this contractor and shows their
-    paid-instruction programs, broken down by individual event/session —
-    whether time's actually been logged for each one, and whether it's
-    already been covered by a previous payment. RoleCall shares this same
-    database, so this queries its tables directly."""
+    paid-instruction programs, broken down by individual event/session — each
+    one's pay rate and suggested amount, and whether it's already been covered
+    by a previous payment. RoleCall shares this same database, so this queries
+    its tables directly. Session length comes from the program's own scheduled
+    meeting time (meeting_start_time/meeting_end_time) — RoleCall doesn't track
+    per-session instructor hours, so there's nothing to log or wait on.
+
+    Pass ?exclude_payment_id=<pid> when editing an existing payment's links:
+    that payment's own links won't count as "already paid" (so its checked
+    sessions show up editable, not locked), and each event includes whether
+    it's currently linked to that payment so the picker can pre-check it."""
     u, err = require_contractor_access()
     if err: return err
+    exclude_payment_id = request.args.get('exclude_payment_id', type=int)
     conn = get_db()
     vol = conn.execute('SELECT id, name FROM volunteers WHERE bb_contractor_id=%s', (cid,)).fetchone()
     if not vol:
         conn.close()
         return jsonify({'linked': False, 'programs': []})
-    programs = conn.execute('''SELECT id, name, instructor_expected_pay FROM youth_programs
+    programs = conn.execute('''SELECT id, name, instructor_expected_pay, pay_rate_type, pay_rate_amount,
+        meeting_start_time, meeting_end_time FROM youth_programs
         WHERE instructor_id=%s AND is_paid_instruction=TRUE ORDER BY start_date DESC NULLS LAST''',
         (vol['id'],)).fetchall()
+    already_linked_ids = set()
+    if exclude_payment_id:
+        rows = conn.execute('SELECT rolecall_event_id FROM bb_contractor_payment_events WHERE payment_id=%s',
+                             (exclude_payment_id,)).fetchall()
+        already_linked_ids = {r['rolecall_event_id'] for r in rows}
     result_programs = []
     for p in programs:
+        pay_rate_type = p.get('pay_rate_type') or 'hourly'
+        pay_rate_amount = float(p.get('pay_rate_amount') or 0)
+        session_hours = _pc_hours_between(p.get('meeting_start_time') or '', p.get('meeting_end_time') or '')
+        if pay_rate_type == 'per_class':
+            suggested_per_session = pay_rate_amount
+        else:
+            suggested_per_session = round(pay_rate_amount * session_hours, 2)
         events = conn.execute('''SELECT id, name, event_date FROM events
             WHERE program_id=%s ORDER BY event_date''', (p['id'],)).fetchall()
         event_list = []
         for e in events:
-            logged = conn.execute('''SELECT COALESCE(SUM(hours),0) as t FROM hours
-                WHERE event_id=%s AND volunteer_id=%s AND pay_type='paid_instruction' ''',
-                (e['id'], vol['id'])).fetchone()
-            logged_hours = float(logged['t']) if logged else 0.0
-            paid_row = conn.execute('''SELECT cp.amount FROM bb_contractor_payment_events cpe
+            paid_q = '''SELECT cp.amount FROM bb_contractor_payment_events cpe
                 JOIN bb_contractor_payments cp ON cp.id = cpe.payment_id
-                WHERE cpe.rolecall_event_id=%s AND cp.status != 'void' LIMIT 1''', (e['id'],)).fetchone()
+                WHERE cpe.rolecall_event_id=%s AND cp.status != 'void\''''
+            params = [e['id']]
+            if exclude_payment_id:
+                paid_q += ' AND cpe.payment_id != %s'
+                params.append(exclude_payment_id)
+            paid_q += ' LIMIT 1'
+            paid_row = conn.execute(paid_q, tuple(params)).fetchone()
             event_list.append({
                 'id': e['id'], 'name': e['name'], 'event_date': e['event_date'],
-                'logged_hours': round(logged_hours, 2),
-                'has_logged_time': logged_hours > 0,
+                'session_hours': round(session_hours, 2),
+                'suggested_amount': suggested_per_session,
                 'already_paid': bool(paid_row),
+                'linked_to_this_payment': e['id'] in already_linked_ids,
             })
         paid_event_count = sum(1 for e in event_list if e['already_paid'])
         result_programs.append({
             'program_id': p['id'], 'program_name': p['name'],
             'expected_pay': float(p['instructor_expected_pay'] or 0),
+            'pay_rate_type': pay_rate_type,
+            'pay_rate_amount': pay_rate_amount,
+            'session_hours': round(session_hours, 2),
+            'suggested_per_session': suggested_per_session,
             'events': event_list,
             'total_events': len(event_list),
             'paid_event_count': paid_event_count,
@@ -4063,6 +4091,29 @@ def get_contractor_payable_events(cid):
         })
     conn.close()
     return jsonify({'linked': True, 'volunteer_name': vol['name'], 'programs': result_programs})
+
+@app.route('/api/contractors/payments/<int:pid>/events', methods=['PUT'])
+def update_contractor_payment_events(pid):
+    """Edit which RoleCall classes an already-recorded payment is applied to,
+    without touching the amount, date, method, or anything else about the
+    payment itself. Fully replaces the linked set with whatever's passed."""
+    u, err = require_contractor_access()
+    if err: return err
+    data = request.json or {}
+    event_ids = data.get('event_ids') or []
+    conn = get_db()
+    pay = conn.execute('SELECT id, contractor_id, status FROM bb_contractor_payments WHERE id=%s', (pid,)).fetchone()
+    if not pay:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    if pay['status'] == 'void':
+        conn.close(); return jsonify({'error': 'This payment has been voided — class links can\'t be edited on a void payment'}), 400
+    conn.execute('DELETE FROM bb_contractor_payment_events WHERE payment_id=%s', (pid,))
+    for eid in event_ids:
+        if eid:
+            conn.execute('INSERT INTO bb_contractor_payment_events (payment_id, rolecall_event_id) VALUES (%s,%s)', (pid, eid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'edited_contractor_payment_classes', 'contractor', pay['contractor_id'], f"payment_id={pid} events={len(event_ids)}")
+    return jsonify({'ok': True})
 
 @app.route('/api/contractors/<int:cid>/payments', methods=['POST'])
 def add_contractor_payment(cid):
