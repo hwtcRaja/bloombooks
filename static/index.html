@@ -2169,8 +2169,8 @@ function renderProdTab() {
           <div class="form-row">
             <div class="form-group"><label class="form-label">Season</label>
               <input type="text" id="ps-season" class="form-input" value="${p.season}"></div>
-            <div class="form-group"><label class="form-label">Total budget</label>
-              <input type="number" id="ps-budget" class="form-input" value="${p.total_budget||0}" step="0.01" ${p.board_approved?'disabled':''}></div>
+            <div class="form-group"><label class="form-label">Total budget <span class="text-xs text-muted">(set via Budget Approval)</span></label>
+              <div class="form-input" style="background:var(--bg-subtle,#f8f8f8);display:flex;align-items:center">${fmtMoney(p.total_budget||0)}</div></div>
           </div>
           <div class="form-group"><label class="form-label">Category <span class="text-xs text-muted">(used for revenue forecasting)</span></label>
             <input type="text" id="ps-category" class="form-input" value="${p.category||''}" placeholder="e.g. RS, MS"></div>
@@ -2205,7 +2205,8 @@ let _allocRows = [];
 
 async function renderBudgetApprovalTab() {
   const p = _currentProd;
-  const canSet = ['admin','treasurer','president','resident_producer'].includes(currentUser.role);
+  const canSet = ['admin','treasurer','president','resident_producer'].includes(currentUser.role) || p.i_am_producer;
+  const canApprove = ['resident_producer','treasurer','president'].includes(currentUser.role);
   const tc = document.getElementById('prod-tab-content');
   tc.innerHTML = '<div class="text-xs text-muted">Loading budget approval…</div>';
 
@@ -2214,16 +2215,17 @@ async function renderBudgetApprovalTab() {
     tc.innerHTML = `
       <div class="card"><div class="card-body">
         <div class="text-xs text-muted fw-600 mb-8">BUDGET STATUS</div>
-        <div class="fw-600" style="font-size:20px">${fmtMoney(p.total_budget||0)} total</div>
-        <div class="text-xs text-muted mb-8">Hard costs ${fmtMoney(p.hard_costs_total||0)} · Remaining ${fmtMoney(remaining)}</div>
-        <span class="badge ${p.board_approved?'badge-approved':'badge-denied'}">${p.board_approved?'Board approved':'Awaiting board approval'}</span>
-        <p class="text-xs text-muted mt-12">Only the Resident Producer or an org officer can set hard costs or department allocations for this show.</p>
+        <div class="fw-600" style="font-size:20px">${p.board_approved ? fmtMoney(p.total_budget||0)+' total' : 'Not yet approved'}</div>
+        <div class="text-xs text-muted mb-8">Hard costs ${fmtMoney(p.hard_costs_total||0)}${p.board_approved?` · Remaining ${fmtMoney(remaining)}`:''}</div>
+        <span class="badge ${p.board_approved?'badge-approved':'badge-denied'}">${budgetStatusLabel(p)}</span>
+        <p class="text-xs text-muted mt-12">Only this show's Producers, the Resident Producer, or an org officer can set hard costs or department allocations for this show.</p>
       </div></div>`;
     return;
   }
 
   const locked = !!p.hard_costs_locked;
   const approved = !!p.board_approved;
+  const status = p.budget_approval_status || 'draft';
   const hardCostsTotal = p.hard_costs_total || 0;
   const remaining = (p.total_budget||0) - hardCostsTotal;
 
@@ -2238,11 +2240,11 @@ async function renderBudgetApprovalTab() {
         </div>` : ''}
         <div class="form-row">
           <div class="form-group"><label class="form-label">Total rehearsal hours / week</label>
-            <input type="number" id="ba-weekly-hrs" class="form-input" value="${p.rehearsal_weekly_hours||0}" step="0.25" min="0" ${locked?'disabled':''}></div>
+            <input type="number" id="ba-weekly-hrs" class="form-input" value="${p.rehearsal_weekly_hours||0}" step="0.25" min="0" ${locked||status==='pending_approval'?'disabled':''}></div>
           <div class="form-group"><label class="form-label">Weeks</label>
-            <input type="number" id="ba-weeks" class="form-input" value="${p.rehearsal_weeks||0}" step="1" min="0" ${locked?'disabled':''}></div>
+            <input type="number" id="ba-weeks" class="form-input" value="${p.rehearsal_weeks||0}" step="1" min="0" ${locked||status==='pending_approval'?'disabled':''}></div>
         </div>
-        ${!locked ? `<button class="btn btn-outline btn-sm" onclick="recalcStudioCharge(${p.id})">Recalculate charge</button>` : ''}
+        ${!locked && status!=='pending_approval' ? `<button class="btn btn-outline btn-sm" onclick="recalcStudioCharge(${p.id})">Recalculate charge</button>` : ''}
         <div class="text-sm mt-8">Studio charge: <span class="fw-600">${fmtMoney(p.studio_charge||0)}</span></div>
       </div></div>
 
@@ -2250,13 +2252,13 @@ async function renderBudgetApprovalTab() {
       <div class="card-body">
         <div class="form-row">
           <div class="form-group"><label class="form-label">License cost</label>
-            <input type="number" id="ba-license" class="form-input" value="${p.license_cost||0}" step="0.01" ${locked?'disabled':''}></div>
+            <input type="number" id="ba-license" class="form-input" value="${p.license_cost||0}" step="0.01" ${locked||status==='pending_approval'?'disabled':''}></div>
           <div class="form-group"><label class="form-label">Performance venue cost</label>
-            <input type="number" id="ba-venue" class="form-input" value="${p.venue_rate||0}" step="0.01" ${locked?'disabled':''}></div>
+            <input type="number" id="ba-venue" class="form-input" value="${p.venue_rate||0}" step="0.01" ${locked||status==='pending_approval'?'disabled':''}></div>
         </div>
         <div class="form-row">
           <div class="form-group"><label class="form-label">Estimated concessions</label>
-            <input type="number" id="ba-concessions" class="form-input" value="${p.est_concessions||0}" step="0.01" ${locked?'disabled':''}></div>
+            <input type="number" id="ba-concessions" class="form-input" value="${p.est_concessions||0}" step="0.01" ${locked||status==='pending_approval'?'disabled':''}></div>
           <div class="form-group">
             <label class="form-label">Enrollment revenue</label>
             ${p.rolecall_linked
@@ -2265,25 +2267,47 @@ async function renderBudgetApprovalTab() {
           </div>
         </div>
         <div class="text-xs text-muted mb-8">Estimated ticket sales (from RoleCall): <span class="fw-600">${fmtMoney(p.est_ticket_sales||0)}</span></div>
-        ${!locked ? `<button class="btn btn-outline btn-sm" onclick="saveHardCosts(${p.id})">Save hard costs</button>` : `<div class="text-xs text-muted">Hard costs are locked (board-approved).</div>`}
+        ${!locked && status!=='pending_approval' ? `<button class="btn btn-outline btn-sm" onclick="saveHardCosts(${p.id})">Save hard costs</button>` : (locked ? `<div class="text-xs text-muted">Hard costs are locked (board-approved).</div>` : `<div class="text-xs text-muted">Hard costs are locked while approval is pending.</div>`)}
         <div class="text-sm mt-8">Hard costs total (license + venue + studio charge): <span class="fw-600">${fmtMoney(hardCostsTotal)}</span></div>
       </div></div>
 
-    <div class="card mb-16"><div class="card-header"><span class="card-title">Total budget &amp; board approval</span></div>
+    <div class="card mb-16"><div class="card-header"><span class="card-title">Total budget &amp; approval</span></div>
       <div class="card-body">
-        <div class="form-group"><label class="form-label">Total budget (presented to board)</label>
-          <input type="number" id="ba-total" class="form-input" value="${p.total_budget||0}" step="0.01" ${approved?'disabled':''} oninput="updateRemainingBalancePreview(${p.id})"></div>
-        <div class="text-xs text-muted mb-8" id="ba-total-hint"></div>
-        <div class="text-sm mb-8" id="ba-remaining">Remaining balance for departments: <span class="fw-600">${fmtMoney(remaining)}</span></div>
-        ${approved
-          ? `<span class="badge badge-approved">Board approved${p.board_approved_at?` — ${fmtDate(p.board_approved_at)}`:''}</span>`
-          : `<button class="btn btn-primary btn-sm" onclick="boardApprove(${p.id})">Approve budget (board sign-off)</button>`}
+        <span class="badge ${approved?'badge-approved':(status==='pending_approval'?'badge-pending':'badge-denied')}">${budgetStatusLabel(p)}</span>
+
+        ${status==='sent_back' ? `
+        <div class="text-xs mt-12" style="background:#FEE2E2;border:1px solid #DC2626;border-radius:6px;padding:10px 12px;color:#991B1B">
+          <strong>Sent back${p.budget_sent_back_at?` on ${fmtDate(p.budget_sent_back_at)}`:''}:</strong> ${p.budget_sent_back_note||''}
+        </div>` : ''}
+
+        ${approved ? `
+        <div class="text-sm mt-12">Total budget: <span class="fw-600">${fmtMoney(p.total_budget||0)}</span>${p.board_approved_at?` — approved ${fmtDate(p.board_approved_at)}`:''}</div>
+        <div class="text-sm mt-4" id="ba-remaining">Remaining balance for departments: <span class="fw-600">${fmtMoney(remaining)}</span></div>
+        ` : ''}
+
+        ${(status==='draft' || status==='sent_back') && !approved ? `
+        <div class="text-xs text-muted mt-12" id="ba-total-hint">Loading suggested budget…</div>
+        <button class="btn btn-primary btn-sm mt-8" onclick="requestBudgetApproval(${p.id})" ${!hardCostsTotal?'disabled title="Save hard costs first"':''}>Request budget approval</button>
+        <div class="text-xs text-muted mt-8">Sends a request to the Resident Producer (or Treasurer/President) to set the total budget and approve. You can't set the overall total budget yourself.</div>
+        ` : ''}
+
+        ${status==='pending_approval' ? `
+        <div class="text-xs text-muted mt-12">Requested by ${p.budget_requested_by_name||'—'}${p.budget_requested_at?` on ${fmtDate(p.budget_requested_at)}`:''}</div>
+        ${canApprove ? `
+        <div class="form-group mt-12"><label class="form-label">Total budget to approve</label>
+          <input type="number" id="ba-approve-total" class="form-input" step="0.01" value="${p.total_budget||''}"></div>
+        <div class="flex" style="gap:8px">
+          <button class="btn btn-primary btn-sm" onclick="approveBudgetRequest(${p.id})">Approve</button>
+          <button class="btn btn-outline btn-sm" onclick="showSendBackBudgetModal(${p.id})">Send back for adjustments</button>
+        </div>
+        ` : `<div class="text-xs text-muted mt-8">Awaiting review from the Resident Producer, Treasurer, or President.</div>`}
+        ` : ''}
       </div></div>
 
     <div class="card"><div class="card-header"><span class="card-title">Department allocations</span></div>
       <div class="card-body">
         ${!approved
-          ? `<div class="text-xs text-muted">Board must approve the overall budget before allocating departments.</div>`
+          ? `<div class="text-xs text-muted">The budget must be approved before allocating departments.</div>`
           : `<div class="flex mb-12" style="gap:8px">
               <button class="btn btn-outline btn-sm" onclick="loadSuggestedAllocations(${p.id})">Use suggested split</button>
               <button class="btn btn-outline btn-sm" onclick="addAllocRow()">+ Add line</button>
@@ -2294,34 +2318,80 @@ async function renderBudgetApprovalTab() {
       </div></div>`;
 
   if (approved) { _allocRows = []; renderAllocRows(); }
-  else if (!p.total_budget) { loadSuggestedTotalBudget(p.id); }
+  else if (status==='draft' || status==='sent_back') { loadSuggestedTotalBudgetHint(p.id); }
 }
 
-function updateRemainingBalancePreview(pid) {
-  const p = _currentProd;
-  const total = parseFloat(document.getElementById('ba-total')?.value || 0);
-  const remaining = total - (p.hard_costs_total || 0);
-  const el = document.getElementById('ba-remaining');
-  if (el) el.innerHTML = `Remaining balance for departments: <span class="fw-600">${fmtMoney(remaining)}</span>`;
+function budgetStatusLabel(p) {
+  if (p.board_approved) return 'Approved';
+  const status = p.budget_approval_status || 'draft';
+  if (status === 'pending_approval') return 'Pending approval';
+  if (status === 'sent_back') return 'Sent back for adjustments';
+  return 'Not yet requested';
 }
 
-async function loadSuggestedTotalBudget(pid) {
+async function loadSuggestedTotalBudgetHint(pid) {
   try {
     const s = await api('GET', `/productions/${pid}/suggested-total-budget`);
     const hintEl = document.getElementById('ba-total-hint');
-    const totalEl = document.getElementById('ba-total');
-    if (!hintEl || !totalEl) return;
+    if (!hintEl) return;
     if (s.suggested_total_budget) {
-      totalEl.value = s.suggested_total_budget;
-      updateRemainingBalancePreview(pid);
       const parts = [];
       if (s.revenue_estimate) parts.push(`est. revenue ${fmtMoney(s.revenue_estimate)}`);
       if (s.comparable_avg_budget) parts.push(`avg of last ${s.comparable_basis.length} comparable show${s.comparable_basis.length!==1?'s':''} ${fmtMoney(s.comparable_avg_budget)}`);
-      hintEl.textContent = `Suggested from ${parts.join(' and ')} — edit as needed.`;
+      hintEl.textContent = `Suggested total budget: ${fmtMoney(s.suggested_total_budget)} (from ${parts.join(' and ')})`;
     } else if (s.note) {
       hintEl.textContent = s.note;
     }
   } catch(e) { /* suggestion is a nicety, fail quietly */ }
+}
+
+async function requestBudgetApproval(pid) {
+  try {
+    await api('POST', `/productions/${pid}/request-budget-approval`, {});
+    toast('Budget approval requested!', 'success');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(x=>x.id===pid);
+    renderBudgetApprovalTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function approveBudgetRequest(pid) {
+  const total_budget = parseFloat(document.getElementById('ba-approve-total').value||0);
+  if (!confirm(`Approve a total budget of ${fmtMoney(total_budget)} and lock in hard costs? This can't be undone from here.`)) return;
+  try {
+    await api('POST', `/productions/${pid}/board-approve`, {total_budget});
+    toast('Budget approved!', 'success');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(x=>x.id===pid);
+    renderBudgetApprovalTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function showSendBackBudgetModal(pid) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Send back for adjustments</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">What needs to change? <span class="req">*</span></label>
+        <textarea id="sb-note" class="form-textarea" placeholder="e.g. License cost looks too high, please double-check with the licensor"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doSendBackBudget(${pid})">Send back</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doSendBackBudget(pid) {
+  const note = document.getElementById('sb-note').value.trim();
+  if (!note) { toast('Please explain what needs to change', 'error'); return; }
+  try {
+    await api('POST', `/productions/${pid}/send-back-budget`, {note});
+    toast('Sent back for adjustments', 'success');
+    closeModal();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(x=>x.id===pid);
+    renderBudgetApprovalTab();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 async function recalcStudioCharge(pid) {
@@ -2343,18 +2413,6 @@ async function saveHardCosts(pid) {
   try {
     await api('PUT', `/productions/${pid}/hard-costs`, {license_cost, venue_rate, est_concessions});
     toast('Hard costs saved', 'success');
-    const prods = await api('GET', '/productions');
-    _currentProd = prods.find(x=>x.id===pid);
-    renderBudgetApprovalTab();
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-async function boardApprove(pid) {
-  const total_budget = parseFloat(document.getElementById('ba-total').value||0);
-  if (!confirm(`Lock in a total budget of ${fmtMoney(total_budget)} and hard costs? This can't be undone from here.`)) return;
-  try {
-    await api('POST', `/productions/${pid}/board-approve`, {total_budget});
-    toast('Budget approved!', 'success');
     const prods = await api('GET', '/productions');
     _currentProd = prods.find(x=>x.id===pid);
     renderBudgetApprovalTab();
@@ -2990,7 +3048,6 @@ async function saveProductionSettings(pid) {
   const data = {
     name: document.getElementById('ps-name').value.trim(),
     season: document.getElementById('ps-season').value.trim(),
-    total_budget: parseFloat(document.getElementById('ps-budget').value||0),
     category: document.getElementById('ps-category').value.trim(),
     description: document.getElementById('ps-desc').value.trim(),
     status: document.getElementById('ps-status').value,
