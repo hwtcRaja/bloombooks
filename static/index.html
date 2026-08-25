@@ -2046,8 +2046,8 @@ function renderProductionDetail() {
   const totalBudget = p.budgets.reduce((s,b)=>s+b.total_amount,0);
   const totalSpent  = p.total_spent||0;
   const pct = totalBudget>0?Math.min(100,(totalSpent/totalBudget)*100):0;
-  const tabs = ['departments','team','revenue','budget','settings'];
-  const tabLabels = {departments:'Departments', team:'Team', revenue:'Revenue', budget:'Budget Approval', settings:'Settings'};
+  const tabs = ['departments','team','revenue','budget','forecast','settings'];
+  const tabLabels = {departments:'Departments', team:'Team', revenue:'Revenue', budget:'Budget Approval', forecast:'Forecast', settings:'Settings'};
   document.getElementById('tb-title').textContent = p.name;
   document.getElementById('tb-actions').innerHTML = `<button class="btn btn-outline btn-sm" onclick="nav('productions')">← All productions</button>`;
   document.getElementById('content').innerHTML = `
@@ -2073,7 +2073,7 @@ function renderProductionDetail() {
 
 function switchProdTab(tab) {
   _prodTab = tab;
-  ['departments','team','revenue','budget','settings'].forEach(t => {
+  ['departments','team','revenue','budget','forecast','settings'].forEach(t => {
     const btn = document.getElementById(`tab-btn-${t}`);
     if (!btn) return;
     btn.style.fontWeight = t===tab?'600':'400';
@@ -2158,6 +2158,8 @@ function renderProdTab() {
     renderRevenueTab();
   } else if (_prodTab === 'budget') {
     renderBudgetApprovalTab();
+  } else if (_prodTab === 'forecast') {
+    renderForecastTab();
   } else {
     tc.innerHTML = `
       <div class="card"><div class="card-header"><span class="card-title">Production settings</span></div>
@@ -2420,6 +2422,84 @@ async function submitAllocations(pid) {
     renderProductionDetail();
   } catch(e) { toast(e.message, 'error'); }
 }
+
+async function renderForecastTab() {
+  const p = _currentProd;
+  const tc = document.getElementById('prod-tab-content');
+  tc.innerHTML = '<div class="text-xs text-muted">Loading forecast…</div>';
+
+  if (!p.category) {
+    tc.innerHTML = `<div class="card"><div class="card-body">
+      <div class="empty"><h3>No category set</h3><p>Set a category on this production's Settings tab (e.g. RS, MS) to compare it against similar past shows.</p></div>
+    </div></div>`;
+    return;
+  }
+
+  try {
+    const f = await api('GET', `/productions/${p.id}/revenue-forecast`);
+    const hasData = f.basis && f.basis.length > 0;
+    const grossAsk = p.total_budget || 0;
+    const netAsk = (f.forecasted_revenue != null) ? round2(grossAsk - f.forecasted_revenue) : null;
+
+    tc.innerHTML = `
+      <p class="text-sm text-muted mb-16">Based on the last ${f.basis.length} comparable "${p.category}" show${f.basis.length!==1?'s':''} — what they actually brought in, spent, and netted.</p>
+
+      ${!hasData ? `<div class="card mb-16"><div class="card-body"><div class="text-sm text-muted">${f.note}</div></div></div>` : `
+      <div class="card mb-16"><div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;text-align:center">
+          <div style="padding:12px;border-right:1px solid var(--border)">
+            <div class="text-xs text-muted mb-4">Avg. revenue</div>
+            <div class="fw-600" style="font-size:18px;color:var(--green)">${fmtMoney(f.forecasted_revenue)}</div>
+          </div>
+          <div style="padding:12px;border-right:1px solid var(--border)">
+            <div class="text-xs text-muted mb-4">Avg. expenses</div>
+            <div class="fw-600" style="font-size:18px;color:var(--red)">${fmtMoney(f.forecasted_expenses)}</div>
+          </div>
+          <div style="padding:12px">
+            <div class="text-xs text-muted mb-4">Avg. net</div>
+            <div class="fw-600" style="font-size:18px;color:${f.forecasted_net<0?'var(--red)':'var(--green)'}">${fmtMoney(f.forecasted_net)}</div>
+          </div>
+        </div>
+      </div></div>
+
+      <div class="card mb-16"><div class="card-header"><span class="card-title">Comparable shows</span></div>
+        <div class="card-body">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr class="text-xs text-muted" style="text-align:left">
+              <th style="padding:6px 8px">Show</th><th style="padding:6px 8px">Season</th>
+              <th style="padding:6px 8px;text-align:right">Revenue</th>
+              <th style="padding:6px 8px;text-align:right">Expenses</th>
+              <th style="padding:6px 8px;text-align:right">Net</th>
+            </tr></thead>
+            <tbody>
+              ${f.basis.map(b => `<tr style="border-top:1px solid var(--border)">
+                <td style="padding:6px 8px">${b.name}</td>
+                <td style="padding:6px 8px" class="text-muted">${b.season}</td>
+                <td style="padding:6px 8px;text-align:right">${fmtMoney(b.actual_revenue)}</td>
+                <td style="padding:6px 8px;text-align:right">${fmtMoney(b.actual_expenses)}</td>
+                <td style="padding:6px 8px;text-align:right;color:${b.net<0?'var(--red)':'var(--green)'}">${fmtMoney(b.net)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+          ${f.note ? `<div class="text-xs text-muted mt-8">${f.note}</div>` : ''}
+        </div></div>
+
+      <div class="card"><div class="card-header"><span class="card-title">What this show will likely need</span></div>
+        <div class="card-body">
+          <div class="text-sm mb-8">Gross ask <span class="text-xs text-muted">(this show's total budget)</span>: <span class="fw-600">${fmtMoney(grossAsk)}</span></div>
+          ${netAsk != null ? `
+          <div class="text-sm mb-8">Historically recouped in revenue: <span class="fw-600" style="color:var(--green)">${fmtMoney(f.forecasted_revenue)}</span></div>
+          <div class="text-sm" style="padding-top:8px;border-top:1px solid var(--border)">Net ask to the board <span class="text-xs text-muted">(gross ask minus typical revenue)</span>: <span class="fw-600" style="font-size:16px">${fmtMoney(netAsk)}</span></div>
+          <div class="text-xs text-muted mt-8">This is a planning number, not a guarantee — actual revenue for this show could come in above or below the historical average.</div>
+          ` : `<div class="text-xs text-muted">Not enough comparable shows yet to estimate a net ask.</div>`}
+        </div></div>
+      `}`;
+  } catch(e) {
+    tc.innerHTML = `<div class="card"><div class="card-body"><div class="text-sm" style="color:var(--red)">${e.message}</div></div></div>`;
+  }
+}
+
+function round2(n) { return Math.round(n * 100) / 100; }
 
 async function renderRevenueTab() {
   const p = _currentProd;
