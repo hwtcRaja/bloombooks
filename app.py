@@ -2844,7 +2844,10 @@ def create_allocations(pid):
 def get_revenue_forecast(pid):
     """Forecasted Revenue = average actual revenue of the last 3 completed
     productions in the same category (RS, MS, etc.) — distinct from Expected
-    Revenue, which is this show's own revenue-line entries."""
+    Revenue, which is this show's own revenue-line entries. Also returns each
+    comparable show's actual spend and net (revenue − spend), and the
+    resulting average — the basis for the Forecast tab's gross-ask-vs-net-ask
+    framing."""
     err = require_auth()
     if err: return err
     u = current_user()
@@ -2858,7 +2861,8 @@ def get_revenue_forecast(pid):
     category = prod.get('category')
     if not category:
         conn.close()
-        return jsonify({'forecasted_revenue': None, 'basis': [], 'note': 'This show has no category set, so there is nothing comparable to average.'})
+        return jsonify({'forecasted_revenue': None, 'forecasted_expenses': None, 'forecasted_net': None,
+                         'basis': [], 'note': 'This show has no category set, so there is nothing comparable to average.'})
     comps = conn.execute('''SELECT id, name, season FROM bb_productions
                             WHERE category=%s AND id!=%s ORDER BY id DESC LIMIT 3''', (category, pid)).fetchall()
     comps = [dict(c) for c in comps]
@@ -2869,10 +2873,17 @@ def get_revenue_forecast(pid):
         rc_line = rolecall_revenue_line(conn, c['id'])
         if rc_line:
             actual += rc_line['actual']
-        basis.append({'id': c['id'], 'name': c['name'], 'season': c['season'], 'actual_revenue': round(actual, 2)})
+        spent_row = conn.execute('SELECT COALESCE(SUM(spent),0) AS spent FROM bb_budgets WHERE production_id=%s', (c['id'],)).fetchone()
+        spent = round(spent_row['spent'] or 0, 2)
+        actual = round(actual, 2)
+        basis.append({'id': c['id'], 'name': c['name'], 'season': c['season'],
+                       'actual_revenue': actual, 'actual_expenses': spent, 'net': round(actual - spent, 2)})
     conn.close()
-    forecasted = round(sum(b['actual_revenue'] for b in basis) / len(basis), 2) if basis else None
-    return jsonify({'forecasted_revenue': forecasted, 'basis': basis,
+    forecasted_revenue = round(sum(b['actual_revenue'] for b in basis) / len(basis), 2) if basis else None
+    forecasted_expenses = round(sum(b['actual_expenses'] for b in basis) / len(basis), 2) if basis else None
+    forecasted_net = round(sum(b['net'] for b in basis) / len(basis), 2) if basis else None
+    return jsonify({'forecasted_revenue': forecasted_revenue, 'forecasted_expenses': forecasted_expenses,
+                     'forecasted_net': forecasted_net, 'basis': basis,
                      'note': None if len(basis) == 3 else f'Only {len(basis)} comparable show(s) on record — average may not be reliable yet.'})
 
 def _is_rising_stars_category(category):
