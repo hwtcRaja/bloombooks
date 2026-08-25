@@ -1987,6 +1987,48 @@ async function doBuildShow(licId) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+// ── Link an existing (manually-created) production to RoleCall ────────────────
+async function showLinkLicensingModal(pid) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Link to RoleCall</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm text-muted mb-12">Pick the approved-to-produce licensing request this production is for. This pulls in the rehearsal schedule and ticket-sales estimate the same way "Build show from RoleCall" does at creation time.</p>
+      <div id="ll-body"><div class="text-xs text-muted">Loading shows ready to link…</div></div>
+    </div>`;
+  showModal(html);
+  try {
+    const list = await api('GET', '/rolecall/licensing-requests/ready');
+    const items = (list && list.items) || [];
+    if (items.length === 0) {
+      document.getElementById('ll-body').innerHTML = `<div class="text-sm text-muted">No approved-to-produce shows are available to link right now.</div>`;
+      return;
+    }
+    document.getElementById('ll-body').innerHTML = items.map(it => `
+      <div class="card mb-12"><div class="card-body">
+        <div class="flex flex-center mb-8">
+          <div>
+            <div class="fw-600">${it.production_name}</div>
+            <div class="text-xs text-muted">${it.licensor||''}${it.venue_name?` · ${it.venue_name}`:''}${it.production_start_date?` · ${fmtDate(it.production_start_date)}`:''}</div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="doLinkLicensing(${pid}, '${it.id}')">Link this show</button>
+      </div></div>`).join('');
+  } catch(e) {
+    document.getElementById('ll-body').innerHTML = `<div class="text-sm" style="color:var(--red)">${e.message}</div>`;
+  }
+}
+
+async function doLinkLicensing(pid, licId) {
+  try {
+    await api('POST', `/productions/${pid}/link-licensing-request`, {licensing_request_id: licId});
+    toast('Linked! Rehearsal schedule pulled in.', 'success');
+    closeModal();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(x=>x.id===pid);
+    renderBudgetApprovalTab();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 // ── Production detail (tabbed) ────────────────────────────────────────────────
 let _currentProd = null;
 let _prodTab = 'departments';
@@ -2189,6 +2231,11 @@ async function renderBudgetApprovalTab() {
     <div class="card mb-16"><div class="card-header"><span class="card-title">Rehearsal &amp; studio charge</span></div>
       <div class="card-body">
         <p class="text-xs text-muted mb-12">Charges the show for studio use at cost, using the same $/hour rate as the Pricing Calculator. The weekly hours and week count come from RoleCall's rehearsal schedule when the show was approved to produce — adjust here if needed.</p>
+        ${!p.source_licensing_request_id && !locked ? `
+        <div class="text-xs mb-12" style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:10px 12px;color:#92400E">
+          This production wasn't created from RoleCall, so nothing's been pulled in automatically.
+          <button class="btn btn-outline btn-sm" style="margin-left:6px" onclick="showLinkLicensingModal(${p.id})">Link to RoleCall</button>
+        </div>` : ''}
         <div class="form-row">
           <div class="form-group"><label class="form-label">Total rehearsal hours / week</label>
             <input type="number" id="ba-weekly-hrs" class="form-input" value="${p.rehearsal_weekly_hours||0}" step="0.25" min="0" ${locked?'disabled':''}></div>
