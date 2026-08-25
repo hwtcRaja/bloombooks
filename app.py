@@ -2477,47 +2477,40 @@ SUGGESTED_DEPARTMENT_SPLIT = [
 
 import math
 
-def _rc_rehearsal_schedule(rc):
-    """Turn a licensing request's rehearsal fields into a weekly-hours total and
-    a week count, for the studio charge calc. Prefers rehearsal_blocks (supports
-    multiple day/time combinations, e.g. Sat 11-2 AND Thu 5-6:30) + the rehearsal
-    period date range; falls back to the older single-block fields for shows
-    approved before rehearsal_blocks existed."""
+def _rc_production_rehearsal_schedule(conn, rc_prod_id):
+    """Reads a RoleCall production's own rehearsal schedule — built out on the
+    production itself (Production detail → Schedule & Conflicts → Rehearsal
+    Schedule) after it's auto-created at Approve to Produce time. Each row in
+    production_sessions is one day/time block (e.g. Sat 11-2, or Thu 5-6:30);
+    weekly hours is the sum across all of them, and week count comes from the
+    overall date span the blocks cover."""
     weekly_hours = 0.0
     sessions_per_week = 0
-    try:
-        blocks = json.loads(rc.get('rehearsal_blocks') or '[]')
-    except Exception:
-        blocks = []
-    if isinstance(blocks, list) and blocks:
-        for b in blocks:
-            if not isinstance(b, dict):
-                continue
-            days = b.get('days') or []
-            hrs = _pc_hours_between(b.get('start_time') or '', b.get('end_time') or '')
-            sessions_per_week += len(days) if isinstance(days, list) else 0
-            weekly_hours += (len(days) if isinstance(days, list) else 0) * hrs
-    else:
-        try:
-            legacy_days = json.loads(rc.get('rehearsal_days') or '[]')
-        except Exception:
-            legacy_days = []
-        if isinstance(legacy_days, list) and legacy_days:
-            hrs = _pc_hours_between(rc.get('rehearsal_start_time') or '', rc.get('rehearsal_end_time') or '')
-            sessions_per_week = len(legacy_days)
-            weekly_hours = len(legacy_days) * hrs
-
-    period_start = rc.get('rehearsal_period_start')
-    period_end = rc.get('rehearsal_period_end')
     weeks = None
-    if period_start and period_end:
+    if not rc_prod_id:
+        return {'rehearsal_weekly_hours': 0.0, 'rehearsal_sessions_per_week': 0, 'rehearsal_weeks_computed': None}
+    try:
+        rows = conn.execute('''SELECT day_of_week, start_time, end_time, start_date, end_date
+                               FROM production_sessions WHERE production_id=%s''', (rc_prod_id,)).fetchall()
+    except Exception:
+        rows = []
+    dates = []
+    for r in rows:
+        r = dict(r)
+        if r.get('day_of_week'):
+            sessions_per_week += 1
+        hrs = _pc_hours_between(r.get('start_time') or '', r.get('end_time') or '')
+        weekly_hours += hrs
+        if r.get('start_date'):
+            dates.append(r['start_date'])
+        if r.get('end_date'):
+            dates.append(r['end_date'])
+    if dates:
         try:
-            sd = period_start if isinstance(period_start, date) else datetime.strptime(str(period_start), '%Y-%m-%d').date()
-            ed = period_end if isinstance(period_end, date) else datetime.strptime(str(period_end), '%Y-%m-%d').date()
-            weeks = max(1, math.ceil((ed - sd).days / 7))
+            parsed = [d if isinstance(d, date) else datetime.strptime(str(d), '%Y-%m-%d').date() for d in dates]
+            weeks = max(1, math.ceil((max(parsed) - min(parsed)).days / 7))
         except Exception:
             weeks = None
-
     return {
         'rehearsal_weekly_hours': round(weekly_hours, 2),
         'rehearsal_sessions_per_week': sessions_per_week,
@@ -2544,9 +2537,7 @@ def list_ready_licensing_requests():
         rows = conn.execute('''SELECT id, production_id, production_name, production_type,
                                        licensor, venue_name, audience_capacity, number_of_shows,
                                        average_ticket_price_cents, production_start_date, production_end_date,
-                                       approved_to_produce_date, approved_to_produce_by,
-                                       rehearsal_blocks, rehearsal_period_start, rehearsal_period_end,
-                                       rehearsal_days, rehearsal_start_time, rehearsal_end_time
+                                       approved_to_produce_date, approved_to_produce_by
                                FROM licensing_requests
                                WHERE contract_received=TRUE AND approved_to_produce=TRUE
                                  AND COALESCE(built_in_bloombooks,FALSE)=FALSE
@@ -2555,7 +2546,7 @@ def list_ready_licensing_requests():
         for r in rows:
             r = dict(r)
             r['estimated_ticket_sales'] = _rc_row_to_estimate(r)
-            sched = _rc_rehearsal_schedule(r)
+            sched = _rc_production_rehearsal_schedule(conn, r.get('production_id'))
             r.update(sched)
             items.append(r)
     except Exception as e:
@@ -2567,25 +2558,13 @@ def list_ready_licensing_requests():
 
 def _pull_rehearsal_and_estimate_from_licensing(conn, rc, requested_weeks=None):
     """Shared by Build Show and the retroactive link-existing-production
-    endpoint: computes weekly rehearsal hours + week count (from the
-    licensing request's captured blocks/period, falling back to the linked
-    RoleCall production's meeting schedule) and the ticket-sales estimate."""
+    endpoint: computes weekly rehearsal hours + week count from the linked
+    RoleCall production's own rehearsal schedule, and the ticket-sales
+    estimate from the licensing request."""
     rc_prod_id = rc.get('production_id')
-    sched = _rc_rehearsal_schedule(rc)
+    sched = _rc_production_rehearsal_schedule(conn, rc_prod_id)
     weekly_hours = sched['rehearsal_weekly_hours']
     sessions_per_week = sched['rehearsal_sessions_per_week']
-    if not weekly_hours and rc_prod_id:
-        try:
-            rp = conn.execute('''SELECT meeting_days, meeting_start_time, meeting_end_time
-                                 FROM productions WHERE id=%s''', (rc_prod_id,)).fetchone()
-            if rp:
-                rp = dict(rp)
-                days = json.loads(rp.get('meeting_days') or '[]')
-                sessions_per_week = len(days) if isinstance(days, list) else 0
-                hrs = _pc_hours_between(rp.get('meeting_start_time') or '', rp.get('meeting_end_time') or '')
-                weekly_hours = sessions_per_week * hrs
-        except Exception as e:
-            app.logger.warning(f'RoleCall rehearsal schedule read failed for {rc_prod_id}: {e}')
     rehearsal_weeks = float(requested_weeks or sched['rehearsal_weeks_computed'] or 8)
     avg_hours_per_session = round(weekly_hours / sessions_per_week, 2) if sessions_per_week else 0
     return {
