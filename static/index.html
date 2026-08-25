@@ -1919,7 +1919,7 @@ async function showBuildShowModal() {
   const html = `
     <div class="modal-header"><span class="modal-title">Build show from RoleCall</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <p class="text-sm text-muted mb-12">Shows appear here once RoleCall has a signed contract on file <em>and</em> the board has approved moving forward. Ticket-price estimates and the rehearsal schedule set at approval time copy over automatically — License Cost, Venue Rate, and other hard costs you set here.</p>
+      <p class="text-sm text-muted mb-12">Shows appear here once RoleCall has a signed contract on file <em>and</em> the board has approved moving forward — approving automatically creates the RoleCall production. Ticket-price estimates and the rehearsal schedule built out on that production copy over automatically — License Cost, Venue Rate, and other hard costs you set here.</p>
       <div id="bs-body"><div class="text-xs text-muted">Loading shows ready to build from RoleCall…</div></div>
     </div>`;
   showModal(html);
@@ -1931,11 +1931,7 @@ async function showBuildShowModal() {
       return;
     }
     document.getElementById('bs-body').innerHTML = items.map(it => {
-      let blocks = [];
-      try { blocks = JSON.parse(it.rehearsal_blocks || '[]'); } catch(e) {}
       const hasSchedule = it.rehearsal_weekly_hours > 0;
-      const blockLines = blocks.map(b => `${(b.days||[]).join('/')} ${b.start_time}\u2013${b.end_time}`).join(', ');
-      const period = it.rehearsal_period_start ? `${it.rehearsal_period_start} \u2013 ${it.rehearsal_period_end}` : '';
       const computedWeeks = it.rehearsal_weeks_computed || 8;
       return `
       <div class="card mb-12"><div class="card-body">
@@ -1951,8 +1947,8 @@ async function showBuildShowModal() {
         </div>
         <div class="text-xs mb-8" style="color:${hasSchedule?'var(--ink3)':'var(--red)'}">
           ${hasSchedule
-            ? `Rehearsals: ${blockLines} (${it.rehearsal_weekly_hours} hrs/week)${period?' · '+period:''}`
-            : `No rehearsal schedule on file — set one in RoleCall before building, or the studio charge will come in at $0.`}
+            ? `Rehearsals: ${it.rehearsal_sessions_per_week} block${it.rehearsal_sessions_per_week!==1?'s':''}/week (${it.rehearsal_weekly_hours} hrs/week)`
+            : `No rehearsal schedule built out yet — add time blocks on the production in RoleCall (Schedule &amp; Conflicts tab) before building, or the studio charge will come in at $0.`}
         </div>
         <div class="form-row">
           <div class="form-group"><label class="form-label">Season <span class="req">*</span></label>
@@ -1960,7 +1956,7 @@ async function showBuildShowModal() {
           <div class="form-group"><label class="form-label">Category</label>
             <input type="text" id="bs-category-${it.id}" class="form-input" placeholder="e.g. RS, MS"></div>
         </div>
-        <div class="form-group"><label class="form-label">Rehearsal weeks <span class="text-xs text-muted">${it.rehearsal_weeks_computed?'(from the rehearsal period dates \u2014 adjust if needed)':'(RoleCall has no date range on file for this show, so this is a guess \u2014 set one)'}</span></label>
+        <div class="form-group"><label class="form-label">Rehearsal weeks <span class="text-xs text-muted">${it.rehearsal_weeks_computed?'(from the rehearsal schedule\u2019s date range \u2014 adjust if needed)':'(RoleCall has no date range on the schedule yet, so this is a guess \u2014 set one)'}</span></label>
           <input type="number" id="bs-weeks-${it.id}" class="form-input" value="${computedWeeks}" step="1" min="1"></div>
         <button class="btn btn-primary btn-sm" onclick="doBuildShow('${it.id}')">Build this show</button>
       </div></div>`;
@@ -2230,7 +2226,7 @@ async function renderBudgetApprovalTab() {
   tc.innerHTML = `
     <div class="card mb-16"><div class="card-header"><span class="card-title">Rehearsal &amp; studio charge</span></div>
       <div class="card-body">
-        <p class="text-xs text-muted mb-12">Charges the show for studio use at cost, using the same $/hour rate as the Pricing Calculator. The weekly hours and week count come from RoleCall's rehearsal schedule when the show was approved to produce — adjust here if needed.</p>
+        <p class="text-xs text-muted mb-12">Charges the show for studio use at cost, using the same $/hour rate as the Pricing Calculator. The weekly hours and week count come from the rehearsal schedule built out on the production in RoleCall — adjust here if needed.</p>
         ${!p.source_licensing_request_id && !locked ? `
         <div class="text-xs mb-12" style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:10px 12px;color:#92400E">
           This production wasn't created from RoleCall, so nothing's been pulled in automatically.
