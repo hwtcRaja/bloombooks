@@ -2565,6 +2565,38 @@ def list_ready_licensing_requests():
     conn.close()
     return jsonify({'items': items})
 
+def _pull_rehearsal_and_estimate_from_licensing(conn, rc, requested_weeks=None):
+    """Shared by Build Show and the retroactive link-existing-production
+    endpoint: computes weekly rehearsal hours + week count (from the
+    licensing request's captured blocks/period, falling back to the linked
+    RoleCall production's meeting schedule) and the ticket-sales estimate."""
+    rc_prod_id = rc.get('production_id')
+    sched = _rc_rehearsal_schedule(rc)
+    weekly_hours = sched['rehearsal_weekly_hours']
+    sessions_per_week = sched['rehearsal_sessions_per_week']
+    if not weekly_hours and rc_prod_id:
+        try:
+            rp = conn.execute('''SELECT meeting_days, meeting_start_time, meeting_end_time
+                                 FROM productions WHERE id=%s''', (rc_prod_id,)).fetchone()
+            if rp:
+                rp = dict(rp)
+                days = json.loads(rp.get('meeting_days') or '[]')
+                sessions_per_week = len(days) if isinstance(days, list) else 0
+                hrs = _pc_hours_between(rp.get('meeting_start_time') or '', rp.get('meeting_end_time') or '')
+                weekly_hours = sessions_per_week * hrs
+        except Exception as e:
+            app.logger.warning(f'RoleCall rehearsal schedule read failed for {rc_prod_id}: {e}')
+    rehearsal_weeks = float(requested_weeks or sched['rehearsal_weeks_computed'] or 8)
+    avg_hours_per_session = round(weekly_hours / sessions_per_week, 2) if sessions_per_week else 0
+    return {
+        'rc_prod_id': rc_prod_id,
+        'weekly_hours': weekly_hours,
+        'sessions_per_week': sessions_per_week,
+        'avg_hours_per_session': avg_hours_per_session,
+        'rehearsal_weeks': rehearsal_weeks,
+        'est_ticket_sales': _rc_row_to_estimate(rc),
+    }
+
 @app.route('/api/productions/build-from-licensing', methods=['POST'])
 def build_production_from_licensing():
     """Create a BloomBooks production from an approved-to-produce RoleCall
@@ -2592,32 +2624,9 @@ def build_production_from_licensing():
         conn.close()
         return jsonify({'error': 'Licensing request not found, not yet approved to produce, or already built'}), 404
     rc = dict(rc)
-    rc_prod_id = rc.get('production_id')
 
-    # Rehearsal schedule: computed from the blocks + date range captured on the
-    # licensing request at approve-to-produce time (falls back to the older
-    # single-block fields, or the linked RoleCall production's meeting schedule,
-    # for shows approved before that capture step existed).
-    sched = _rc_rehearsal_schedule(rc)
-    weekly_hours = sched['rehearsal_weekly_hours']
-    sessions_per_week = sched['rehearsal_sessions_per_week']
-    if not weekly_hours and rc_prod_id:
-        try:
-            rp = conn.execute('''SELECT meeting_days, meeting_start_time, meeting_end_time
-                                 FROM productions WHERE id=%s''', (rc_prod_id,)).fetchone()
-            if rp:
-                rp = dict(rp)
-                days = json.loads(rp.get('meeting_days') or '[]')
-                sessions_per_week = len(days) if isinstance(days, list) else 0
-                hrs = _pc_hours_between(rp.get('meeting_start_time') or '', rp.get('meeting_end_time') or '')
-                weekly_hours = sessions_per_week * hrs
-        except Exception as e:
-            app.logger.warning(f'RoleCall rehearsal schedule read failed for {rc_prod_id}: {e}')
-
-    rehearsal_weeks = float(data.get('rehearsal_weeks') or sched['rehearsal_weeks_computed'] or 8)
-    studio = _compute_studio_charge(conn, weekly_hours, rehearsal_weeks)
-    est_ticket_sales = _rc_row_to_estimate(rc)
-    avg_hours_per_session = round(weekly_hours / sessions_per_week, 2) if sessions_per_week else 0
+    pulled = _pull_rehearsal_and_estimate_from_licensing(conn, rc, data.get('rehearsal_weeks'))
+    studio = _compute_studio_charge(conn, pulled['weekly_hours'], pulled['rehearsal_weeks'])
 
     conn.execute('''INSERT INTO bb_productions
             (name, season, description, total_budget, status, category,
@@ -2626,9 +2635,9 @@ def build_production_from_licensing():
              rehearsal_hours_per_session, rehearsal_weekly_hours, studio_charge)
         VALUES (%s,%s,%s,0,'active',%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
         (rc['production_name'], season, f"Built from RoleCall licensing request {rc.get('ref_number','')}",
-         category or None, lic_id, rc_prod_id,
-         est_ticket_sales, sessions_per_week, rehearsal_weeks,
-         avg_hours_per_session, weekly_hours, studio['studio_charge']))
+         category or None, lic_id, pulled['rc_prod_id'],
+         pulled['est_ticket_sales'], pulled['sessions_per_week'], pulled['rehearsal_weeks'],
+         pulled['avg_hours_per_session'], pulled['weekly_hours'], studio['studio_charge']))
     row = conn.execute('SELECT id FROM bb_productions WHERE source_licensing_request_id=%s ORDER BY id DESC LIMIT 1',
                         (lic_id,)).fetchone()
     prod_id = row['id']
@@ -2645,7 +2654,61 @@ def build_production_from_licensing():
 
     conn.commit(); conn.close()
     log_action(u['id'], 'built_show_from_licensing', 'production', prod_id, rc['production_name'])
-    return jsonify({'ok': True, 'id': prod_id, 'studio_charge': studio, 'estimated_ticket_sales': est_ticket_sales})
+    return jsonify({'ok': True, 'id': prod_id, 'studio_charge': studio, 'estimated_ticket_sales': pulled['est_ticket_sales']})
+
+@app.route('/api/productions/<int:pid>/link-licensing-request', methods=['POST'])
+def link_production_to_licensing(pid):
+    """Retroactively link a production that was created through the plain
+    '+ New production' button (so it was never tied to RoleCall) to an
+    approved-to-produce licensing request, pulling in the same rehearsal
+    schedule and ticket-sales estimate Build Show pulls in at creation time."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    u = current_user()
+    data = request.json or {}
+    lic_id = data.get('licensing_request_id')
+    if not lic_id:
+        return jsonify({'error': 'licensing_request_id is required'}), 400
+
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    if prod.get('source_licensing_request_id'):
+        conn.close()
+        return jsonify({'error': 'This production is already linked to a RoleCall licensing request'}), 400
+    if prod.get('hard_costs_locked'):
+        conn.close()
+        return jsonify({'error': 'Hard costs are already locked for this production'}), 409
+
+    rc = conn.execute('''SELECT * FROM licensing_requests WHERE id=%s
+                         AND contract_received=TRUE AND approved_to_produce=TRUE
+                         AND COALESCE(built_in_bloombooks,FALSE)=FALSE''', (lic_id,)).fetchone()
+    if not rc:
+        conn.close()
+        return jsonify({'error': 'Licensing request not found, not yet approved to produce, or already linked to another production'}), 404
+    rc = dict(rc)
+
+    pulled = _pull_rehearsal_and_estimate_from_licensing(conn, rc, data.get('rehearsal_weeks') or prod.get('rehearsal_weeks'))
+    studio = _compute_studio_charge(conn, pulled['weekly_hours'], pulled['rehearsal_weeks'])
+
+    conn.execute('''UPDATE bb_productions SET source_licensing_request_id=%s, source_rc_production_id=%s,
+        est_ticket_sales=%s, rehearsals_per_week=%s, rehearsal_weeks=%s,
+        rehearsal_hours_per_session=%s, rehearsal_weekly_hours=%s, studio_charge=%s
+        WHERE id=%s''',
+        (lic_id, pulled['rc_prod_id'], pulled['est_ticket_sales'], pulled['sessions_per_week'],
+         pulled['rehearsal_weeks'], pulled['avg_hours_per_session'], pulled['weekly_hours'],
+         studio['studio_charge'], pid))
+
+    try:
+        conn.execute("UPDATE licensing_requests SET built_in_bloombooks=TRUE WHERE id=%s", (lic_id,))
+    except Exception as e:
+        app.logger.warning(f'Could not flag licensing_request {lic_id} as built: {e}')
+
+    conn.commit(); conn.close()
+    log_action(u['id'], 'linked_production_to_licensing', 'production', pid, rc['production_name'])
+    return jsonify({'ok': True, 'studio_charge': studio, 'estimated_ticket_sales': pulled['est_ticket_sales']})
 
 @app.route('/api/productions/<int:pid>/rehearsal-schedule', methods=['PUT'])
 def update_rehearsal_schedule(pid):
