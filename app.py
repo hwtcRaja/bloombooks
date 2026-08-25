@@ -3785,9 +3785,19 @@ def get_contractor(cid):
     if payments:
         conn2 = get_db()
         for p in payments:
-            linked = conn2.execute('''SELECT e.name, e.event_date FROM bb_contractor_payment_events cpe
-                JOIN events e ON e.id = cpe.rolecall_event_id
-                WHERE cpe.payment_id=%s ORDER BY e.event_date''', (p['id'],)).fetchall()
+            # rolecall_event_id may point to a real `events` row, or a synthetic
+            # 'session_<program_sessions.id>' id for a registered class session
+            # that never got a real calendar event created for it (see
+            # get_contractor_payable_events) — resolve both.
+            linked = conn2.execute('''
+                SELECT e.name, e.event_date FROM bb_contractor_payment_events cpe
+                    JOIN events e ON e.id = cpe.rolecall_event_id
+                    WHERE cpe.payment_id=%s
+                UNION ALL
+                SELECT ps.name, ps.start_date AS event_date FROM bb_contractor_payment_events cpe
+                    JOIN program_sessions ps ON 'session_' || ps.id = cpe.rolecall_event_id
+                    WHERE cpe.payment_id=%s
+                ORDER BY event_date''', (p['id'], p['id'])).fetchall()
             p['linked_classes'] = [dict(l) for l in linked]
         conn2.close()
     return jsonify({
@@ -4058,6 +4068,27 @@ def get_contractor_payable_events(cid):
             suggested_per_session = round(pay_rate_amount * session_hours, 2)
         events = conn.execute('''SELECT id, name, event_date FROM events
             WHERE program_id=%s ORDER BY event_date''', (p['id'],)).fetchall()
+        events = [dict(e) for e in events]
+        # Registered class sessions don't always get a real `events` row —
+        # RoleCall only creates one when someone confirms it for hour-logging/
+        # ELIC/staffing purposes, to avoid flooding the calendar with a bulk-
+        # imported schedule's worth of unconfirmed slots. A session with an
+        # active (non-cancelled/waitlisted) registrant is still a real class
+        # that happened and should be payable, even with no real event yet —
+        # so pull those in too, using the same synthetic 'session_<id>' id
+        # RoleCall's own calendar merge uses, and skip any that already have
+        # a real linked event (that real event is the one already listed above).
+        sessions = conn.execute('''SELECT ps.id, ps.name, ps.start_date FROM program_sessions ps
+            WHERE ps.program_id=%s AND ps.start_date IS NOT NULL AND ps.start_date != ''
+            AND EXISTS (SELECT 1 FROM program_registrations pr
+                WHERE pr.program_id=ps.program_id
+                AND pr.session_ids LIKE '%%"' || ps.id || '"%%'
+                AND pr.status NOT IN ('cancelled','waitlisted'))
+            AND NOT EXISTS (SELECT 1 FROM events e3 WHERE e3.linked_session_id=ps.id)
+            ORDER BY ps.start_date''', (p['id'],)).fetchall()
+        for s in sessions:
+            events.append({'id': 'session_' + s['id'], 'name': s['name'] or 'Session', 'event_date': s['start_date']})
+        events.sort(key=lambda e: e['event_date'] or '')
         event_list = []
         for e in events:
             paid_q = '''SELECT cp.amount FROM bb_contractor_payment_events cpe
