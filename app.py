@@ -2635,6 +2635,109 @@ def build_production_from_licensing():
     log_action(u['id'], 'built_show_from_licensing', 'production', prod_id, rc['production_name'])
     return jsonify({'ok': True, 'id': prod_id, 'studio_charge': studio, 'estimated_ticket_sales': pulled['est_ticket_sales']})
 
+@app.route('/api/rolecall/productions/available', methods=['GET'])
+def list_available_rc_productions():
+    """RoleCall productions not yet linked to any BloomBooks production —
+    covers shows that never go through a licensing request at all, like
+    Rising Stars (created directly in RoleCall), so they can still be built
+    or linked here even without an approved-to-produce licensing request."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    conn = get_db()
+    try:
+        linked_ids = [r['source_rc_production_id'] for r in
+                      conn.execute('SELECT source_rc_production_id FROM bb_productions WHERE source_rc_production_id IS NOT NULL').fetchall()]
+        rows = conn.execute('''SELECT id, name, production_type, stage, start_date, end_date, status
+                               FROM productions ORDER BY start_date DESC NULLS LAST''').fetchall()
+        items = []
+        for r in rows:
+            r = dict(r)
+            if r['id'] in linked_ids:
+                continue
+            sched = _rc_production_rehearsal_schedule(conn, r['id'])
+            r.update(sched)
+            items.append(r)
+    except Exception as e:
+        conn.close()
+        app.logger.warning(f'RoleCall available-productions read failed: {e}')
+        return jsonify({'error': 'Could not reach RoleCall data', 'items': []}), 200
+    conn.close()
+    return jsonify({'items': items})
+
+def _pull_rehearsal_from_rc_production(conn, rc_prod_id, requested_weeks=None):
+    """Same idea as _pull_rehearsal_and_estimate_from_licensing, for a
+    RoleCall production with no licensing request behind it (e.g. Rising
+    Stars) — no ticket-sales estimate is possible without a licensing
+    request's ticket-price/capacity fields, so that comes back as 0."""
+    sched = _rc_production_rehearsal_schedule(conn, rc_prod_id)
+    weekly_hours = sched['rehearsal_weekly_hours']
+    sessions_per_week = sched['rehearsal_sessions_per_week']
+    rehearsal_weeks = float(requested_weeks or sched['rehearsal_weeks_computed'] or 8)
+    avg_hours_per_session = round(weekly_hours / sessions_per_week, 2) if sessions_per_week else 0
+    return {
+        'rc_prod_id': rc_prod_id,
+        'weekly_hours': weekly_hours,
+        'sessions_per_week': sessions_per_week,
+        'avg_hours_per_session': avg_hours_per_session,
+        'rehearsal_weeks': rehearsal_weeks,
+        'est_ticket_sales': 0,
+    }
+
+@app.route('/api/productions/build-from-rc-production', methods=['POST'])
+def build_production_from_rc_production():
+    """Create a BloomBooks production directly from a RoleCall production
+    that has no licensing request behind it — Rising Stars shows and any
+    other production created straight in RoleCall. Pulls the rehearsal
+    schedule the same way Build Show does; License Cost, Venue Rate,
+    Concessions, and Enrollment are still filled in by hand, same as always."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    u = current_user()
+    data = request.json or {}
+    rc_prod_id = data.get('rc_production_id')
+    if not rc_prod_id:
+        return jsonify({'error': 'rc_production_id is required'}), 400
+    category = (data.get('category') or '').strip()
+    season = (data.get('season') or '').strip()
+    if not season:
+        return jsonify({'error': 'Season is required'}), 400
+
+    conn = get_db()
+    already = conn.execute('SELECT id FROM bb_productions WHERE source_rc_production_id=%s', (rc_prod_id,)).fetchone()
+    if already:
+        conn.close()
+        return jsonify({'error': 'This RoleCall production is already linked to a BloomBooks production'}), 400
+    rc_prod = conn.execute('SELECT * FROM productions WHERE id=%s', (rc_prod_id,)).fetchone()
+    if not rc_prod:
+        conn.close()
+        return jsonify({'error': 'RoleCall production not found'}), 404
+    rc_prod = dict(rc_prod)
+
+    pulled = _pull_rehearsal_from_rc_production(conn, rc_prod_id, data.get('rehearsal_weeks'))
+    studio = _compute_studio_charge(conn, pulled['weekly_hours'], pulled['rehearsal_weeks'])
+
+    conn.execute('''INSERT INTO bb_productions
+            (name, season, description, total_budget, status, category,
+             source_rc_production_id,
+             est_ticket_sales, rehearsals_per_week, rehearsal_weeks,
+             rehearsal_hours_per_session, rehearsal_weekly_hours, studio_charge)
+        VALUES (%s,%s,%s,0,'active',%s,%s,%s,%s,%s,%s,%s,%s)''',
+        (rc_prod['name'], season, f"Built from RoleCall production {rc_prod['name']}",
+         category or None, rc_prod_id,
+         pulled['est_ticket_sales'], pulled['sessions_per_week'], pulled['rehearsal_weeks'],
+         pulled['avg_hours_per_session'], pulled['weekly_hours'], studio['studio_charge']))
+    row = conn.execute('SELECT id FROM bb_productions WHERE source_rc_production_id=%s ORDER BY id DESC LIMIT 1',
+                        (rc_prod_id,)).fetchone()
+    prod_id = row['id']
+
+    if data.get('add_me_as_resident_producer', True) and u['role'] == 'resident_producer':
+        conn.execute('INSERT INTO bb_production_members (production_id,user_id,member_role) VALUES (%s,%s,%s)',
+                     (prod_id, u['id'], 'resident_producer'))
+
+    conn.commit(); conn.close()
+    log_action(u['id'], 'built_show_from_rc_production', 'production', prod_id, rc_prod['name'])
+    return jsonify({'ok': True, 'id': prod_id, 'studio_charge': studio})
+
 @app.route('/api/productions/<int:pid>/link-licensing-request', methods=['POST'])
 def link_production_to_licensing(pid):
     """Retroactively link a production that was created through the plain
@@ -2688,6 +2791,56 @@ def link_production_to_licensing(pid):
     conn.commit(); conn.close()
     log_action(u['id'], 'linked_production_to_licensing', 'production', pid, rc['production_name'])
     return jsonify({'ok': True, 'studio_charge': studio, 'estimated_ticket_sales': pulled['est_ticket_sales']})
+
+@app.route('/api/productions/<int:pid>/link-rc-production', methods=['POST'])
+def link_production_to_rc_production(pid):
+    """Retroactively link a production made via '+ New production' straight
+    to a RoleCall production with no licensing request behind it (Rising
+    Stars, or anything else created directly in RoleCall), pulling in its
+    rehearsal schedule."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    u = current_user()
+    data = request.json or {}
+    rc_prod_id = data.get('rc_production_id')
+    if not rc_prod_id:
+        return jsonify({'error': 'rc_production_id is required'}), 400
+
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    if prod.get('source_rc_production_id') or prod.get('source_licensing_request_id'):
+        conn.close()
+        return jsonify({'error': 'This production is already linked to RoleCall'}), 400
+    if prod.get('hard_costs_locked'):
+        conn.close()
+        return jsonify({'error': 'Hard costs are already locked for this production'}), 409
+
+    already = conn.execute('SELECT id FROM bb_productions WHERE source_rc_production_id=%s', (rc_prod_id,)).fetchone()
+    if already:
+        conn.close()
+        return jsonify({'error': 'That RoleCall production is already linked to another BloomBooks production'}), 400
+    rc_prod = conn.execute('SELECT * FROM productions WHERE id=%s', (rc_prod_id,)).fetchone()
+    if not rc_prod:
+        conn.close()
+        return jsonify({'error': 'RoleCall production not found'}), 404
+    rc_prod = dict(rc_prod)
+
+    pulled = _pull_rehearsal_from_rc_production(conn, rc_prod_id, data.get('rehearsal_weeks') or prod.get('rehearsal_weeks'))
+    studio = _compute_studio_charge(conn, pulled['weekly_hours'], pulled['rehearsal_weeks'])
+
+    conn.execute('''UPDATE bb_productions SET source_rc_production_id=%s,
+        rehearsals_per_week=%s, rehearsal_weeks=%s,
+        rehearsal_hours_per_session=%s, rehearsal_weekly_hours=%s, studio_charge=%s
+        WHERE id=%s''',
+        (rc_prod_id, pulled['sessions_per_week'], pulled['rehearsal_weeks'],
+         pulled['avg_hours_per_session'], pulled['weekly_hours'], studio['studio_charge'], pid))
+
+    conn.commit(); conn.close()
+    log_action(u['id'], 'linked_production_to_rc_production', 'production', pid, rc_prod['name'])
+    return jsonify({'ok': True, 'studio_charge': studio})
 
 @app.route('/api/productions/<int:pid>/rehearsal-schedule', methods=['PUT'])
 def update_rehearsal_schedule(pid):
