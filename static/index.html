@@ -3488,7 +3488,27 @@ function pcRenderPage() {
       </div>
     </div>`;
 
-  content.innerHTML = facilityCard + capacityCard + pricingCard + rentalCard;
+  const internalRateCard = `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><div class="card-title">Internal Studio Rate</div></div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--ink3);margin-bottom:12px">What internal productions get charged per hour for rehearsal/studio use — separate from and lower than the external rental rate.</p>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;align-items:end;margin-bottom:14px">
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Internal Studio Rate ($/hr)</label>
+            <input type="number" id="pc-internal-rate" class="form-input" value="${pcSettings.internal_studio_rate_per_hour ?? 15}" min="0" step="0.01"/>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="pcSaveInternalRate()">Save</button>
+        </div>
+        <span id="pc-internal-rate-status" style="font-size:12px;color:var(--teal)"></span>
+        <div style="margin-top:10px;padding:14px 16px;background:var(--cream2);border-radius:var(--r-sm)">
+          <div style="font-size:11px;text-transform:uppercase;color:var(--ink3);font-weight:700">Current Rate</div>
+          <div style="font-size:26px;font-weight:800">$${(Number(pcSettings.internal_studio_rate_per_hour ?? 15)).toFixed(2)}/hr</div>
+        </div>
+      </div>
+    </div>`;
+
+  content.innerHTML = facilityCard + capacityCard + pricingCard + internalRateCard + rentalCard;
 
   ['pc-sessions','pc-hours-per-session','pc-enrollment','pc-margin','pc-total-hours-override','pc-price-per-student','pc-other-costs','pc-cost-per-hour'].forEach(id => {
     const el = document.getElementById(id); if (el) el.oninput = pcCalcProgramPricing;
@@ -3526,7 +3546,11 @@ async function pcSaveSettings() {
   const facility_budget_id = document.getElementById('pc-facility-budget').value || null;
   const season_weeks = parseInt(document.getElementById('pc-season-weeks').value) || 36;
   try {
-    await api('PUT','/pricing-settings',{facility_budget_id, season_weeks});
+    await api('PUT','/pricing-settings',{
+      facility_budget_id, season_weeks,
+      rental_rate_per_hour: pcSettings.rental_rate_per_hour ?? 20,
+      internal_studio_rate_per_hour: pcSettings.internal_studio_rate_per_hour ?? 15
+    });
     document.getElementById('pc-settings-status').textContent = '✓ Saved';
     await renderPricingCalc();
   } catch(e) { toast(e.message,'error'); }
@@ -3646,11 +3670,27 @@ async function pcSaveRentalRate() {
     await api('PUT','/pricing-settings',{
       facility_budget_id: pcSettings.facility_budget_id || null,
       season_weeks: pcSettings.season_weeks || 36,
-      rental_rate_per_hour
+      rental_rate_per_hour,
+      internal_studio_rate_per_hour: pcSettings.internal_studio_rate_per_hour ?? 15
     });
     document.getElementById('pc-rental-rate-status').textContent = '✓ Saved';
     pcSettings.rental_rate_per_hour = rental_rate_per_hour;
     pcCalcRentalRate();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function pcSaveInternalRate() {
+  const internal_studio_rate_per_hour = parseFloat(document.getElementById('pc-internal-rate').value) || 0;
+  try {
+    await api('PUT','/pricing-settings',{
+      facility_budget_id: pcSettings.facility_budget_id || null,
+      season_weeks: pcSettings.season_weeks || 36,
+      rental_rate_per_hour: pcSettings.rental_rate_per_hour ?? 20,
+      internal_studio_rate_per_hour
+    });
+    document.getElementById('pc-internal-rate-status').textContent = '✓ Saved';
+    pcSettings.internal_studio_rate_per_hour = internal_studio_rate_per_hour;
+    document.getElementById('pc-internal-rate-status').closest('.card-body').querySelector('div[style*="font-size:26px"]').textContent = `$${internal_studio_rate_per_hour.toFixed(2)}/hr`;
   } catch(e) { toast(e.message,'error'); }
 }
 
