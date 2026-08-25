@@ -1788,8 +1788,7 @@ let _prodAllUsers = [];
 async function renderProductions() {
   const canCreate = ['admin','treasurer','president','resident_producer'].includes(currentUser.role);
   document.getElementById('tb-actions').innerHTML = canCreate
-    ? `<button class="btn btn-outline btn-sm" onclick="showBuildShowModal()">Build show from RoleCall</button>
-       <button class="btn btn-outline btn-sm" onclick="showBuildFromRcProductionModal()">Build from RoleCall production</button>
+    ? `<button class="btn btn-outline btn-sm" onclick="showBuildFromRcProductionModal()">Build from RoleCall</button>
        <button class="btn btn-primary btn-sm" onclick="showProductionModal()">+ New production</button>` : '';
   try {
     const [prods, allUsers] = await Promise.all([
@@ -1915,82 +1914,14 @@ async function createProduction() {
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
 }
 
-// ── Build Show: pull a board-approved-to-produce show in from RoleCall ────────
-async function showBuildShowModal() {
-  const html = `
-    <div class="modal-header"><span class="modal-title">Build show from RoleCall</span><button class="modal-close" onclick="closeModal()">×</button></div>
-    <div class="modal-body">
-      <p class="text-sm text-muted mb-12">Shows appear here once RoleCall has a signed contract on file <em>and</em> the board has approved moving forward — approving automatically creates the RoleCall production. Ticket-price estimates and the rehearsal schedule built out on that production copy over automatically — License Cost, Venue Rate, and other hard costs you set here.</p>
-      <div id="bs-body"><div class="text-xs text-muted">Loading shows ready to build from RoleCall…</div></div>
-    </div>`;
-  showModal(html);
-  try {
-    const list = await api('GET', '/rolecall/licensing-requests/ready');
-    const items = (list && list.items) || [];
-    if (items.length === 0) {
-      document.getElementById('bs-body').innerHTML = `<div class="text-sm text-muted">No shows are ready to build yet. A show shows up here once its contract is on file and it's been approved to produce in RoleCall.</div>`;
-      return;
-    }
-    document.getElementById('bs-body').innerHTML = items.map(it => {
-      const hasSchedule = it.rehearsal_weekly_hours > 0;
-      const computedWeeks = it.rehearsal_weeks_computed || 8;
-      return `
-      <div class="card mb-12"><div class="card-body">
-        <div class="flex flex-center mb-8">
-          <div>
-            <div class="fw-600">${it.production_name}</div>
-            <div class="text-xs text-muted">${it.licensor||''}${it.venue_name?` · ${it.venue_name}`:''}${it.production_start_date?` · ${fmtDate(it.production_start_date)}`:''}</div>
-          </div>
-          <div style="margin-left:auto;text-align:right">
-            <div class="text-xs text-muted">Est. ticket sales</div>
-            <div class="fw-600">${fmtMoney(it.estimated_ticket_sales||0)}</div>
-          </div>
-        </div>
-        <div class="text-xs mb-8" style="color:${hasSchedule?'var(--ink3)':'var(--red)'}">
-          ${hasSchedule
-            ? `Rehearsals: ${it.rehearsal_sessions_per_week} block${it.rehearsal_sessions_per_week!==1?'s':''}/week (${it.rehearsal_weekly_hours} hrs/week)`
-            : `No rehearsal schedule built out yet — add time blocks on the production in RoleCall (Schedule &amp; Conflicts tab) before building, or the studio charge will come in at $0.`}
-        </div>
-        <div class="form-row">
-          <div class="form-group"><label class="form-label">Season <span class="req">*</span></label>
-            <input type="text" id="bs-season-${it.id}" class="form-input" placeholder="e.g. 2025-2026"></div>
-          <div class="form-group"><label class="form-label">Category</label>
-            <input type="text" id="bs-category-${it.id}" class="form-input" placeholder="e.g. RS, MS"></div>
-        </div>
-        <div class="form-group"><label class="form-label">Rehearsal weeks <span class="text-xs text-muted">${it.rehearsal_weeks_computed?'(from the rehearsal schedule\u2019s date range \u2014 adjust if needed)':'(RoleCall has no date range on the schedule yet, so this is a guess \u2014 set one)'}</span></label>
-          <input type="number" id="bs-weeks-${it.id}" class="form-input" value="${computedWeeks}" step="1" min="1"></div>
-        <button class="btn btn-primary btn-sm" onclick="doBuildShow('${it.id}')">Build this show</button>
-      </div></div>`;
-    }).join('');
-  } catch(e) {
-    document.getElementById('bs-body').innerHTML = `<div class="text-sm" style="color:var(--red)">${e.message}</div>`;
-  }
-}
-
-async function doBuildShow(licId) {
-  const season   = document.getElementById(`bs-season-${licId}`).value.trim();
-  const category = document.getElementById(`bs-category-${licId}`).value.trim();
-  const weeks    = parseFloat(document.getElementById(`bs-weeks-${licId}`).value || 8);
-  if (!season) { toast('Season is required', 'error'); return; }
-  try {
-    const d = await api('POST', '/productions/build-from-licensing', {
-      licensing_request_id: licId, season, category, rehearsal_weeks: weeks
-    });
-    toast('Show built! Set hard costs next.', 'success');
-    closeModal();
-    await loadBudgets();
-    await renderProductions();
-    openProductionDetail(d.id);
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-// ── Build directly from a RoleCall production with no licensing request ───────
-// (Rising Stars, or anything else created straight in RoleCall)
+// ── Build directly from a RoleCall production — the single build path ─────────
+// (mainstage shows auto-linked at Approve to Produce, Rising Stars and
+// anything else created straight in RoleCall)
 async function showBuildFromRcProductionModal() {
   const html = `
-    <div class="modal-header"><span class="modal-title">Build from RoleCall production</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-header"><span class="modal-title">Build from RoleCall</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <p class="text-sm text-muted mb-12">For shows that don't go through a licensing request in RoleCall — Rising Stars and anything else created directly there. Pulls in the rehearsal schedule built out on that production; there's no ticket-price data to estimate revenue from, so that's left at $0 for you to fill in.</p>
+      <p class="text-sm text-muted mb-12">Pick any RoleCall production not yet built out here — mainstage shows (created automatically when their licensing request is approved to produce) and anything created directly in RoleCall, like Rising Stars. The rehearsal schedule pulls straight from that production's calendar events; a ticket-sales estimate copies over too when a matching licensing request has that data.</p>
       <div id="bfp-body"><div class="text-xs text-muted">Loading RoleCall productions…</div></div>
     </div>`;
   showModal(html);
@@ -2011,11 +1942,15 @@ async function showBuildFromRcProductionModal() {
             <div class="fw-600">${it.name}</div>
             <div class="text-xs text-muted">${it.stage||''}${it.start_date?` · ${fmtDate(it.start_date)}`:''}</div>
           </div>
+          ${it.estimated_ticket_sales ? `<div style="margin-left:auto;text-align:right">
+            <div class="text-xs text-muted">Est. ticket sales</div>
+            <div class="fw-600">${fmtMoney(it.estimated_ticket_sales)}</div>
+          </div>` : ''}
         </div>
         <div class="text-xs mb-8" style="color:${hasSchedule?'var(--ink3)':'var(--red)'}">
           ${hasSchedule
-            ? `Rehearsals: ${it.rehearsal_sessions_per_week} block${it.rehearsal_sessions_per_week!==1?'s':''}/week (${it.rehearsal_weekly_hours} hrs/week)`
-            : `No rehearsal schedule built out yet — add time blocks on this production in RoleCall (Schedule &amp; Conflicts tab) before building, or the studio charge will come in at $0.`}
+            ? `Rehearsals: ${it.rehearsal_sessions_per_week} event${it.rehearsal_sessions_per_week!==1?'s':''}/week on average (${it.rehearsal_weekly_hours} hrs/week)`
+            : `No events on this production's calendar yet — add its rehearsal/performance events in RoleCall before building, or the studio charge will come in at $0.`}
         </div>
         <div class="form-row">
           <div class="form-group"><label class="form-label">Season <span class="req">*</span></label>
@@ -2055,33 +1990,10 @@ async function showLinkLicensingModal(pid) {
   const html = `
     <div class="modal-header"><span class="modal-title">Link to RoleCall</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <p class="text-sm text-muted mb-12">Pick what this production is for in RoleCall. This pulls in the rehearsal schedule (and, for a licensing request, the ticket-sales estimate) the same way "Build show" does at creation time.</p>
-      <div class="text-xs fw-600 text-muted mb-8">FROM A LICENSING REQUEST</div>
-      <div id="ll-body"><div class="text-xs text-muted">Loading…</div></div>
-      <div class="text-xs fw-600 text-muted mt-16 mb-8">FROM A ROLECALL PRODUCTION DIRECTLY <span class="text-xs text-muted" style="font-weight:400">(e.g. Rising Stars)</span></div>
+      <p class="text-sm text-muted mb-12">Pick the RoleCall production this is for. This pulls in the rehearsal schedule from its calendar events (and a ticket-sales estimate, when a matching licensing request has that data) the same way "Build from RoleCall" does at creation time.</p>
       <div id="ll-rc-body"><div class="text-xs text-muted">Loading…</div></div>
     </div>`;
   showModal(html);
-  try {
-    const list = await api('GET', '/rolecall/licensing-requests/ready');
-    const items = (list && list.items) || [];
-    if (items.length === 0) {
-      document.getElementById('ll-body').innerHTML = `<div class="text-sm text-muted">No approved-to-produce shows are available to link right now.</div>`;
-    } else {
-      document.getElementById('ll-body').innerHTML = items.map(it => `
-        <div class="card mb-12"><div class="card-body">
-          <div class="flex flex-center mb-8">
-            <div>
-              <div class="fw-600">${it.production_name}</div>
-              <div class="text-xs text-muted">${it.licensor||''}${it.venue_name?` · ${it.venue_name}`:''}${it.production_start_date?` · ${fmtDate(it.production_start_date)}`:''}</div>
-            </div>
-          </div>
-          <button class="btn btn-primary btn-sm" onclick="doLinkLicensing(${pid}, '${it.id}')">Link this show</button>
-        </div></div>`).join('');
-    }
-  } catch(e) {
-    document.getElementById('ll-body').innerHTML = `<div class="text-sm" style="color:var(--red)">${e.message}</div>`;
-  }
   try {
     const rcList = await api('GET', '/rolecall/productions/available');
     const rcItems = (rcList && rcList.items) || [];
@@ -2107,17 +2019,6 @@ async function showLinkLicensingModal(pid) {
 async function doLinkRcProduction(pid, rcProdId) {
   try {
     await api('POST', `/productions/${pid}/link-rc-production`, {rc_production_id: rcProdId});
-    toast('Linked! Rehearsal schedule pulled in.', 'success');
-    closeModal();
-    const prods = await api('GET', '/productions');
-    _currentProd = prods.find(x=>x.id===pid);
-    renderBudgetApprovalTab();
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-async function doLinkLicensing(pid, licId) {
-  try {
-    await api('POST', `/productions/${pid}/link-licensing-request`, {licensing_request_id: licId});
     toast('Linked! Rehearsal schedule pulled in.', 'success');
     closeModal();
     const prods = await api('GET', '/productions');
@@ -2327,7 +2228,7 @@ async function renderBudgetApprovalTab() {
   tc.innerHTML = `
     <div class="card mb-16"><div class="card-header"><span class="card-title">Rehearsal &amp; studio charge</span></div>
       <div class="card-body">
-        <p class="text-xs text-muted mb-12">Charges the show for studio use at cost, using the same $/hour rate as the Pricing Calculator. The weekly hours and week count come from the rehearsal schedule built out on the production in RoleCall — adjust here if needed.</p>
+        <p class="text-xs text-muted mb-12">Charges the show for studio use at cost, using the same $/hour rate as the Pricing Calculator. The weekly hours and week count come from the production's calendar events in RoleCall — adjust here if needed.</p>
         ${!p.source_licensing_request_id && !p.source_rc_production_id && !locked ? `
         <div class="text-xs mb-12" style="background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:10px 12px;color:#92400E">
           This production wasn't created from RoleCall, so nothing's been pulled in automatically.
