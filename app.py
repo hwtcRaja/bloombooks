@@ -4072,12 +4072,12 @@ def get_contractor_payable_events(cid):
         # Registered class sessions don't always get a real `events` row —
         # RoleCall only creates one when someone confirms it for hour-logging/
         # ELIC/staffing purposes, to avoid flooding the calendar with a bulk-
-        # imported schedule's worth of unconfirmed slots. A session with an
-        # active (non-cancelled/waitlisted) registrant is still a real class
-        # that happened and should be payable, even with no real event yet —
-        # so pull those in too, using the same synthetic 'session_<id>' id
-        # RoleCall's own calendar merge uses, and skip any that already have
-        # a real linked event (that real event is the one already listed above).
+        # imported schedule's worth of unconfirmed slots. Surface those too
+        # (using the same synthetic 'session_<id>' id RoleCall's own calendar
+        # merge uses) so they're visible here — but they stay unpayable until
+        # a real event exists and hours get logged against it (see below);
+        # hours can only ever be logged against a real events.id, never a
+        # program_sessions.id directly.
         sessions = conn.execute('''SELECT ps.id, ps.name, ps.start_date FROM program_sessions ps
             WHERE ps.program_id=%s AND ps.start_date IS NOT NULL AND ps.start_date != ''
             AND EXISTS (SELECT 1 FROM program_registrations pr
@@ -4087,10 +4087,23 @@ def get_contractor_payable_events(cid):
             AND NOT EXISTS (SELECT 1 FROM events e3 WHERE e3.linked_session_id=ps.id)
             ORDER BY ps.start_date''', (p['id'],)).fetchall()
         for s in sessions:
-            events.append({'id': 'session_' + s['id'], 'name': s['name'] or 'Session', 'event_date': s['start_date']})
+            events.append({'id': 'session_' + s['id'], 'name': s['name'] or 'Session', 'event_date': s['start_date'], 'is_synthetic': True})
         events.sort(key=lambda e: e['event_date'] or '')
         event_list = []
         for e in events:
+            # Hard gate: a session is only payable once someone's logged paid-
+            # instruction hours against it — that's the confirmation the class
+            # actually happened, and pay typically follows that logging, not
+            # the other way around. Synthetic (no real event yet) sessions
+            # can never have hours logged, so they're never payable as-is.
+            if e.get('is_synthetic'):
+                logged_hours = 0.0
+            else:
+                logged_row = conn.execute('''SELECT COALESCE(SUM(hours),0) as t FROM hours
+                    WHERE event_id=%s AND volunteer_id=%s AND pay_type='paid_instruction' ''',
+                    (e['id'], vol['id'])).fetchone()
+                logged_hours = float(logged_row['t']) if logged_row else 0.0
+            has_logged_hours = logged_hours > 0
             paid_q = '''SELECT cp.amount FROM bb_contractor_payment_events cpe
                 JOIN bb_contractor_payments cp ON cp.id = cpe.payment_id
                 WHERE cpe.rolecall_event_id=%s AND cp.status != 'void\''''
@@ -4105,6 +4118,8 @@ def get_contractor_payable_events(cid):
                 'session_hours': round(session_hours, 2),
                 'suggested_amount': suggested_per_session,
                 'already_paid': bool(paid_row),
+                'has_logged_hours': has_logged_hours,
+                'logged_hours': round(logged_hours, 2),
                 'linked_to_this_payment': e['id'] in already_linked_ids,
             })
         paid_event_count = sum(1 for e in event_list if e['already_paid'])
