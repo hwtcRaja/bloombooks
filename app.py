@@ -625,6 +625,11 @@ def init_db():
         ("bb_productions",       "board_approved",             "INTEGER DEFAULT 0"),
         ("bb_productions",       "board_approved_at",          "TEXT"),
         ("bb_productions",       "board_approved_by",          "INTEGER"),
+        ("bb_productions",       "budget_approval_status",     "TEXT DEFAULT 'draft'"),
+        ("bb_productions",       "budget_requested_by",        "INTEGER"),
+        ("bb_productions",       "budget_requested_at",        "TEXT"),
+        ("bb_productions",       "budget_sent_back_note",      "TEXT"),
+        ("bb_productions",       "budget_sent_back_at",        "TEXT"),
         ("bb_pricing_settings",  "rental_rate_per_hour",       "REAL DEFAULT 20"),
         ("bb_pricing_settings",  "internal_studio_rate_per_hour", "REAL DEFAULT 15"),
     ]
@@ -666,6 +671,20 @@ ORG_APPROVER_ROLES = ('admin', 'treasurer', 'president')
 # those stay on ORG_APPROVER_ROLES only. This lets HWTC onboard a Resident
 # Producer who isn't a board member without granting full admin rights.
 PRODUCTION_ADMIN_ROLES = ('admin', 'treasurer', 'president', 'resident_producer')
+# Who can actually Approve or Send Back a budget request — narrower than
+# PRODUCTION_ADMIN_ROLES on purpose: deliberately excludes plain 'admin' so
+# financial sign-off stays with people in a production/financial oversight
+# role, not just anyone with system admin access. Resident Producer is the
+# expected approver; Treasurer/President are the fallback.
+BUDGET_APPROVER_ROLES = ('resident_producer', 'treasurer', 'president')
+
+def get_budget_approver_emails():
+    conn = get_db()
+    users = conn.execute(
+        "SELECT email,name FROM bb_users WHERE role IN ('resident_producer','treasurer','president') AND is_active=1"
+    ).fetchall()
+    conn.close()
+    return [dict(u) for u in users]
 
 def get_production_producers(pid):
     """Return the list of producer users (id/name/email) for a production."""
@@ -1830,6 +1849,9 @@ def list_productions():
         prod['i_am_resident_producer'] = u['role'] == 'resident_producer' or \
             any(m['user_id']==u['id'] and m['member_role']=='resident_producer' for m in prod['members'])
         prod['remaining_balance'] = round((prod.get('total_budget') or 0) - (prod.get('hard_costs_total') or 0), 2)
+        if prod.get('budget_requested_by'):
+            requester = conn.execute('SELECT name FROM bb_users WHERE id=%s', (prod['budget_requested_by'],)).fetchone()
+            prod['budget_requested_by_name'] = requester['name'] if requester else None
         result.append(prod)
     conn.close()
     return jsonify(result)
@@ -1878,12 +1900,8 @@ def update_production(pid):
         return jsonify({'error':'Insufficient permissions'}),403
     data = request.json
     conn = get_db()
-    prod = conn.execute('SELECT board_approved FROM bb_productions WHERE id=%s',(pid,)).fetchone()
-    locked = bool(prod and dict(prod).get('board_approved'))
-    for f in ['name','season','description','total_budget','status','category']:
+    for f in ['name','season','description','status','category']:
         if f in data:
-            if locked and f == 'total_budget':
-                continue  # total_budget changes go through /board-approve once locked
             conn.execute(f'UPDATE bb_productions SET {f}=%s WHERE id=%s',(data[f],pid))
     conn.commit(); conn.close()
     return jsonify({'ok':True})
@@ -2717,16 +2735,23 @@ def link_production_to_rc_production(pid):
 @app.route('/api/productions/<int:pid>/rehearsal-schedule', methods=['PUT'])
 def update_rehearsal_schedule(pid):
     """Edit the rehearsal cadence used to charge the show for studio use, and
-    recompute the at-cost charge."""
-    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
-    if err: return err
+    recompute the at-cost charge. Open to the production's own Producers too,
+    not just PRODUCTION_ADMIN_ROLES — they can run the whole budget-request
+    process, just not set the overall total budget number."""
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
     d = request.json or {}
     conn = get_db()
     prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
     if not prod:
         conn.close(); return jsonify({'error': 'Not found'}), 404
-    if dict(prod).get('hard_costs_locked'):
+    prod = dict(prod)
+    if prod.get('hard_costs_locked'):
         conn.close(); return jsonify({'error': 'Hard costs are locked for this production'}), 409
+    if prod.get('budget_approval_status') == 'pending_approval':
+        conn.close(); return jsonify({'error': 'A budget approval request is pending review — wait for it to be approved or sent back before making changes'}), 409
     weekly_hours = float(d.get('rehearsal_weekly_hours') or 0)
     rehearsal_weeks = float(d.get('rehearsal_weeks') or 0)
     studio = _compute_studio_charge(conn, weekly_hours, rehearsal_weeks)
@@ -2738,11 +2763,17 @@ def update_rehearsal_schedule(pid):
 
 @app.route('/api/productions/<int:pid>/hard-costs', methods=['PUT'])
 def set_hard_costs(pid):
-    """Resident Producer locks in License Cost + Venue Rate (the studio charge
-    is already computed from the rehearsal schedule). Sum becomes hard_costs_total,
-    which determines the remaining balance available for department allocations."""
-    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
-    if err: return err
+    """Sets License Cost + Venue Rate (the studio charge is already computed
+    from the rehearsal schedule). Sum becomes hard_costs_total, which
+    determines the remaining balance available for department allocations.
+    Open to the production's own Producers too, not just
+    PRODUCTION_ADMIN_ROLES — they can run the whole budget-request process,
+    just not set the overall total budget number (that's set by whoever
+    approves the request)."""
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
     d = request.json or {}
     conn = get_db()
     prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
@@ -2751,6 +2782,8 @@ def set_hard_costs(pid):
     prod = dict(prod)
     if prod.get('board_approved'):
         conn.close(); return jsonify({'error': 'Budget is already board-approved and locked'}), 409
+    if prod.get('budget_approval_status') == 'pending_approval':
+        conn.close(); return jsonify({'error': 'A budget approval request is pending review — wait for it to be approved or sent back before making changes'}), 409
     license_cost = float(d.get('license_cost', prod.get('license_cost') or 0))
     venue_rate = float(d.get('venue_rate', prod.get('venue_rate') or 0))
     est_concessions = float(d.get('est_concessions', prod.get('est_concessions') or 0))
@@ -2762,12 +2795,93 @@ def set_hard_costs(pid):
     conn.commit(); conn.close()
     return jsonify({'ok': True, 'hard_costs_total': hard_costs_total})
 
+@app.route('/api/productions/<int:pid>/request-budget-approval', methods=['POST'])
+def request_budget_approval(pid):
+    """Submits the current hard costs for review by a Resident Producer,
+    Treasurer, or President. Doesn't set or lock anything financial — it just
+    flags the production as awaiting a decision. Open to the production's own
+    Producers, not just PRODUCTION_ADMIN_ROLES: they can run this whole
+    process, they just can't set the overall total budget number — that's
+    entered by whoever approves the request."""
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    if prod.get('board_approved'):
+        conn.close(); return jsonify({'error': 'This budget is already approved'}), 409
+    status = prod.get('budget_approval_status') or 'draft'
+    if status == 'pending_approval':
+        conn.close(); return jsonify({'error': 'A request is already pending review'}), 409
+    if not prod.get('hard_costs_total'):
+        conn.close(); return jsonify({'error': 'Save hard costs before requesting approval'}), 400
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn.execute('''UPDATE bb_productions SET budget_approval_status='pending_approval',
+        budget_requested_by=%s, budget_requested_at=%s WHERE id=%s''', (u['id'], now, pid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'requested_budget_approval', 'production', pid, prod.get('name',''))
+    try:
+        for approver in get_budget_approver_emails():
+            send_email(approver['email'], f'Budget approval requested: {prod.get("name","")}',
+                email_html('Budget Approval Requested',
+                    f'<p><strong>{u["name"]}</strong> has requested budget approval for <strong>{prod.get("name","")}</strong> ({prod.get("season","")}).</p>'
+                    f'<p>Hard costs total: ${(prod.get("hard_costs_total") or 0):,.2f}</p>'
+                    '<p>Review it and either approve with a total budget, or send it back for adjustments.</p>',
+                    'Review in BloomBooks', APP_URL))
+    except Exception as e:
+        app.logger.warning(f'Could not send budget-approval-requested email: {e}')
+    return jsonify({'ok': True})
+
+@app.route('/api/productions/<int:pid>/send-back-budget', methods=['POST'])
+def send_back_budget(pid):
+    """Resident Producer / Treasurer / President sends a pending budget
+    request back for adjustments, with a required note explaining what needs
+    to change. Notifies whoever requested approval."""
+    err = require_auth(roles=list(BUDGET_APPROVER_ROLES))
+    if err: return err
+    u = current_user()
+    d = request.json or {}
+    note = (d.get('note') or '').strip()
+    if not note:
+        return jsonify({'error': 'Please provide a note explaining what needs to change'}), 400
+    conn = get_db()
+    prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    prod = dict(prod)
+    if prod.get('budget_approval_status') != 'pending_approval':
+        conn.close(); return jsonify({'error': 'This production has no pending budget request'}), 409
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn.execute('''UPDATE bb_productions SET budget_approval_status='sent_back',
+        budget_sent_back_note=%s, budget_sent_back_at=%s WHERE id=%s''', (note, now, pid))
+    conn.commit()
+    log_action(u['id'], 'sent_back_budget', 'production', pid, note)
+    requester = get_user_email(prod.get('budget_requested_by')) if prod.get('budget_requested_by') else None
+    if requester:
+        try:
+            send_email(requester['email'], f'Changes needed: {prod.get("name","")} budget',
+                email_html('Changes Needed on Your Budget Request',
+                    f'<p>Your budget approval request for <strong>{prod.get("name","")}</strong> has been sent back for adjustments by <strong>{u["name"]}</strong>.</p>'
+                    f'<p><strong>What needs to change:</strong> {note}</p>'
+                    '<p>Update the hard costs and resubmit when ready.</p>',
+                    'View in BloomBooks', APP_URL))
+        except Exception as e:
+            app.logger.warning(f'Could not send budget-sent-back email: {e}')
+    conn.close()
+    return jsonify({'ok': True})
+
 @app.route('/api/productions/<int:pid>/board-approve', methods=['POST'])
 def board_approve_production(pid):
-    """Board approves the overall number: total budget minus hard costs = the
-    remaining balance the Resident Producer can then chunk across departments.
-    Locks hard costs (and the total budget) against further changes."""
-    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    """Resident Producer / Treasurer / President approves the overall number:
+    total budget minus hard costs = the remaining balance available for
+    department allocations. Locks hard costs and the total budget against
+    further changes. Requires a pending request — this isn't a self-serve
+    action for whoever set up the hard costs."""
+    err = require_auth(roles=list(BUDGET_APPROVER_ROLES))
     if err: return err
     u = current_user()
     d = request.json or {}
@@ -2776,24 +2890,41 @@ def board_approve_production(pid):
     if not prod:
         conn.close(); return jsonify({'error': 'Not found'}), 404
     prod = dict(prod)
+    if prod.get('budget_approval_status') != 'pending_approval':
+        conn.close(); return jsonify({'error': 'This production has no pending budget request to approve'}), 409
     total_budget = float(d.get('total_budget', prod.get('total_budget') or 0))
     if total_budget < (prod.get('hard_costs_total') or 0):
         conn.close(); return jsonify({'error': 'Total budget is less than the hard costs already set'}), 400
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     conn.execute('''UPDATE bb_productions SET total_budget=%s, hard_costs_locked=1,
-        board_approved=1, board_approved_at=%s, board_approved_by=%s WHERE id=%s''',
+        board_approved=1, board_approved_at=%s, board_approved_by=%s,
+        budget_approval_status='approved' WHERE id=%s''',
         (total_budget, now, u['id'], pid))
-    conn.commit(); conn.close()
+    conn.commit()
     log_action(u['id'], 'board_approved_production', 'production', pid, f'Total budget ${total_budget:,.2f}')
+    requester = get_user_email(prod.get('budget_requested_by')) if prod.get('budget_requested_by') else None
+    if requester:
+        try:
+            send_email(requester['email'], f'Budget approved: {prod.get("name","")}',
+                email_html('Budget Approved',
+                    f'<p>Your budget request for <strong>{prod.get("name","")}</strong> has been approved by <strong>{u["name"]}</strong>.</p>'
+                    f'<p>Total budget: ${total_budget:,.2f}</p>'
+                    '<p>You can now allocate the remaining balance across departments.</p>',
+                    'View in BloomBooks', APP_URL))
+        except Exception as e:
+            app.logger.warning(f'Could not send budget-approved email: {e}')
+    conn.close()
     return jsonify({'ok': True, 'remaining_balance': round(total_budget - (prod.get('hard_costs_total') or 0), 2)})
 
 @app.route('/api/productions/<int:pid>/suggested-allocations', methods=['GET'])
 def get_suggested_allocations(pid):
     """Suggested department split of the remaining balance (after hard costs).
-    Purely advisory — the Resident Producer edits, removes, or adds lines before
-    actually creating the budgets via POST /allocations."""
-    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
-    if err: return err
+    Purely advisory — edits, removes, or adds lines before actually creating
+    the budgets via POST /allocations."""
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
     conn = get_db()
     prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
     conn.close()
@@ -2807,10 +2938,13 @@ def get_suggested_allocations(pid):
 @app.route('/api/productions/<int:pid>/allocations', methods=['POST'])
 def create_allocations(pid):
     """Turn a (possibly edited) list of department lines into real bb_budgets
-    rows for the production. Requires board approval first."""
-    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
-    if err: return err
+    rows for the production. Requires board approval first. Open to the
+    production's own Producers too, not just PRODUCTION_ADMIN_ROLES — same
+    reasoning as the rest of the budget-request process."""
     u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'], pid):
+        return jsonify({'error': 'Insufficient permissions'}), 403
     d = request.json or {}
     allocations = d.get('allocations') or []
     if not allocations:
