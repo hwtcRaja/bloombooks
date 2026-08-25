@@ -626,6 +626,7 @@ def init_db():
         ("bb_productions",       "board_approved_at",          "TEXT"),
         ("bb_productions",       "board_approved_by",          "INTEGER"),
         ("bb_pricing_settings",  "rental_rate_per_hour",       "REAL DEFAULT 20"),
+        ("bb_pricing_settings",  "internal_studio_rate_per_hour", "REAL DEFAULT 15"),
     ]
     for table, column, col_type in migrations:
         c.execute("SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_name=%s AND column_name=%s",
@@ -3295,13 +3296,17 @@ def update_pricing_settings():
     facility_budget_id = data.get('facility_budget_id') or None
     season_weeks = int(data.get('season_weeks', 36))
     rental_rate_per_hour = float(data.get('rental_rate_per_hour', 20))
+    internal_studio_rate_per_hour = float(data.get('internal_studio_rate_per_hour', 15))
     if row:
         conn.execute('''UPDATE bb_pricing_settings SET facility_budget_id=%s, season_weeks=%s,
-            rental_rate_per_hour=%s, updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS') WHERE id=%s''',
-            (facility_budget_id, season_weeks, rental_rate_per_hour, row['id']))
+            rental_rate_per_hour=%s, internal_studio_rate_per_hour=%s,
+            updated_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS') WHERE id=%s''',
+            (facility_budget_id, season_weeks, rental_rate_per_hour, internal_studio_rate_per_hour, row['id']))
     else:
-        conn.execute('INSERT INTO bb_pricing_settings (facility_budget_id, season_weeks, rental_rate_per_hour) VALUES (%s,%s,%s)',
-            (facility_budget_id, season_weeks, rental_rate_per_hour))
+        conn.execute('''INSERT INTO bb_pricing_settings
+            (facility_budget_id, season_weeks, rental_rate_per_hour, internal_studio_rate_per_hour)
+            VALUES (%s,%s,%s,%s)''',
+            (facility_budget_id, season_weeks, rental_rate_per_hour, internal_studio_rate_per_hour))
     conn.commit(); conn.close()
     return jsonify({'ok': True})
 
@@ -3354,12 +3359,13 @@ def get_facility_cost():
     return jsonify(result)
 
 def _compute_studio_charge(conn, weekly_hours, rehearsal_weeks):
-    """Rehearsal-space charge for a show, using the same at-cost $/hour the
-    Pricing Calculator uses for everything else (prefers the budgeted rate;
-    falls back to the actual-spent rate if nothing's budgeted yet). weekly_hours
-    is the total rehearsal hours per week across all day/time blocks combined."""
-    fc = _facility_cost_result(conn)
-    rate = fc.get('cost_per_hour_budgeted') or fc.get('cost_per_hour_spent') or 0
+    """Rehearsal-space charge for a show, using the internal studio rate set
+    in Pricing Settings (distinct from the external rental rate — internal
+    productions get charged at a lower rate than outside groups renting the
+    space). weekly_hours is the total rehearsal hours per week across all
+    events combined."""
+    settings = conn.execute('SELECT internal_studio_rate_per_hour FROM bb_pricing_settings ORDER BY id LIMIT 1').fetchone()
+    rate = (settings['internal_studio_rate_per_hour'] if settings and settings['internal_studio_rate_per_hour'] is not None else 15)
     total_hours = float(weekly_hours or 0) * float(rehearsal_weeks or 0)
     charge = round(total_hours * rate, 2)
     return {'total_rehearsal_hours': round(total_hours, 1), 'cost_per_hour': rate, 'studio_charge': charge}
