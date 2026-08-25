@@ -1822,6 +1822,7 @@ def list_productions():
             act += rc_line['actual']
             prod['rolecall_linked'] = True
             prod['rolecall_revenue_actual'] = rc_line['actual']
+            prod['rolecall_revenue_expected'] = rc_line['expected']
         prod['total_revenue_expected'] = exp
         prod['total_revenue_actual']   = act
         prod['net_cost'] = prod['total_spent'] - act
@@ -2588,6 +2589,21 @@ def _pull_rehearsal_from_rc_production(conn, rc_prod_id, requested_weeks=None):
         'est_ticket_sales': _estimate_for_rc_production(conn, rc_prod_id),
     }
 
+def _ensure_rolecall_link(conn, bb_prod_id, rc_prod_id, rc_prod_name, user_id):
+    """Auto-creates/updates the bb_rolecall_links row alongside
+    source_rc_production_id, so a production built or linked from RoleCall
+    gets its live enrollment revenue on the Revenue tab automatically —
+    without needing the separate manual "Link Rising Stars" step. Both
+    reference the exact same RoleCall production ID; this just keeps them
+    in sync instead of requiring two separate linking actions."""
+    conn.execute('''INSERT INTO bb_rolecall_links (bb_production_id, rc_production_id, rc_production_name, linked_by, updated_at)
+        VALUES (%s,%s,%s,%s,to_char(now(),'YYYY-MM-DD HH24:MI:SS'))
+        ON CONFLICT (bb_production_id) DO UPDATE SET
+            rc_production_id=EXCLUDED.rc_production_id,
+            rc_production_name=EXCLUDED.rc_production_name,
+            updated_at=EXCLUDED.updated_at''',
+        (bb_prod_id, rc_prod_id, rc_prod_name, user_id))
+
 @app.route('/api/productions/build-from-rc-production', methods=['POST'])
 def build_production_from_rc_production():
     """Create a BloomBooks production directly from a RoleCall production —
@@ -2640,6 +2656,8 @@ def build_production_from_rc_production():
         conn.execute('INSERT INTO bb_production_members (production_id,user_id,member_role) VALUES (%s,%s,%s)',
                      (prod_id, u['id'], 'resident_producer'))
 
+    _ensure_rolecall_link(conn, prod_id, rc_prod_id, rc_prod['name'], u['id'])
+
     conn.commit(); conn.close()
     log_action(u['id'], 'built_show_from_rc_production', 'production', prod_id, rc_prod['name'])
     return jsonify({'ok': True, 'id': prod_id, 'studio_charge': studio})
@@ -2689,6 +2707,8 @@ def link_production_to_rc_production(pid):
         WHERE id=%s''',
         (rc_prod_id, pulled['sessions_per_week'], pulled['rehearsal_weeks'],
          pulled['avg_hours_per_session'], pulled['weekly_hours'], studio['studio_charge'], pid))
+
+    _ensure_rolecall_link(conn, pid, rc_prod_id, rc_prod['name'], u['id'])
 
     conn.commit(); conn.close()
     log_action(u['id'], 'linked_production_to_rc_production', 'production', pid, rc_prod['name'])
@@ -2857,8 +2877,8 @@ def get_revenue_forecast(pid):
 
 def _is_rising_stars_category(category):
     """Enrollment revenue only makes sense for Rising Stars-style programming,
-    not Mainstage — used to decide whether est_enrollment counts toward the
-    suggested total budget."""
+    not Mainstage — used to decide whether live RoleCall enrollment revenue
+    counts toward the suggested total budget."""
     if not category:
         return False
     c = category.strip().lower()
@@ -2867,11 +2887,12 @@ def _is_rising_stars_category(category):
 @app.route('/api/productions/<int:pid>/suggested-total-budget', methods=['GET'])
 def get_suggested_total_budget(pid):
     """Suggested Total Budget = average of (a) this show's own estimated
-    revenue (ticket sales + concessions + enrollment, enrollment only counted
-    for Rising Stars-category shows) and (b) the average total budget of the
-    last 3 comparable (same-category) shows. Falls back to whichever signal
-    is actually available if only one is. Purely a starting point — the
-    Resident Producer can override it before presenting to the board."""
+    revenue (ticket sales + concessions + live RoleCall enrollment revenue,
+    the last only for Rising Stars-category shows with a live RoleCall link)
+    and (b) the average total budget of the last 3 comparable (same-category)
+    shows. Falls back to whichever signal is actually available if only one
+    is. Purely a starting point — the Resident Producer can override it
+    before presenting to the board."""
     err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
     if err: return err
     conn = get_db()
@@ -2883,7 +2904,9 @@ def get_suggested_total_budget(pid):
 
     revenue_estimate = (prod.get('est_ticket_sales') or 0) + (prod.get('est_concessions') or 0)
     if _is_rising_stars_category(category):
-        revenue_estimate += (prod.get('est_enrollment') or 0)
+        rc_line = rolecall_revenue_line(conn, pid)
+        if rc_line and rc_line.get('available', True):
+            revenue_estimate += (rc_line.get('expected') or 0)
     revenue_estimate = round(revenue_estimate, 2) if revenue_estimate else None
 
     comp_avg = None
