@@ -1809,8 +1809,10 @@ async function renderProductions() {
     }
 
     document.getElementById('content').innerHTML = prods.map(p => {
-      const totalBudget = p.budgets.reduce((s,b)=>s+b.total_amount,0);
-      const totalSpent  = p.total_spent||0;
+      const deptBudgetTotal = p.budgets.reduce((s,b)=>s+b.total_amount,0);
+      const hardCosts = p.hard_costs_total||0;
+      const totalBudget = p.total_budget || (hardCosts + deptBudgetTotal);
+      const totalSpent  = hardCosts + (p.total_spent||0);
       const pct = totalBudget>0 ? Math.min(100,(totalSpent/totalBudget)*100) : 0;
       const producers = p.members.filter(m=>m.member_role==='producer');
       const members   = p.members.filter(m=>m.member_role==='member');
@@ -2046,8 +2048,15 @@ async function openProductionDetail(pid) {
 
 function renderProductionDetail() {
   const p = _currentProd;
-  const totalBudget = p.budgets.reduce((s,b)=>s+b.total_amount,0);
-  const totalSpent  = p.total_spent||0;
+  const deptBudgetTotal = p.budgets.reduce((s,b)=>s+b.total_amount,0);
+  const deptSpent = p.total_spent||0;
+  const hardCosts = p.hard_costs_total||0;
+  // Prefer the real board-approved total once it exists; before approval,
+  // fall back to what's actually been committed so far (hard costs + any
+  // department allocations) rather than showing $0 just because department
+  // budgets haven't been created yet.
+  const totalBudget = p.total_budget || (hardCosts + deptBudgetTotal);
+  const totalSpent  = hardCosts + deptSpent;
   const pct = totalBudget>0?Math.min(100,(totalSpent/totalBudget)*100):0;
   const tabs = ['departments','team','revenue','budget','forecast','settings'];
   const tabLabels = {departments:'Departments', team:'Team', revenue:'Revenue', budget:'Budget Approval', forecast:'Forecast', settings:'Settings'};
