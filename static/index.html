@@ -2296,8 +2296,15 @@ async function renderBudgetApprovalTab() {
 
         ${status==='pending_approval' ? `
         <div class="text-xs text-muted mt-12">Requested by ${p.budget_requested_by_name||'—'}${p.budget_requested_at?` on ${fmtDate(p.budget_requested_at)}`:''}</div>
+        <div class="text-sm mt-8" style="background:var(--bg-subtle,#f8f8f8);border-radius:6px;padding:10px 12px">
+          <div>License cost: <span class="fw-600">${fmtMoney(p.license_cost||0)}</span></div>
+          <div>Venue cost: <span class="fw-600">${fmtMoney(p.venue_rate||0)}</span></div>
+          <div>Studio charge: <span class="fw-600">${fmtMoney(p.studio_charge||0)}</span></div>
+          <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">Hard costs total: <span class="fw-600">${fmtMoney(hardCostsTotal)}</span></div>
+        </div>
         ${canApprove ? `
-        <div class="form-group mt-12"><label class="form-label">Total budget to approve</label>
+        <div class="text-xs text-muted mt-12" id="ba-total-hint">Loading suggested budget…</div>
+        <div class="form-group mt-8"><label class="form-label">Total budget to approve <span class="text-xs text-muted">(must be at least the hard costs total, ${fmtMoney(hardCostsTotal)})</span></label>
           <input type="number" id="ba-approve-total" class="form-input" step="0.01" value="${p.total_budget||''}"></div>
         <div class="flex" style="gap:8px">
           <button class="btn btn-primary btn-sm" onclick="approveBudgetRequest(${p.id})">Approve</button>
@@ -2321,7 +2328,7 @@ async function renderBudgetApprovalTab() {
       </div></div>`;
 
   if (approved) { _allocRows = []; renderAllocRows(); }
-  else if (status==='draft' || status==='sent_back') { loadSuggestedTotalBudgetHint(p.id); }
+  else if (status==='draft' || status==='sent_back' || status==='pending_approval') { loadSuggestedTotalBudgetHint(p.id); }
 }
 
 function budgetStatusLabel(p) {
@@ -2342,6 +2349,8 @@ async function loadSuggestedTotalBudgetHint(pid) {
       if (s.revenue_estimate) parts.push(`est. revenue ${fmtMoney(s.revenue_estimate)}`);
       if (s.comparable_avg_budget) parts.push(`avg of last ${s.comparable_basis.length} comparable show${s.comparable_basis.length!==1?'s':''} ${fmtMoney(s.comparable_avg_budget)}`);
       hintEl.textContent = `Suggested total budget: ${fmtMoney(s.suggested_total_budget)} (from ${parts.join(' and ')})`;
+      const approveInput = document.getElementById('ba-approve-total');
+      if (approveInput && !approveInput.value) approveInput.value = s.suggested_total_budget;
     } else if (s.note) {
       hintEl.textContent = s.note;
     }
