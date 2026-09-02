@@ -2331,6 +2331,7 @@ async function renderBudgetApprovalTab() {
               <button class="btn btn-outline btn-sm" onclick="loadSuggestedAllocations(${p.id})">Use suggested split</button>
               <button class="btn btn-outline btn-sm" onclick="addAllocRow()">+ Add line</button>
             </div>
+            <div id="ba-alloc-source" class="text-xs text-muted mb-8"></div>
             <div id="ba-alloc-rows"></div>
             <div class="text-sm mt-8" id="ba-alloc-total"></div>
             <button class="btn btn-primary btn-sm mt-8" onclick="submitAllocations(${p.id})">Create department budgets</button>`}
@@ -2450,6 +2451,12 @@ async function loadSuggestedAllocations(pid) {
     const d = await api('GET', `/productions/${pid}/suggested-allocations`);
     _allocRows = (d.suggestions||[]).map(s=>({name:s.name, amount:s.amount}));
     renderAllocRows();
+    const srcEl = document.getElementById('ba-alloc-source');
+    if (srcEl) {
+      srcEl.textContent = d.source === 'historical'
+        ? `Based on how ${d.based_on.join(', ')} actually split their department spending.`
+        : `No comparable same-category shows with department budgets yet — using a generic starter split.`;
+    }
   } catch(e) { toast(e.message, 'error'); }
 }
 
