@@ -2575,6 +2575,47 @@ SUGGESTED_DEPARTMENT_SPLIT = [
     ('Contingency',          0.10),
 ]
 
+# These show up as department budgets on older/imported shows, but they're
+# the same things now tracked as hard costs directly on the production
+# (studio charge, venue rate, license cost) — including them in the
+# discretionary split would double-count money already subtracted out via
+# hard_costs_total before "remaining balance" is even computed.
+HARD_COST_LIKE_DEPARTMENT_NAMES = {'rehearsal space', 'performance space', 'licensing rights'}
+
+def _historical_department_mix(conn, category, exclude_pid):
+    """Averages each comparable same-category show's own department mix (as
+    a % of that show's discretionary department spending) into one blended
+    mix, so a new show's suggested split reflects how similar shows actually
+    divided their money — not a fixed guess. Returns {} if there's no usable
+    historical data to build one from."""
+    if not category:
+        return {}, []
+    comps = conn.execute('''SELECT id, name, season FROM bb_productions
+                            WHERE category=%s AND id!=%s ORDER BY id DESC LIMIT 3''', (category, exclude_pid)).fetchall()
+    comps = [dict(c) for c in comps]
+    pct_by_name = {}
+    used_shows = []
+    for c in comps:
+        rows = conn.execute('''SELECT name, total_amount FROM bb_budgets
+                               WHERE production_id=%s AND is_active=1''', (c['id'],)).fetchall()
+        rows = [dict(r) for r in rows if (r['name'] or '').strip().lower() not in HARD_COST_LIKE_DEPARTMENT_NAMES]
+        show_total = sum(r['total_amount'] for r in rows)
+        if show_total <= 0:
+            continue
+        used_shows.append(c['name'])
+        for r in rows:
+            pct_by_name.setdefault(r['name'], []).append(r['total_amount'] / show_total)
+    if not pct_by_name:
+        return {}, []
+    # Average each department's share across however many shows actually had
+    # it, then normalize so the whole mix sums to 100% — different shows
+    # rarely use the exact same department list, so a straight average
+    # across all of them won't add up to 1.0 on its own.
+    avg_pct = {name: sum(pcts)/len(pcts) for name, pcts in pct_by_name.items()}
+    total = sum(avg_pct.values())
+    normalized = {name: pct/total for name, pct in avg_pct.items()} if total > 0 else {}
+    return normalized, used_shows
+
 import math
 
 def _rc_production_rehearsal_schedule(conn, rc_prod_id):
@@ -2999,21 +3040,32 @@ def board_approve_production(pid):
 @app.route('/api/productions/<int:pid>/suggested-allocations', methods=['GET'])
 def get_suggested_allocations(pid):
     """Suggested department split of the remaining balance (after hard costs).
-    Purely advisory — edits, removes, or adds lines before actually creating
-    the budgets via POST /allocations."""
+    Prefers the blended department mix from comparable same-category shows
+    (see _historical_department_mix); falls back to a generic starter split
+    only when there's no usable history yet. Purely advisory — edit, remove,
+    or add lines before actually creating the budgets via POST /allocations."""
     u = current_user()
     if not u: return jsonify({'error': 'Not authenticated'}), 401
     if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'], pid):
         return jsonify({'error': 'Insufficient permissions'}), 403
     conn = get_db()
     prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
-    conn.close()
     if not prod:
-        return jsonify({'error': 'Not found'}), 404
+        conn.close(); return jsonify({'error': 'Not found'}), 404
     prod = dict(prod)
     remaining = round((prod.get('total_budget') or 0) - (prod.get('hard_costs_total') or 0), 2)
-    suggestions = [{'name': name, 'amount': round(remaining * pct, 2)} for name, pct in SUGGESTED_DEPARTMENT_SPLIT]
-    return jsonify({'remaining_balance': remaining, 'suggestions': suggestions})
+    mix, used_shows = _historical_department_mix(conn, prod.get('category'), pid)
+    conn.close()
+    if mix:
+        suggestions = sorted(
+            [{'name': name, 'amount': round(remaining * pct, 2)} for name, pct in mix.items()],
+            key=lambda s: -s['amount'])
+        source = 'historical'
+    else:
+        suggestions = [{'name': name, 'amount': round(remaining * pct, 2)} for name, pct in SUGGESTED_DEPARTMENT_SPLIT]
+        source = 'default'
+        used_shows = []
+    return jsonify({'remaining_balance': remaining, 'suggestions': suggestions, 'source': source, 'based_on': used_shows})
 
 @app.route('/api/productions/<int:pid>/allocations', methods=['POST'])
 def create_allocations(pid):
