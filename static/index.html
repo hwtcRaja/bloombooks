@@ -2722,7 +2722,13 @@ async function renderForecastTab() {
           <div class="text-sm mb-8">Gross ask <span class="text-xs text-muted">(this show's total budget)</span>: <span class="fw-600">${fmtMoney(grossAsk)}</span></div>
           ${netAsk != null ? `
           <div class="text-sm mb-8">Historically recouped in revenue: <span class="fw-600" style="color:var(--green)">${fmtMoney(f.forecasted_revenue)}</span></div>
+          ${netAsk >= 0 ? `
           <div class="text-sm" style="padding-top:8px;border-top:1px solid var(--border)">Net ask to the board <span class="text-xs text-muted">(gross ask minus typical revenue)</span>: <span class="fw-600" style="font-size:16px">${fmtMoney(netAsk)}</span></div>
+          <div class="text-xs text-muted mt-8">This is what the board would still need to cover after typical revenue for a show like this.</div>
+          ` : `
+          <div class="text-sm" style="padding-top:8px;border-top:1px solid var(--border)">Projected net surplus <span class="text-xs text-muted">(typical revenue minus gross ask)</span>: <span class="fw-600" style="font-size:16px;color:var(--green)">${fmtMoney(-netAsk)}</span></div>
+          <div class="text-xs text-muted mt-8">Comparable shows have historically brought in more revenue than they cost to produce — based on that pattern, the board likely won't need to net-fund this show, and it could generate a surplus on top of covering its own budget.</div>
+          `}
           <div class="text-xs text-muted mt-8">This is a planning number, not a guarantee — actual revenue for this show could come in above or below the historical average.</div>
           ` : `<div class="text-xs text-muted">Not enough comparable shows yet to estimate a net ask.</div>`}
         </div></div>
