@@ -1177,7 +1177,7 @@ def list_budgets():
     if err: return err
     u = current_user()
     conn = get_db()
-    is_admin = u['role'] in ('admin','treasurer','president')
+    is_admin = u['role'] in ('admin','treasurer','president','resident_producer')
     can_org = is_admin or bool(u.get('can_submit_org_level'))
     owned_ids = user_owned_budget_ids(u['id'])
     if is_admin:
@@ -1281,7 +1281,7 @@ def list_requests():
     if err: return err
     u = current_user()
     conn = get_db()
-    is_admin = u['role'] in ('admin','treasurer','president')
+    is_admin = u['role'] in ('admin','treasurer','president','resident_producer')
     producer_ids = [r['production_id'] for r in
                     conn.execute('SELECT production_id FROM bb_production_members WHERE user_id=%s AND member_role=%s',
                                  (u['id'],'producer')).fetchall()]
@@ -1805,7 +1805,7 @@ def list_productions():
     if err: return err
     u = current_user()
     conn = get_db()
-    is_admin = u['role'] in ('admin','treasurer','president')
+    is_admin = u['role'] in ('admin','treasurer','president','resident_producer')
     if is_admin:
         prods = conn.execute('SELECT * FROM bb_productions ORDER BY status,name').fetchall()
     else:
