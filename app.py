@@ -1230,6 +1230,23 @@ def create_budget():
     # Parent categories have no amount of their own — children roll up to them
     amount = 0 if data.get('is_category') else float(data.get('total_amount', 0))
     conn = get_db()
+    # A department budget's amount must come from what's actually left to
+    # allocate (approved total minus hard costs minus what's already been
+    # given to other departments) — not a number typed in isolation. This is
+    # the same math the bulk allocation flow uses, just applied to a single
+    # manual add. Only applies to production departments with a real amount;
+    # org-level budgets and $0/category placeholders skip this.
+    if prod_id and amount > 0:
+        prod = conn.execute('SELECT total_budget, hard_costs_total FROM bb_productions WHERE id=%s', (prod_id,)).fetchone()
+        if prod:
+            prod = dict(prod)
+            existing_total = conn.execute(
+                'SELECT COALESCE(SUM(total_amount),0) as t FROM bb_budgets WHERE production_id=%s AND is_active=1',
+                (prod_id,)).fetchone()['t']
+            remaining = round((prod.get('total_budget') or 0) - (prod.get('hard_costs_total') or 0) - (existing_total or 0), 2)
+            if amount > remaining + 0.01:
+                conn.close()
+                return jsonify({'error': f'This would exceed the remaining unallocated balance (${remaining:,.2f} left)'}), 400
     conn.execute('INSERT INTO bb_budgets (name,area,season,total_amount,production_id,parent_id) VALUES (%s,%s,%s,%s,%s,%s)',
                  (data['name'], data.get('area','General'), data.get('season',''), amount, prod_id, parent_id))
     conn.commit(); conn.close()
@@ -1247,6 +1264,23 @@ def update_budget(bid):
         if not b.get('production_id') or not is_producer_of(u['id'],b['production_id']):
             conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     data = request.json
+    # Same reconciliation as create_budget — increasing a department's amount
+    # is really just a delayed version of setting it, so it needs the same
+    # check against what's actually left to allocate (excluding this
+    # department's own current amount from the "already spoken for" total).
+    if 'total_amount' in data and b.get('production_id'):
+        new_amount = float(data['total_amount'] or 0)
+        if new_amount > (b.get('total_amount') or 0):
+            prod = conn.execute('SELECT total_budget, hard_costs_total FROM bb_productions WHERE id=%s', (b['production_id'],)).fetchone()
+            if prod:
+                prod = dict(prod)
+                existing_total = conn.execute(
+                    'SELECT COALESCE(SUM(total_amount),0) as t FROM bb_budgets WHERE production_id=%s AND is_active=1 AND id!=%s',
+                    (b['production_id'], bid)).fetchone()['t']
+                remaining = round((prod.get('total_budget') or 0) - (prod.get('hard_costs_total') or 0) - (existing_total or 0), 2)
+                if new_amount > remaining + 0.01:
+                    conn.close()
+                    return jsonify({'error': f'This would exceed the remaining unallocated balance (${remaining:,.2f} left)'}), 400
     fields,vals = [],[]
     for f in ['name','area','season','total_amount','is_active','parent_id']:
         if f in data:
