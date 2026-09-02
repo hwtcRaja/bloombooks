@@ -2400,7 +2400,7 @@ def list_rolecall_rising_stars():
     """List RoleCall Rising Stars productions available to link (admins only)."""
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ORG_APPROVER_ROLES:
+    if u['role'] not in PRODUCTION_ADMIN_ROLES:
         return jsonify({'error':'Insufficient permissions'}),403
     conn = get_db()
     try:
@@ -2431,7 +2431,7 @@ def get_rolecall_link_route(pid):
     err = require_auth()
     if err: return err
     u = current_user()
-    if u['role'] not in ORG_APPROVER_ROLES and not is_producer_of(u['id'], pid):
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'], pid):
         return jsonify({'error':'Insufficient permissions'}),403
     conn = get_db()
     link = get_rolecall_link(conn, pid)
@@ -2441,10 +2441,10 @@ def get_rolecall_link_route(pid):
 
 @app.route('/api/productions/<int:pid>/rolecall-link', methods=['POST'])
 def set_rolecall_link(pid):
-    """Link a BloomBooks production to a RoleCall Rising Stars production (admins)."""
+    """Link a BloomBooks production to a RoleCall Rising Stars production."""
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ORG_APPROVER_ROLES:
+    if u['role'] not in PRODUCTION_ADMIN_ROLES:
         return jsonify({'error':'Insufficient permissions'}),403
     rc_id = (request.json or {}).get('rc_production_id')
     if not rc_id:
@@ -2469,10 +2469,10 @@ def set_rolecall_link(pid):
 
 @app.route('/api/productions/<int:pid>/rolecall-link', methods=['DELETE'])
 def delete_rolecall_link(pid):
-    """Remove the RoleCall link (admins)."""
+    """Remove the RoleCall link."""
     u = current_user()
     if not u: return jsonify({'error':'Not authenticated'}),401
-    if u['role'] not in ORG_APPROVER_ROLES:
+    if u['role'] not in PRODUCTION_ADMIN_ROLES:
         return jsonify({'error':'Insufficient permissions'}),403
     conn = get_db()
     conn.execute('DELETE FROM bb_rolecall_links WHERE bb_production_id=%s', (pid,))
@@ -2985,7 +2985,7 @@ def get_revenue_forecast(pid):
     err = require_auth()
     if err: return err
     u = current_user()
-    if u['role'] not in ORG_APPROVER_ROLES and not is_producer_of(u['id'], pid):
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'], pid):
         return jsonify({'error': 'Insufficient permissions'}), 403
     conn = get_db()
     prod = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
