@@ -3089,7 +3089,7 @@ def ensure_receipt_token(user_id):
 
 @app.route('/api/users/<int:uid>', methods=['DELETE'])
 def delete_user(uid):
-    err = require_auth(['admin','treasurer','president','resident_producer'])
+    err = require_auth(['admin','treasurer','president'])
     if err: return err
     u = current_user()
     if u['id'] == uid:
