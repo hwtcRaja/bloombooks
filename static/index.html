@@ -2101,7 +2101,25 @@ function renderProdTab() {
   const tc = document.getElementById('prod-tab-content');
 
   if (_prodTab === 'departments') {
+    const deptTotal = p.budgets.reduce((s,b)=>s+b.total_amount,0);
+    const deptSpent = p.budgets.reduce((s,b)=>s+b.spent,0);
+    const unallocated = round2((p.remaining_balance||0) - deptTotal);
+    const unspent = round2(deptTotal - deptSpent);
     tc.innerHTML = `
+      <div class="card mb-16"><div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px">
+          <div>
+            <div class="text-xs text-muted">Unallocated</div>
+            <div class="fw-600" style="font-size:20px;color:${unallocated<0?'var(--red)':unallocated>0.01?'#b5804a':'var(--green)'}">${fmtMoney(unallocated)}</div>
+            <div class="text-xs text-muted">of ${fmtMoney(p.remaining_balance||0)} remaining balance not yet assigned to a department</div>
+          </div>
+          <div>
+            <div class="text-xs text-muted">Unspent</div>
+            <div class="fw-600" style="font-size:20px">${fmtMoney(unspent)}</div>
+            <div class="text-xs text-muted">of ${fmtMoney(deptTotal)} allocated across departments, not yet spent</div>
+          </div>
+        </div>
+      </div></div>
       ${canManage ? `<div class="flex mb-16"><button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="showAddDeptModal()">+ Add department</button></div>` : ''}
       ${p.budgets.length === 0
         ? `<div class="empty"><h3>No departments yet</h3><p>Add departments like Props, Costumes, Lighting — each with their own budget cap.</p></div>`
@@ -2131,6 +2149,7 @@ function renderProdTab() {
                   ${canManage ? `<div class="flex gap-8" style="margin-left:auto">
                     <button class="btn btn-outline btn-sm" onclick="showEditDeptModal(${b.id},'${b.name.replace(/'/g,"\\'")}','${b.area}',${b.total_amount})">Edit</button>
                     <button class="btn btn-outline btn-sm" onclick="showManageDeptOwnersModal(${b.id},'${b.name.replace(/'/g,"\\'")}',${JSON.stringify(b.owners||[]).replace(/"/g,'&quot;')})">Owners</button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteDepartment(${b.id},'${b.name.replace(/'/g,"\\'")}')">Delete</button>
                   </div>` : ''}
                 </div>
               </div>
@@ -3053,6 +3072,17 @@ async function addDepartment(pid, season) {
     _currentProd = prods.find(p=>p.id===pid);
     renderProductionDetail();
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+
+async function deleteDepartment(bid, name) {
+  if (!confirm(`Delete "${name}"? Any purchase requests linked to it will be unlinked, not deleted, and this can't be undone.`)) return;
+  try {
+    await api('DELETE', `/budgets/${bid}`);
+    toast('Department deleted', 'success');
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===_currentProd.id);
+    renderProdTab();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 function showEditDeptModal(bid, name, area, amount) {
