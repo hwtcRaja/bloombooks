@@ -2262,14 +2262,22 @@ async function renderBudgetApprovalTab() {
 
     <div class="card mb-16"><div class="card-header"><span class="card-title">Hard costs</span></div>
       <div class="card-body">
+        <p class="text-xs text-muted mb-12">Money already committed for this show — license, venue, and studio use. This is what "hard costs total" and the departments' remaining balance are calculated from.</p>
         <div class="form-row">
           <div class="form-group"><label class="form-label">License cost</label>
             <input type="number" id="ba-license" class="form-input" value="${p.license_cost||0}" step="0.01" ${locked||status==='pending_approval'?'disabled':''}></div>
           <div class="form-group"><label class="form-label">Performance venue cost</label>
             <input type="number" id="ba-venue" class="form-input" value="${p.venue_rate||0}" step="0.01" ${locked||status==='pending_approval'?'disabled':''}></div>
         </div>
+        ${!locked && status!=='pending_approval' ? `<button class="btn btn-outline btn-sm" onclick="saveHardCosts(${p.id})">Save</button>` : (locked ? `<div class="text-xs text-muted">Hard costs are locked (board-approved).</div>` : `<div class="text-xs text-muted">Hard costs are locked while approval is pending.</div>`)}
+        <div class="text-sm mt-8">Hard costs total (license + venue + studio charge): <span class="fw-600">${fmtMoney(hardCostsTotal)}</span></div>
+      </div></div>
+
+    <div class="card mb-16"><div class="card-header"><span class="card-title">Revenue estimates</span></div>
+      <div class="card-body">
+        <p class="text-xs text-muted mb-12">Money this show is expected to bring <em>in</em> — used only for the Suggested Total Budget calculation on this page. None of this counts as a cost, and it's not included in "hard costs total" above.</p>
         <div class="form-row">
-          <div class="form-group"><label class="form-label">Estimated concessions</label>
+          <div class="form-group"><label class="form-label">Estimated concessions revenue</label>
             <input type="number" id="ba-concessions" class="form-input" value="${p.est_concessions||0}" step="0.01" ${locked||status==='pending_approval'?'disabled':''}></div>
           <div class="form-group">
             <label class="form-label">Enrollment revenue</label>
@@ -2279,8 +2287,7 @@ async function renderBudgetApprovalTab() {
           </div>
         </div>
         <div class="text-xs text-muted mb-8">Estimated ticket sales (from RoleCall): <span class="fw-600">${fmtMoney(p.est_ticket_sales||0)}</span></div>
-        ${!locked && status!=='pending_approval' ? `<button class="btn btn-outline btn-sm" onclick="saveHardCosts(${p.id})">Save hard costs</button>` : (locked ? `<div class="text-xs text-muted">Hard costs are locked (board-approved).</div>` : `<div class="text-xs text-muted">Hard costs are locked while approval is pending.</div>`)}
-        <div class="text-sm mt-8">Hard costs total (license + venue + studio charge): <span class="fw-600">${fmtMoney(hardCostsTotal)}</span></div>
+        ${!locked && status!=='pending_approval' ? `<button class="btn btn-outline btn-sm" onclick="saveHardCosts(${p.id})">Save</button>` : (locked ? `<div class="text-xs text-muted">Locked (board-approved).</div>` : `<div class="text-xs text-muted">Locked while approval is pending.</div>`)}
       </div></div>
 
     <div class="card mb-16"><div class="card-header"><span class="card-title">Total budget &amp; approval</span></div>
@@ -2332,7 +2339,6 @@ async function renderBudgetApprovalTab() {
               <button class="btn btn-outline btn-sm" onclick="addAllocRow()">+ Add line</button>
               <button class="btn btn-outline btn-sm" onclick="distributeRemainingAllocation()">Distribute leftover among departments</button>
             </div>
-            <div id="ba-alloc-source" class="text-xs text-muted mb-8"></div>
             <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
               <div style="flex:1;min-width:280px">
                 <div id="ba-alloc-rows"></div>
@@ -2455,15 +2461,56 @@ async function saveHardCosts(pid) {
 async function loadSuggestedAllocations(pid) {
   try {
     const d = await api('GET', `/productions/${pid}/suggested-allocations`);
-    _allocRows = (d.suggestions||[]).map(s=>({name:s.name, amount:s.amount}));
-    renderAllocRows();
-    const srcEl = document.getElementById('ba-alloc-source');
-    if (srcEl) {
-      srcEl.textContent = d.source === 'historical'
-        ? `Based on how ${d.based_on.join(', ')} actually split their department spending.`
-        : `No comparable same-category shows with department budgets yet — using a generic starter split.`;
-    }
+    showAllocCategoryPickerModal(pid, d);
   } catch(e) { toast(e.message, 'error'); }
+}
+
+function showAllocCategoryPickerModal(pid, d) {
+  const suggestions = d.suggestions || [];
+  if (suggestions.length === 0) { toast('No suggested categories available', 'error'); return; }
+  const sourceLine = d.source === 'historical'
+    ? `Based on how ${d.based_on.join(', ')} actually split their department spending.`
+    : `No comparable same-category shows with department budgets yet — using a generic starter split.`;
+  const rows = suggestions.map((s,i) => `
+    <label class="flex flex-center gap-8" style="padding:6px 0;cursor:pointer">
+      <input type="checkbox" id="acp-check-${i}" checked style="width:16px;height:16px;flex-shrink:0">
+      <span style="flex:1">${(s.name||'Untitled').replace(/</g,'&lt;')}</span>
+      <span class="text-muted text-xs">${fmtMoney(s.amount)}</span>
+    </label>`).join('');
+  const html = `
+    <div class="modal-header"><span class="modal-title">Choose categories</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-xs text-muted mb-12">${sourceLine} Uncheck anything that doesn't apply to this show — whatever's left gets redistributed across the ones you keep, so the full remaining balance still gets allocated.</p>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button class="btn btn-outline btn-sm" onclick="setAllocCategoryChecks(${suggestions.length},true)">Select all</button>
+        <button class="btn btn-outline btn-sm" onclick="setAllocCategoryChecks(${suggestions.length},false)">Select none</button>
+      </div>
+      <div>${rows}</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick='applyAllocCategoryPicker(${JSON.stringify(suggestions).replace(/'/g,"&apos;")})'>Use selected categories</button>
+    </div>`;
+  showModal(html);
+}
+
+function setAllocCategoryChecks(count, checked) {
+  for (let i=0; i<count; i++) {
+    const el = document.getElementById(`acp-check-${i}`);
+    if (el) el.checked = checked;
+  }
+}
+
+function applyAllocCategoryPicker(suggestions) {
+  const selected = suggestions.filter((s,i) => document.getElementById(`acp-check-${i}`)?.checked);
+  if (selected.length === 0) { toast('Pick at least one category', 'error'); return; }
+  _allocRows = selected.map(s=>({name:s.name, amount:s.amount}));
+  closeModal();
+  // Auto-redistribute so the selected categories still cover the full
+  // remaining balance, instead of leaving whatever the unchecked ones
+  // would've taken sitting unallocated.
+  distributeRemainingAllocation(true);
+  toast(`${selected.length} categor${selected.length!==1?'ies':'y'} applied — remaining balance redistributed across them`, 'success');
 }
 
 function addAllocRow() {
@@ -2556,11 +2603,11 @@ function renderAllocPieChart() {
     <div style="min-width:160px">${legend}</div>`;
 }
 
-function distributeRemainingAllocation() {
+function distributeRemainingAllocation(silent) {
   const p = _currentProd;
   const remaining = (p.total_budget||0) - (p.hard_costs_total||0);
   const namedRows = _allocRows.filter(r => r.name && r.name.trim());
-  if (namedRows.length === 0) { toast('Add at least one department line first', 'error'); return; }
+  if (namedRows.length === 0) { if (!silent) toast('Add at least one department line first', 'error'); return; }
   const currentTotal = namedRows.reduce((s,r)=>s+(r.amount||0),0);
   if (currentTotal <= 0) {
     // Nothing allocated yet — split the whole remaining balance evenly.
@@ -2577,7 +2624,7 @@ function distributeRemainingAllocation() {
     });
   }
   renderAllocRows();
-  toast('Leftover distributed across departments', 'success');
+  if (!silent) toast('Leftover distributed across departments', 'success');
 }
 
 async function submitAllocations(pid) {
