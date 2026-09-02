@@ -2356,7 +2356,12 @@ async function loadSuggestedTotalBudgetHint(pid) {
     if (s.suggested_total_budget) {
       const parts = [];
       if (s.revenue_estimate) parts.push(`est. revenue ${fmtMoney(s.revenue_estimate)}`);
-      if (s.comparable_avg_budget) parts.push(`avg of last ${s.comparable_basis.length} comparable show${s.comparable_basis.length!==1?'s':''} ${fmtMoney(s.comparable_avg_budget)}`);
+      if (s.comparable_avg_budget) {
+        const compLabel = s.comparable_scaled_by_revenue
+          ? `${s.comparable_basis.length} comparable show${s.comparable_basis.length!==1?'s':''} scaled to this show's revenue ${fmtMoney(s.comparable_avg_budget)}`
+          : `avg of last ${s.comparable_basis.length} comparable show${s.comparable_basis.length!==1?'s':''} ${fmtMoney(s.comparable_avg_budget)}`;
+        parts.push(compLabel);
+      }
       hintEl.textContent = `Suggested total budget: ${fmtMoney(s.suggested_total_budget)} (from ${parts.join(' and ')})`;
       const approveInput = document.getElementById('ba-approve-total');
       if (approveInput && !approveInput.value) approveInput.value = s.suggested_total_budget;
@@ -2998,26 +3003,76 @@ function showAddProdMemberModal() {
   const p = _currentProd;
   const existingIds = p.members.map(m=>m.user_id);
   const available = _prodAllUsers.filter(u=>!existingIds.includes(u.id));
-  if (available.length === 0) { toast('All users are already on this production','info'); return; }
   const opts = available.map(u=>`<option value="${u.id}">${u.name} (${u.email})</option>`).join('');
   const html = `
     <div class="modal-header"><span class="modal-title">Add team member</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <div class="form-group"><label class="form-label">User</label>
-        <select id="add-pm-user" class="form-select">${opts}</select></div>
-      <div class="form-group"><label class="form-label">Role on this production</label>
-        <select id="add-pm-role" class="form-select">
-          <option value="member">Team member</option>
-          <option value="producer">Producer</option>
-        </select></div>
-      <div class="form-group"><label class="form-label">Display Title <span class="text-xs text-muted">(optional — e.g. Stage Manager, Set Designer)</span></label>
-        <input type="text" id="add-pm-title" class="form-input" placeholder="e.g. Stage Manager"/></div>
+      <div class="flex mb-16" style="border:1px solid var(--border);border-radius:8px;padding:3px;width:fit-content">
+        <button id="apm-tab-existing" class="btn btn-sm" onclick="switchAddMemberTab('existing')" style="border:none">Existing person</button>
+        <button id="apm-tab-new" class="btn btn-sm" onclick="switchAddMemberTab('new')" style="border:none">New person</button>
+      </div>
+
+      <div id="apm-existing-body">
+        ${available.length === 0 ? `<p class="text-sm text-muted">Every existing user is already on this production. Switch to "New person" to invite someone new.</p>` : `
+        <div class="form-group"><label class="form-label">User</label>
+          <select id="add-pm-user" class="form-select">${opts}</select></div>
+        <div class="form-group"><label class="form-label">Role on this production</label>
+          <select id="add-pm-role" class="form-select">
+            <option value="member">Team member</option>
+            <option value="producer">Producer</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Display Title <span class="text-xs text-muted">(optional — e.g. Stage Manager, Set Designer)</span></label>
+          <input type="text" id="add-pm-title" class="form-input" placeholder="e.g. Stage Manager"/></div>`}
+      </div>
+
+      <div id="apm-new-body" style="display:none">
+        <p class="text-sm text-muted mb-12">Creates a BloomBooks login for them and adds them to this production in one step. They'll get a welcome email with their password.</p>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Name <span class="req">*</span></label>
+            <input type="text" id="new-pm-name" class="form-input" placeholder="Full name"/></div>
+          <div class="form-group"><label class="form-label">Email <span class="req">*</span></label>
+            <input type="email" id="new-pm-email" class="form-input" placeholder="email@example.com"/></div>
+        </div>
+        <div class="form-group"><label class="form-label">Role on this production</label>
+          <select id="new-pm-role" class="form-select">
+            <option value="member">Team member</option>
+            <option value="producer">Producer</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Display Title <span class="text-xs text-muted">(optional — e.g. Stage Manager, Set Designer)</span></label>
+          <input type="text" id="new-pm-title" class="form-input" placeholder="e.g. Stage Manager"/></div>
+        <div class="form-group"><label class="form-label">Budget access <span class="text-xs text-muted">(optional — makes them an owner of one department budget so they can submit requests against it right away)</span></label>
+          <select id="new-pm-budget" class="form-select">
+            <option value="">— None for now —</option>
+            ${p.budgets.map(b=>`<option value="${b.id}">${b.name} (${fmtMoney(b.total_amount)})</option>`).join('')}
+          </select>
+          ${p.budgets.length===0?'<div class="text-xs text-muted mt-4">This production has no department budgets yet — add one first if you want to assign ownership now.</div>':''}</div>
+        <div id="new-pm-error" class="form-error hidden"></div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="doAddProdMember(${p.id})">Add to production</button>
+      <button id="apm-submit-btn" class="btn btn-primary" onclick="doAddProdMember(${p.id})" ${available.length===0?'style="display:none"':''}>Add to production</button>
     </div>`;
   showModal(html);
+  if (available.length === 0) switchAddMemberTab('new');
+}
+
+function switchAddMemberTab(tab) {
+  const existingEl = document.getElementById('apm-existing-body');
+  const newEl = document.getElementById('apm-new-body');
+  const existingBtn = document.getElementById('apm-tab-existing');
+  const newBtn = document.getElementById('apm-tab-new');
+  const submitBtn = document.getElementById('apm-submit-btn');
+  const showNew = tab === 'new';
+  existingEl.style.display = showNew ? 'none' : '';
+  newEl.style.display = showNew ? '' : 'none';
+  existingBtn.classList.toggle('btn-primary', !showNew);
+  existingBtn.classList.toggle('btn-outline', showNew);
+  newBtn.classList.toggle('btn-primary', showNew);
+  newBtn.classList.toggle('btn-outline', !showNew);
+  submitBtn.style.display = '';
+  submitBtn.textContent = showNew ? 'Create account & add' : 'Add to production';
+  submitBtn.setAttribute('onclick', showNew ? `doInviteNewProdMember(${_currentProd.id})` : `doAddProdMember(${_currentProd.id})`);
 }
 
 async function doAddProdMember(pid) {
@@ -3032,6 +3087,32 @@ async function doAddProdMember(pid) {
     _currentProd = prods.find(p=>p.id===pid);
     renderProdTab();
   } catch(e) { toast(e.message,'error'); }
+}
+
+async function doInviteNewProdMember(pid) {
+  const name = document.getElementById('new-pm-name').value.trim();
+  const email = document.getElementById('new-pm-email').value.trim();
+  const member_role = document.getElementById('new-pm-role').value;
+  const display_title = document.getElementById('new-pm-title').value.trim();
+  const budgetVal = document.getElementById('new-pm-budget').value;
+  const budget_id = budgetVal ? parseInt(budgetVal) : null;
+  const errEl = document.getElementById('new-pm-error');
+  errEl.classList.add('hidden');
+  if (!name || !email) { errEl.textContent='Name and email are required'; errEl.classList.remove('hidden'); return; }
+  const btn = document.getElementById('apm-submit-btn');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  try {
+    await api('POST', `/productions/${pid}/members/invite-new`, {name, email, member_role, display_title, budget_id});
+    toast('Account created and added to the production!','success');
+    closeModal();
+    const [prods, allUsers] = await Promise.all([api('GET', '/productions'), api('GET', '/users')]);
+    _currentProd = prods.find(p=>p.id===pid);
+    _prodAllUsers = allUsers;
+    renderProdTab();
+  } catch(e) {
+    errEl.textContent = e.message; errEl.classList.remove('hidden');
+    btn.disabled = false; btn.textContent = 'Create account & add';
+  }
 }
 
 function showEditProdMemberTitleModal(pid, uid, name, currentTitle) {
