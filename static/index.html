@@ -1814,7 +1814,7 @@ async function renderProductions() {
       const pct = totalBudget>0 ? Math.min(100,(totalSpent/totalBudget)*100) : 0;
       const producers = p.members.filter(m=>m.member_role==='producer');
       const members   = p.members.filter(m=>m.member_role==='member');
-      const canManage = ['admin','treasurer','president'].includes(currentUser.role) || p.i_am_producer;
+      const canManage = ['admin','treasurer','president','resident_producer'].includes(currentUser.role) || p.i_am_producer || p.i_am_resident_producer;
 
       return `<div class="card mb-16">
         <div class="card-header">
@@ -2088,7 +2088,7 @@ function switchProdTab(tab) {
 
 function renderProdTab() {
   const p = _currentProd;
-  const canManage = ['admin','treasurer','president'].includes(currentUser.role) || p.i_am_producer;
+  const canManage = ['admin','treasurer','president','resident_producer'].includes(currentUser.role) || p.i_am_producer || p.i_am_resident_producer;
   const tc = document.getElementById('prod-tab-content');
 
   if (_prodTab === 'departments') {
@@ -2573,7 +2573,7 @@ function round2(n) { return Math.round(n * 100) / 100; }
 
 async function renderRevenueTab() {
   const p = _currentProd;
-  const canManage = ['admin','treasurer','president'].includes(currentUser.role) || p.i_am_producer;
+  const canManage = ['admin','treasurer','president','resident_producer'].includes(currentUser.role) || p.i_am_producer || p.i_am_resident_producer;
   const tc = document.getElementById('prod-tab-content');
   tc.innerHTML = '<div class="text-xs text-muted">Loading revenue...</div>';
 
