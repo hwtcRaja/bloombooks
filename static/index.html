@@ -2851,16 +2851,22 @@ async function removeRoleCallLink(pid) {
 
 function showAddDeptModal() {
   const p = _currentProd;
+  const deptTotal = p.budgets.reduce((s,b)=>s+b.total_amount,0);
+  const unallocated = round2((p.total_budget||0) - (p.hard_costs_total||0) - deptTotal);
   const html = `
     <div class="modal-header"><span class="modal-title">Add department</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
+      <div class="text-sm mb-12" style="background:var(--bg-subtle,#f8f8f8);border-radius:6px;padding:10px 12px">
+        Remaining unallocated balance: <span class="fw-600" style="color:${unallocated<0?'var(--red)':'var(--ink)'}">${fmtMoney(unallocated)}</span>
+        <div class="text-xs text-muted mt-4">Comes from the approved total minus hard costs minus what's already assigned to other departments.</div>
+      </div>
       <div class="form-group"><label class="form-label">Department name <span class="req">*</span></label>
         <input type="text" id="d-name" class="form-input" placeholder="e.g. Scenery & Props, Costumes, Lighting"></div>
       <div class="form-row">
         <div class="form-group"><label class="form-label">Type / area</label>
           <input type="text" id="d-area" class="form-input" placeholder="e.g. Props, Costumes, Technical"></div>
         <div class="form-group"><label class="form-label">Budget cap <span class="req">*</span></label>
-          <input type="number" id="d-amount" class="form-input" placeholder="0.00" step="0.01"></div>
+          <input type="number" id="d-amount" class="form-input" placeholder="0.00" step="0.01" max="${Math.max(0,unallocated)}"></div>
       </div>
       <div id="d-error" class="form-error hidden"></div>
     </div>
