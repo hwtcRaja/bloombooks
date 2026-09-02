@@ -1158,21 +1158,6 @@ def create_user():
         conn.close()
         return jsonify({'error': 'An account with that email already exists'}), 409
 
-
-    err = require_auth(['admin'])
-    if err: return err
-    data = request.json
-    conn = get_db()
-    if 'role' in data:
-        conn.execute('UPDATE bb_users SET role=%s WHERE id=%s', (data['role'], uid))
-    if 'training_complete' in data:
-        conn.execute('UPDATE bb_users SET training_complete=%s WHERE id=%s', (data['training_complete'], uid))
-    if 'password' in data and data['password']:
-        conn.execute('UPDATE bb_users SET password=%s WHERE id=%s', (hash_pw(data['password']), uid))
-    conn.commit()
-    conn.close()
-    return jsonify({'ok': True})
-
 # ─── Budgets ─────────────────────────────────────────────────────────────────
 @app.route('/api/budgets', methods=['GET'])
 def list_budgets():
@@ -1957,6 +1942,64 @@ def add_production_member(pid):
         conn.commit(); conn.close(); return jsonify({'ok':True})
     except psycopg2.IntegrityError:
         conn.close(); return jsonify({'error':'Person already a member'}),409
+
+@app.route('/api/productions/<int:pid>/members/invite-new', methods=['POST'])
+def invite_new_production_member(pid):
+    """Creates a brand-new BloomBooks account and adds them to this
+    production in one step — so a Resident Producer (or a show's own
+    Producer) can onboard someone who doesn't have a login yet, without
+    needing an org officer to create the account first. The new account
+    always gets the base 'volunteer' system role no matter who creates it or
+    what production-level role they're given here — this never grants
+    treasurer/president/admin/resident_producer/producer-level access,
+    closing off any path to escalating org-wide permissions through this
+    shortcut. Actual purchasing access comes from the production membership
+    itself, plus optionally being made an owner of one of this production's
+    department budgets right here, so they can submit requests against it
+    immediately instead of needing a second follow-up step."""
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'],pid):
+        return jsonify({'error':'Insufficient permissions'}),403
+    data = request.json or {}
+    name  = (data.get('name') or '').strip()
+    email = (data.get('email') or '').strip().lower()
+    member_role = data.get('member_role','producer')
+    if member_role not in ('producer','member'):
+        member_role = 'producer'
+    display_title = (data.get('display_title') or '').strip()
+    budget_id = data.get('budget_id') or None
+    if not name or not email:
+        return jsonify({'error':'Name and email are required'}),400
+    conn = get_db()
+    if budget_id:
+        b = conn.execute('SELECT id FROM bb_budgets WHERE id=%s AND production_id=%s', (budget_id, pid)).fetchone()
+        if not b:
+            conn.close()
+            return jsonify({'error':'That budget was not found on this production'}),400
+    temp_password = secrets.token_urlsafe(9)
+    try:
+        row = conn.execute('''INSERT INTO bb_users (name,email,password,role,training_complete,is_active)
+            VALUES (%s,%s,%s,'volunteer',0,1) RETURNING id''',
+            (name, email, hash_pw(temp_password))).fetchone()
+        new_uid = row['id']
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.close()
+        return jsonify({'error':'An account with that email already exists — add them as an existing person instead'}),409
+    try:
+        conn.execute('INSERT INTO bb_production_members (production_id,user_id,member_role,display_title) VALUES (%s,%s,%s,%s)',
+                     (pid,new_uid,member_role,display_title))
+        if budget_id:
+            conn.execute('INSERT INTO bb_budget_members (budget_id,user_id,is_owner) VALUES (%s,%s,1)', (budget_id, new_uid))
+        conn.commit()
+    except Exception:
+        conn.rollback(); conn.close()
+        return jsonify({'error':'Account created, but adding them to this production failed — add them manually as an existing person.'}),500
+    conn.close()
+    notify_welcome(name, email, temp_password, 'volunteer')
+    log_action(u['id'], 'invited_new_production_member', 'production', pid, f'{name} ({email})')
+    return jsonify({'ok': True, 'user_id': new_uid})
 
 @app.route('/api/productions/<int:pid>/members/<int:uid>', methods=['PATCH'])
 def update_production_member(pid, uid):
@@ -3071,10 +3114,18 @@ def get_suggested_total_budget(pid):
     """Suggested Total Budget = average of (a) this show's own estimated
     revenue (ticket sales + concessions + live RoleCall enrollment revenue,
     the last only for Rising Stars-category shows with a live RoleCall link)
-    and (b) the average total budget of the last 3 comparable (same-category)
-    shows. Falls back to whichever signal is actually available if only one
-    is. Purely a starting point — the Resident Producer can override it
-    before presenting to the board."""
+    and (b) a scaled comparable figure from the last 3 same-category shows.
+    That comparable is deliberately NOT a raw average of their budgets —
+    a show that costs less to produce (lower venue/studio charge) or brings
+    in less enrollment than past years shouldn't get pulled toward what
+    bigger, higher-revenue years happened to be budgeted. Instead each
+    comparable's own budget-to-revenue ratio is averaged, then applied to
+    THIS show's own revenue estimate — so the comparable figure shrinks or
+    grows proportionally with this show's actual scale instead of anchoring
+    to unrelated historical dollar amounts. Falls back to a plain historical
+    budget average only when this show has no revenue estimate to scale
+    against yet. Purely a starting point — the Resident Producer can
+    override it before presenting to the board."""
     err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
     if err: return err
     conn = get_db()
@@ -3093,12 +3144,30 @@ def get_suggested_total_budget(pid):
 
     comp_avg = None
     comps_basis = []
+    scaled_by_revenue = False
     if category:
         comps = conn.execute('''SELECT id, name, season, total_budget FROM bb_productions
                                 WHERE category=%s AND id!=%s AND total_budget>0 ORDER BY id DESC LIMIT 3''', (category, pid)).fetchall()
         comps_basis = [dict(c) for c in comps]
+        for c in comps_basis:
+            rev_row = conn.execute('SELECT COALESCE(SUM(actual),0) as actual FROM bb_production_revenue WHERE production_id=%s', (c['id'],)).fetchone()
+            actual_rev = rev_row['actual'] or 0
+            rc_line_c = rolecall_revenue_line(conn, c['id'])
+            if rc_line_c:
+                actual_rev += rc_line_c['actual']
+            c['actual_revenue'] = round(actual_rev, 2)
+            c['budget_to_revenue_ratio'] = round(c['total_budget'] / actual_rev, 4) if actual_rev > 0 else None
         if comps_basis:
-            comp_avg = round(sum(c['total_budget'] for c in comps_basis) / len(comps_basis), 2)
+            if revenue_estimate:
+                ratios = [c['budget_to_revenue_ratio'] for c in comps_basis if c['budget_to_revenue_ratio']]
+                if ratios:
+                    avg_ratio = sum(ratios) / len(ratios)
+                    comp_avg = round(revenue_estimate * avg_ratio, 2)
+                    scaled_by_revenue = True
+            if comp_avg is None:
+                # No revenue estimate yet to scale against — fall back to a
+                # plain historical budget average as a rough starting point.
+                comp_avg = round(sum(c['total_budget'] for c in comps_basis) / len(comps_basis), 2)
     conn.close()
 
     signals = [v for v in (revenue_estimate, comp_avg) if v]
@@ -3108,6 +3177,7 @@ def get_suggested_total_budget(pid):
         'suggested_total_budget': suggested,
         'revenue_estimate': revenue_estimate,
         'comparable_avg_budget': comp_avg,
+        'comparable_scaled_by_revenue': scaled_by_revenue,
         'comparable_basis': comps_basis,
         'note': None if signals else 'No estimated revenue or comparable same-category shows on record yet — add historical shows (with a total budget set) or fill in revenue estimates to get a suggestion.'
     })
