@@ -2327,13 +2327,19 @@ async function renderBudgetApprovalTab() {
       <div class="card-body">
         ${!approved
           ? `<div class="text-xs text-muted">The budget must be approved before allocating departments.</div>`
-          : `<div class="flex mb-12" style="gap:8px">
+          : `<div class="flex mb-12" style="gap:8px;flex-wrap:wrap">
               <button class="btn btn-outline btn-sm" onclick="loadSuggestedAllocations(${p.id})">Use suggested split</button>
               <button class="btn btn-outline btn-sm" onclick="addAllocRow()">+ Add line</button>
+              <button class="btn btn-outline btn-sm" onclick="distributeRemainingAllocation()">Distribute leftover among departments</button>
             </div>
             <div id="ba-alloc-source" class="text-xs text-muted mb-8"></div>
-            <div id="ba-alloc-rows"></div>
-            <div class="text-sm mt-8" id="ba-alloc-total"></div>
+            <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+              <div style="flex:1;min-width:280px">
+                <div id="ba-alloc-rows"></div>
+                <div class="text-sm mt-8" id="ba-alloc-total"></div>
+              </div>
+              <div id="ba-alloc-chart" style="flex-shrink:0"></div>
+            </div>
             <button class="btn btn-primary btn-sm mt-8" onclick="submitAllocations(${p.id})">Create department budgets</button>`}
       </div></div>`;
 
@@ -2473,20 +2479,30 @@ function removeAllocRow(idx) {
 function updateAllocRow(idx, field, val) {
   _allocRows[idx][field] = field==='amount' ? parseFloat(val||0) : val;
   renderAllocTotal();
+  renderAllocPieChart();
 }
+
+const ALLOC_CHART_COLORS = ['#2d7d4f','#b5804a','#4a6fa5','#a0522d','#7c5cbf','#c2593f','#3d8f8f','#9a7d2e','#6b8e23','#b0468f'];
 
 function renderAllocRows() {
   const wrap = document.getElementById('ba-alloc-rows');
   if (!wrap) return;
-  wrap.innerHTML = _allocRows.map((r,idx) => `
+  const p = _currentProd;
+  const remaining = (p.total_budget||0) - (p.hard_costs_total||0);
+  wrap.innerHTML = _allocRows.map((r,idx) => {
+    const pct = remaining > 0 ? ((r.amount||0)/remaining*100) : 0;
+    return `
     <div class="form-row" style="align-items:flex-end">
       <div class="form-group"><label class="form-label">${idx===0?'Department':''}</label>
         <input type="text" class="form-input" value="${(r.name||'').replace(/"/g,'&quot;')}" oninput="updateAllocRow(${idx},'name',this.value)"></div>
       <div class="form-group" style="max-width:160px"><label class="form-label">${idx===0?'Amount':''}</label>
         <input type="number" class="form-input" value="${r.amount||0}" step="0.01" oninput="updateAllocRow(${idx},'amount',this.value)"></div>
+      <div style="width:56px;text-align:right;padding-bottom:10px;font-size:12px;color:var(--ink3)">${pct.toFixed(1)}%</div>
       <button class="btn btn-danger btn-sm" style="margin-bottom:16px" onclick="removeAllocRow(${idx})">×</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   renderAllocTotal();
+  renderAllocPieChart();
 }
 
 function renderAllocTotal() {
@@ -2495,8 +2511,73 @@ function renderAllocTotal() {
   const p = _currentProd;
   const remaining = (p.total_budget||0) - (p.hard_costs_total||0);
   const total = _allocRows.reduce((s,r)=>s+(r.amount||0),0);
-  el.innerHTML = `Allocated: <span class="fw-600">${fmtMoney(total)}</span> of ${fmtMoney(remaining)} remaining`
-    + (total > remaining + 0.01 ? ` <span style="color:var(--red)">— over by ${fmtMoney(total-remaining)}</span>` : '');
+  const leftover = round2(remaining - total);
+  let statusLine;
+  if (Math.abs(leftover) < 0.01) {
+    statusLine = `<span style="color:var(--teal-600)">✓ Fully allocated</span>`;
+  } else if (leftover > 0) {
+    statusLine = `<span style="color:var(--amber-600,#b5804a)">${fmtMoney(leftover)} left to allocate</span>`;
+  } else {
+    statusLine = `<span style="color:var(--red)">Over by ${fmtMoney(-leftover)}</span>`;
+  }
+  el.innerHTML = `
+    <div style="background:var(--bg-subtle,#f8f8f8);border-radius:8px;padding:10px 12px">
+      <div>Remaining balance: <span class="fw-600">${fmtMoney(remaining)}</span></div>
+      <div>Allocated so far: <span class="fw-600">${fmtMoney(total)}</span></div>
+      <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;font-weight:600">${statusLine}</div>
+    </div>`;
+}
+
+function renderAllocPieChart() {
+  const chartEl = document.getElementById('ba-alloc-chart');
+  if (!chartEl) return;
+  const rows = _allocRows.filter(r => (r.amount||0) > 0);
+  if (rows.length === 0) { chartEl.innerHTML = ''; return; }
+  const total = rows.reduce((s,r)=>s+r.amount,0);
+  let cursor = 0;
+  const stops = rows.map((r,i) => {
+    const start = cursor / total * 360;
+    cursor += r.amount;
+    const end = cursor / total * 360;
+    const color = ALLOC_CHART_COLORS[i % ALLOC_CHART_COLORS.length];
+    return `${color} ${start}deg ${end}deg`;
+  }).join(', ');
+  const legend = rows.map((r,i) => {
+    const color = ALLOC_CHART_COLORS[i % ALLOC_CHART_COLORS.length];
+    const pct = (r.amount/total*100).toFixed(1);
+    return `<div class="flex flex-center gap-8" style="font-size:12px;margin-bottom:4px">
+      <span style="width:10px;height:10px;border-radius:2px;background:${color};flex-shrink:0"></span>
+      <span style="flex:1">${(r.name||'Untitled').replace(/</g,'&lt;')}</span>
+      <span class="text-muted">${pct}%</span>
+    </div>`;
+  }).join('');
+  chartEl.innerHTML = `
+    <div style="width:150px;height:150px;border-radius:50%;background:conic-gradient(${stops});margin:0 auto 12px"></div>
+    <div style="min-width:160px">${legend}</div>`;
+}
+
+function distributeRemainingAllocation() {
+  const p = _currentProd;
+  const remaining = (p.total_budget||0) - (p.hard_costs_total||0);
+  const namedRows = _allocRows.filter(r => r.name && r.name.trim());
+  if (namedRows.length === 0) { toast('Add at least one department line first', 'error'); return; }
+  const currentTotal = namedRows.reduce((s,r)=>s+(r.amount||0),0);
+  if (currentTotal <= 0) {
+    // Nothing allocated yet — split the whole remaining balance evenly.
+    const each = round2(remaining / namedRows.length);
+    namedRows.forEach((r,i) => { r.amount = i === namedRows.length-1 ? round2(remaining - each*(namedRows.length-1)) : each; });
+  } else {
+    // Scale every row proportionally so they still sum to the full
+    // remaining balance, preserving whatever relative split already exists.
+    const factor = remaining / currentTotal;
+    let running = 0;
+    namedRows.forEach((r,i) => {
+      if (i === namedRows.length-1) { r.amount = round2(remaining - running); }
+      else { r.amount = round2((r.amount||0) * factor); running += r.amount; }
+    });
+  }
+  renderAllocRows();
+  toast('Leftover distributed across departments', 'success');
 }
 
 async function submitAllocations(pid) {
