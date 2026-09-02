@@ -1124,7 +1124,10 @@ def register():
 # ─── Users (admin) ───────────────────────────────────────────────────────────
 @app.route('/api/users', methods=['GET'])
 def list_users():
-    err = require_auth(['admin', 'treasurer', 'president'])
+    # Also powers the member-picker dropdown when adding people to a
+    # production/budget — Resident Producer needs read access for that even
+    # though account creation/editing stays admin/treasurer/president only.
+    err = require_auth(['admin', 'treasurer', 'president', 'resident_producer'])
     if err: return err
     conn = get_db()
     users = conn.execute('SELECT id,name,email,role,training_complete,created_at FROM bb_users ORDER BY name').fetchall()
