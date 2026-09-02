@@ -2590,12 +2590,18 @@ def _historical_department_mix(conn, category, exclude_pid):
     historical data to build one from."""
     if not category:
         return {}, []
-    comps = conn.execute('''SELECT id, name, season FROM bb_productions
-                            WHERE category=%s AND id!=%s ORDER BY id DESC LIMIT 3''', (category, exclude_pid)).fetchall()
-    comps = [dict(c) for c in comps]
+    # Pull a wider candidate pool than we need, then keep only the ones that
+    # actually have department budget data — otherwise a handful of newer
+    # shows with no departments allocated yet would push out older shows
+    # that actually have real data to learn from, just for being more recent.
+    candidates = conn.execute('''SELECT id, name, season FROM bb_productions
+                            WHERE category=%s AND id!=%s ORDER BY id DESC LIMIT 15''', (category, exclude_pid)).fetchall()
     pct_by_name = {}
     used_shows = []
-    for c in comps:
+    for c in candidates:
+        if len(used_shows) >= 3:
+            break
+        c = dict(c)
         rows = conn.execute('''SELECT name, total_amount FROM bb_budgets
                                WHERE production_id=%s AND is_active=1''', (c['id'],)).fetchall()
         rows = [dict(r) for r in rows if (r['name'] or '').strip().lower() not in HARD_COST_LIKE_DEPARTMENT_NAMES]
@@ -3160,6 +3166,41 @@ def _is_rising_stars_category(category):
         return False
     c = category.strip().lower()
     return c == 'rs' or 'rising' in c
+
+@app.route('/api/productions/<int:pid>/suggested-concessions', methods=['GET'])
+def get_suggested_concessions(pid):
+    """Historical average of comparable same-category shows' actual
+    Concessions revenue (the Revenue tab line, not the expense department) —
+    a starting point for the Estimated concessions revenue field. This is a
+    one-time suggestion, not a live sync to anything on this show itself, so
+    editing it later never gets overwritten by what the Revenue tab says."""
+    err = require_auth(roles=list(PRODUCTION_ADMIN_ROLES))
+    if err: return err
+    conn = get_db()
+    prod = conn.execute('SELECT category FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not prod:
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    category = dict(prod).get('category')
+    suggested = None
+    used_shows = []
+    if category:
+        candidates = conn.execute('''SELECT id, name FROM bb_productions
+            WHERE category=%s AND id!=%s ORDER BY id DESC LIMIT 15''', (category, pid)).fetchall()
+        amounts = []
+        for c in candidates:
+            if len(used_shows) >= 3:
+                break
+            c = dict(c)
+            row = conn.execute('''SELECT COALESCE(SUM(actual),0) as actual FROM bb_production_revenue
+                WHERE production_id=%s AND LOWER(source)='concessions' ''', (c['id'],)).fetchone()
+            actual = row['actual'] if row else 0
+            if actual and actual > 0:
+                amounts.append(actual)
+                used_shows.append(c['name'])
+        if amounts:
+            suggested = round(sum(amounts) / len(amounts), 2)
+    conn.close()
+    return jsonify({'suggested': suggested, 'based_on': used_shows})
 
 @app.route('/api/productions/<int:pid>/suggested-total-budget', methods=['GET'])
 def get_suggested_total_budget(pid):
