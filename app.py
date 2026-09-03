@@ -603,6 +603,7 @@ def init_db():
         ("bb_purchase_requests", "revision_note",     "TEXT"),
         ("bb_purchase_requests", "statement_id",      "INTEGER"),
         ("bb_users",             "is_active",         "INTEGER DEFAULT 1"),
+        ("bb_users",             "phone",              "TEXT"),
         ("bb_users",             "receipt_token",     "TEXT"),
         ("bb_users",             "reimb_method",      "TEXT"),
         ("bb_users",             "reimb_handle",      "TEXT"),
@@ -722,30 +723,44 @@ def user_owned_budget_ids(uid):
 def user_can_use_budget(u, budget_id):
     """
     Can this user submit a purchase request against this budget?
-      • Org approvers (admin/treasurer/president): any budget.
+      • Org approvers (admin/treasurer/president) and Resident Producer: any
+        budget, any production, always — full org-wide oversight, and this
+        is the one group archived/closed shows don't block (so corrections
+        are still possible after a show wraps).
       • Anyone with can_submit_org_level: any org-level budget (production_id IS NULL).
-      • Anyone: a budget they personally own (bb_budget_members).
-      • Production budgets: any member of that production.
+      • Anyone: a budget they're explicitly assigned to own (bb_budget_members)
+        — this is the only path a plain Team Member has; being added to the
+        production alone no longer grants access to every department on it.
+      • Producers (member_role='producer' on that specific production): any
+        department budget on that production — full show-level access,
+        matching the production-wide approval rights they already have —
+        but ONLY for productions they're actually producing, and only while
+        that production is active (not archived/closed).
     """
     if not budget_id:
         return False
-    if u['role'] in ORG_APPROVER_ROLES:
+    if u['role'] in PRODUCTION_ADMIN_ROLES:
         return True
     conn = get_db()
     b = conn.execute('SELECT * FROM bb_budgets WHERE id=%s', (budget_id,)).fetchone()
     if not b:
         conn.close(); return False
     b = dict(b)
+    if b.get('production_id'):
+        prod = conn.execute('SELECT status FROM bb_productions WHERE id=%s', (b['production_id'],)).fetchone()
+        if prod and dict(prod).get('status') in ('archived', 'closed'):
+            conn.close(); return False
     owned = conn.execute('SELECT 1 FROM bb_budget_members WHERE user_id=%s AND budget_id=%s',
                          (u['id'], budget_id)).fetchone()
     if owned:
         conn.close(); return True
     if b.get('production_id'):
-        member = conn.execute('SELECT 1 FROM bb_production_members WHERE user_id=%s AND production_id=%s',
-                              (u['id'], b['production_id'])).fetchone()
+        is_producer_here = conn.execute('''SELECT 1 FROM bb_production_members
+            WHERE user_id=%s AND production_id=%s AND member_role='producer' ''',
+            (u['id'], b['production_id'])).fetchone()
         conn.close()
-        return bool(member)
-    # Org-level budget the user doesn't personally own → allowed only with general
+        return bool(is_producer_here)
+    # org-level budget the user doesn't personally own → allowed only with general
     # org-level submit access (a lighter-weight grant than a full approver role).
     conn.close()
     return bool(u.get('can_submit_org_level'))
@@ -1173,14 +1188,21 @@ def list_budgets():
                                   LEFT JOIN bb_productions p ON b.production_id=p.id
                                   ORDER BY b.is_active DESC,p.name,b.name''').fetchall()
     else:
-        my_ids = [r['production_id'] for r in
-                  conn.execute('SELECT production_id FROM bb_production_members WHERE user_id=%s',(u['id'],)).fetchall()]
-        # Non-admins see: production budgets for their productions + any budget they own
-        # + (if granted) every org-level budget, even ones they don't personally own.
+        # Only productions where this user is specifically a Producer grant
+        # blanket visibility into every department budget on that show —
+        # being added as a plain Team Member no longer does; a Team Member
+        # only sees budgets they're explicitly assigned to own (owned_ids
+        # below). Archived/closed shows don't grant this either way, even
+        # for a Producer — those stay visible only via explicit ownership.
+        producer_ids = [r['production_id'] for r in conn.execute(
+            '''SELECT pm.production_id FROM bb_production_members pm
+               JOIN bb_productions p ON pm.production_id=p.id
+               WHERE pm.user_id=%s AND pm.member_role='producer'
+                 AND p.status NOT IN ('archived','closed')''', (u['id'],)).fetchall()]
         clauses, params = [], []
-        if my_ids:
-            ph = ','.join(['%s']*len(my_ids))
-            clauses.append(f'b.production_id IN ({ph})'); params.extend(my_ids)
+        if producer_ids:
+            ph = ','.join(['%s']*len(producer_ids))
+            clauses.append(f'b.production_id IN ({ph})'); params.extend(producer_ids)
         if owned_ids:
             ph = ','.join(['%s']*len(owned_ids))
             clauses.append(f'b.id IN ({ph})'); params.extend(owned_ids)
@@ -1840,7 +1862,7 @@ def list_productions():
     result = []
     for p in prods:
         prod = dict(p)
-        members = conn.execute('''SELECT u.id AS user_id,u.name,u.email,u.role,m.member_role,m.display_title
+        members = conn.execute('''SELECT u.id AS user_id,u.name,u.email,u.phone,u.role,m.member_role,m.display_title
                                   FROM bb_production_members m JOIN bb_users u ON m.user_id=u.id
                                   WHERE m.production_id=%s ORDER BY m.member_role,u.name''',(prod['id'],)).fetchall()
         prod['members'] = [dict(m) for m in members]
@@ -3287,6 +3309,74 @@ def ensure_receipt_token(user_id):
     conn.close()
     return u['receipt_token']
 
+def _get_twilio_settings():
+    """RoleCall already has Twilio configured (used for on-call/payroll
+    alerts) — both apps share the same Postgres database, so this reuses
+    those same credentials instead of asking for a second Twilio setup just
+    for this one feature."""
+    conn = get_db()
+    try:
+        row = conn.execute('SELECT * FROM email_settings WHERE id=1').fetchone()
+    except Exception:
+        row = None
+    conn.close()
+    row = dict(row) if row else {}
+    return {
+        'account_sid': (row.get('twilio_account_sid') or '').strip(),
+        'auth_token':  (row.get('twilio_auth_token') or '').strip(),
+        'from_phone':  (row.get('twilio_phone') or '').strip(),
+    }
+
+def _send_sms(to_phone, body):
+    """Returns (success, error_message)."""
+    ts = _get_twilio_settings()
+    if not ts.get('account_sid') or not ts.get('auth_token') or not ts.get('from_phone'):
+        return False, 'Twilio is not configured (checked RoleCall\'s Settings → Twilio, since both apps share it) — add an Account SID, Auth Token, and From Phone number there.'
+    try:
+        from twilio.rest import Client as _TwClient
+        client = _TwClient(ts['account_sid'], ts['auth_token'])
+        client.messages.create(body=body, from_=ts['from_phone'], to=to_phone)
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+@app.route('/api/productions/<int:pid>/members/<int:uid>/send-receipt-link', methods=['POST'])
+def send_member_receipt_link(pid, uid):
+    """Texts a team member the link to their personal mobile receipt page —
+    so a Resident Producer (or the show's own Producer) can get someone
+    submitting receipts on their phone right from the Team tab, without that
+    person needing to log into BloomBooks at all."""
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    if u['role'] not in PRODUCTION_ADMIN_ROLES and not is_producer_of(u['id'],pid):
+        return jsonify({'error':'Insufficient permissions'}),403
+    conn = get_db()
+    member = conn.execute('SELECT 1 FROM bb_production_members WHERE production_id=%s AND user_id=%s', (pid, uid)).fetchone()
+    if not member:
+        conn.close()
+        return jsonify({'error':'That person is not a member of this production'}),404
+    data = request.json or {}
+    phone = (data.get('phone') or '').strip()
+    target = conn.execute('SELECT name, phone FROM bb_users WHERE id=%s', (uid,)).fetchone()
+    if not target:
+        conn.close()
+        return jsonify({'error':'User not found'}),404
+    target = dict(target)
+    if phone:
+        conn.execute('UPDATE bb_users SET phone=%s WHERE id=%s', (phone, uid))
+        conn.commit()
+    else:
+        phone = target.get('phone')
+    conn.close()
+    if not phone:
+        return jsonify({'error':'No phone number on file for this person — enter one to send the link'}),400
+    token = ensure_receipt_token(uid)
+    link = f"{APP_URL}/receipt/{token}"
+    ok, err = _send_sms(phone, f"Hi {target['name']}! Here's your BloomBooks mobile receipt link — use it to submit receipts from your phone: {link}")
+    if not ok:
+        return jsonify({'error': err or 'Failed to send'}), 500
+    return jsonify({'ok': True, 'phone': phone})
+
 @app.route('/api/users/<int:uid>', methods=['DELETE'])
 def delete_user(uid):
     err = require_auth(['admin','treasurer','president'])
@@ -3301,11 +3391,6 @@ def delete_user(uid):
     conn.commit(); conn.close()
     log_action(u['id'], 'deleted_user', 'user', uid)
     return jsonify({'ok': True})
-def get_receipt_token(uid):
-    err = require_auth(['admin','treasurer','president','resident_producer'])
-    if err: return err
-    token = ensure_receipt_token(uid)
-    return jsonify({'token': token, 'link': f"{APP_URL}/receipt/{token}"})
 
 @app.route('/api/users/<int:uid>/receipt-token/regenerate', methods=['POST'])
 def regenerate_receipt_token(uid):
