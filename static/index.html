@@ -2169,6 +2169,7 @@ function renderProdTab() {
             <div><div class="fw-600">${m.name}${m.display_title ? ` <span class="text-xs text-muted fw-500">— ${m.display_title}</span>` : ''}</div><div class="text-xs text-muted">${m.email}</div></div>
             <span class="badge badge-approved" style="margin-left:auto">Producer</span>
             ${canManage?`<button class="btn btn-outline btn-sm" onclick="showEditProdMemberTitleModal(${p.id},${m.user_id},'${m.name.replace(/'/g,"\\'")}','${(m.display_title||'').replace(/'/g,"\\'")}')">Title</button>`:''}
+            ${canManage?`<button class="btn btn-outline btn-sm" onclick="showSendReceiptLinkModal(${p.id},${m.user_id},'${m.name.replace(/'/g,"\\'")}','${m.phone||''}')">Text receipt link</button>`:''}
             ${canManage?`<button class="btn btn-danger btn-sm" onclick="removeProdMember(${p.id},${m.user_id})">Remove</button>`:''}
           </div>
         </div></div>`).join('')}
@@ -2180,6 +2181,7 @@ function renderProdTab() {
             <div style="width:34px;height:34px;border-radius:50%;background:var(--cream2);color:var(--ink2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">${m.name.charAt(0)}</div>
             <div><div class="fw-600">${m.name}${m.display_title ? ` <span class="text-xs text-muted fw-500">— ${m.display_title}</span>` : ''}</div><div class="text-xs text-muted">${m.email}</div></div>
             ${canManage?`<button class="btn btn-outline btn-sm" style="margin-left:auto" onclick="showEditProdMemberTitleModal(${p.id},${m.user_id},'${m.name.replace(/'/g,"\\'")}','${(m.display_title||'').replace(/'/g,"\\'")}')">Title</button>`:''}
+            ${canManage?`<button class="btn btn-outline btn-sm" onclick="showSendReceiptLinkModal(${p.id},${m.user_id},'${m.name.replace(/'/g,"\\'")}','${m.phone||''}')">Text receipt link</button>`:''}
             ${canManage?`<button class="btn btn-danger btn-sm" onclick="removeProdMember(${p.id},${m.user_id})">Remove</button>`:''}
           </div>
         </div></div>`).join('')}` : ''}
@@ -3325,6 +3327,42 @@ async function doEditProdMemberTitle(pid, uid) {
     _currentProd = prods.find(p=>p.id===pid);
     renderProdTab();
   } catch(e) { toast(e.message,'error'); }
+}
+
+function showSendReceiptLinkModal(pid, uid, name, currentPhone) {
+  const html = `
+    <div class="modal-header"><span class="modal-title">Text receipt link — ${name}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm text-muted mb-12">Sends a text with their personal mobile receipt link — they can submit receipts from their phone without logging into BloomBooks.</p>
+      <div class="form-group"><label class="form-label">Phone number <span class="req">*</span></label>
+        <input type="tel" id="srl-phone" class="form-input" value="${(currentPhone||'').replace(/"/g,'&quot;')}" placeholder="e.g. 407-555-1234"/></div>
+      <div id="srl-error" class="form-error hidden"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button id="srl-submit-btn" class="btn btn-primary" onclick="doSendReceiptLink(${pid},${uid})">Send text</button>
+    </div>`;
+  showModal(html);
+}
+
+async function doSendReceiptLink(pid, uid) {
+  const phone = document.getElementById('srl-phone').value.trim();
+  const errEl = document.getElementById('srl-error');
+  errEl.classList.add('hidden');
+  if (!phone) { errEl.textContent='Phone number is required'; errEl.classList.remove('hidden'); return; }
+  const btn = document.getElementById('srl-submit-btn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('POST', `/productions/${pid}/members/${uid}/send-receipt-link`, {phone});
+    toast('Receipt link texted!','success');
+    closeModal();
+    const prods = await api('GET', '/productions');
+    _currentProd = prods.find(p=>p.id===pid);
+    renderProdTab();
+  } catch(e) {
+    errEl.textContent = e.message; errEl.classList.remove('hidden');
+    btn.disabled = false; btn.textContent = 'Send text';
+  }
 }
 
 async function removeProdMember(pid, uid) {
