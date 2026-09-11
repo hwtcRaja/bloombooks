@@ -3814,11 +3814,11 @@ def mobile_new_request(token):
 
 @app.route('/receipt/<token>')
 def mobile_receipt_page(token):
-    return send_from_directory(app.static_folder, 'receipt.html')
+    return _no_cache(send_from_directory(app.static_folder, 'receipt.html'))
 
 @app.route('/sign/<token>')
 def esign_page(token):
-    return send_from_directory(app.static_folder, 'sign.html')
+    return _no_cache(send_from_directory(app.static_folder, 'sign.html'))
 
 # ─── Pricing Calculator ───────────────────────────────────────────────────────
 # Figures out what to charge for programming (classes, workshops, Rising
@@ -5186,14 +5186,26 @@ def submit_signing_request(token):
     return jsonify({'ok': True})
 
 # ─── Static ───────────────────────────────────────────────────────────────────
+def _no_cache(resp):
+    """HTML entry points must never be cached — they change on every deploy,
+    and a stale cached copy silently keeps running old JS (e.g. old training
+    questions) even after a fresh deploy."""
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
     if path.startswith('api/'):
         return jsonify({'error': 'Not found'}), 404
     if path and os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, 'index.html')
+        resp = send_from_directory(app.static_folder, path)
+        if path.endswith('.html'):
+            return _no_cache(resp)
+        return resp
+    return _no_cache(send_from_directory(app.static_folder, 'index.html'))
 
 # ─── Global error handlers (always return JSON, never HTML) ──────────────────
 @app.errorhandler(404)
