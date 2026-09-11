@@ -4890,10 +4890,13 @@ let trainingModule = null;
 let currentSlide = 0;
 let quizAnswers = {};
 let quizSubmitted = false;
+let TRAINING_MODULE = null; // loaded from the DB — this is what admin edits actually change
 
 async function renderTraining() {
   try {
     const status = await api('GET', '/training/status');
+    const td = await api('GET', '/training');
+    TRAINING_MODULE = td.module || null;
     quizAnswers = {};
     quizSubmitted = false;
 
@@ -4916,6 +4919,22 @@ async function renderTraining() {
   }
 }
 
+function activeSlides() {
+  // Prefer admin-uploaded slide images; fall back to the built-in default deck
+  // if nothing has been uploaded yet.
+  return (TRAINING_MODULE && TRAINING_MODULE.slides && TRAINING_MODULE.slides.length > 0)
+    ? TRAINING_MODULE.slides : null;
+}
+
+function activeQuestions() {
+  return (TRAINING_MODULE && TRAINING_MODULE.questions && TRAINING_MODULE.questions.length > 0)
+    ? TRAINING_MODULE.questions : HWTC_QUESTIONS;
+}
+
+function activePassMark() {
+  return (TRAINING_MODULE && TRAINING_MODULE.pass_mark) ? TRAINING_MODULE.pass_mark : 80;
+}
+
 function startTrainingReview() {
   currentSlide = 0;
   quizAnswers = {};
@@ -4924,6 +4943,40 @@ function startTrainingReview() {
 }
 
 function renderSlideView() {
+  const uploadedSlides = activeSlides();
+
+  if (uploadedSlides) {
+    // Admin-uploaded image slides
+    const isLast = currentSlide === uploadedSlides.length - 1;
+    const progress = Math.round(((currentSlide + 1) / uploadedSlides.length) * 100);
+    document.getElementById('content').innerHTML = `
+      <div style="max-width:700px">
+        <div style="margin-bottom:20px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span class="text-xs text-muted">Slide ${currentSlide + 1} of ${uploadedSlides.length}</span>
+            <span class="text-xs text-muted">${progress}% complete</span>
+          </div>
+          <div style="background:var(--cream3);border-radius:99px;height:6px">
+            <div style="height:6px;border-radius:99px;background:var(--teal);width:${progress}%;transition:width .4s ease"></div>
+          </div>
+        </div>
+        <div class="card mb-16" style="overflow:visible">
+          <img src="${uploadedSlides[currentSlide]}" style="width:100%;border-radius:var(--r);display:block">
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <button class="btn btn-outline" onclick="prevSlide()" ${currentSlide===0?'disabled':''}>← Previous</button>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:center">
+            ${uploadedSlides.map((_,i) => `<button onclick="goSlide(${i})" style="width:8px;height:8px;border-radius:50%;border:none;cursor:pointer;background:${i===currentSlide?'var(--teal)':'var(--cream3)'};padding:0;transition:background .2s"></button>`).join('')}
+          </div>
+          ${isLast
+            ? `<button class="btn btn-primary" onclick="renderQuizView()">Take the quiz →</button>`
+            : `<button class="btn btn-primary" onclick="nextSlide()">Next →</button>`}
+        </div>
+      </div>`;
+    return;
+  }
+
+  // Fallback: built-in default slide deck
   const slide = HWTC_SLIDES[currentSlide];
   const isLast = currentSlide === HWTC_SLIDES.length - 1;
   const progress = Math.round(((currentSlide + 1) / HWTC_SLIDES.length) * 100);
@@ -4985,16 +5038,18 @@ function goSlide(i)  { currentSlide = i; renderSlideView(); }
 function renderQuizView() {
   quizAnswers = {};
   quizSubmitted = false;
+  const questions = activeQuestions();
+  const passMark = activePassMark();
   document.getElementById('content').innerHTML = `
     <div style="max-width:700px">
       <div class="panel mb-20" style="background:var(--teal3);border-color:var(--teal);display:flex;align-items:center;gap:16px">        <div>
           <div class="fw-600" style="font-size:16px">HWTC Purchasing Knowledge Check</div>
-          <div class="text-sm text-muted mt-4">${HWTC_QUESTIONS.length} questions · You need 80% to pass · Take your time</div>
+          <div class="text-sm text-muted mt-4">${questions.length} questions · You need ${passMark}% to pass · Take your time</div>
         </div>
       </div>
-      ${HWTC_QUESTIONS.map((q, qi) => `
+      ${questions.map((q, qi) => `
         <div class="quiz-card mb-12" id="quiz-card-${qi}" style="border:1px solid var(--border);border-radius:var(--r);padding:20px">
-          <div style="font-size:11px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Question ${qi+1} of ${HWTC_QUESTIONS.length}</div>
+          <div style="font-size:11px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Question ${qi+1} of ${questions.length}</div>
           <div class="quiz-q" style="font-size:15px;font-weight:600;margin-bottom:14px;color:var(--ink)">${q.question}</div>
           ${q.options.map((opt, oi) => `
             <div class="quiz-option" id="qo-${qi}-${oi}" onclick="selectAnswer(${qi},${oi})" style="display:flex;align-items:flex-start;gap:12px;padding:11px 14px;border:1.5px solid var(--border);border-radius:var(--r-sm);margin-bottom:8px;cursor:pointer;transition:all .15s;font-size:14px">
@@ -5004,6 +5059,7 @@ function renderQuizView() {
           <div id="quiz-exp-${qi}" class="quiz-explanation hidden" style="font-size:13px;color:var(--ink2);margin-top:10px;padding:10px 12px;background:var(--cream2);border-radius:var(--r-sm);border-left:3px solid var(--teal)"></div>
         </div>`).join('')}
       <div id="quiz-result"></div>
+      <div id="quiz-error" class="form-error hidden mt-8"></div>
       <button class="btn btn-primary btn-lg w-full mt-8" id="quiz-submit" onclick="submitQuiz()" disabled style="margin-top:8px">Submit answers</button>
       <button class="btn btn-outline w-full mt-8" onclick="renderSlideView();currentSlide=0" style="margin-top:8px">← Review slides again</button>
     </div>`;
@@ -5011,8 +5067,9 @@ function renderQuizView() {
 
 function selectAnswer(qi, oi) {
   if (quizSubmitted) return;
+  const questions = activeQuestions();
   quizAnswers[qi] = oi;
-  HWTC_QUESTIONS[qi].options.forEach((_, i) => {
+  questions[qi].options.forEach((_, i) => {
     const el = document.getElementById(`qo-${qi}-${i}`);
     const radio = document.getElementById(`qr-${qi}-${i}`);
     if (i === oi) {
@@ -5028,7 +5085,7 @@ function selectAnswer(qi, oi) {
       radio.style.borderColor = 'var(--border2)';
     }
   });
-  const allAnswered = HWTC_QUESTIONS.every((_,i) => quizAnswers[i] !== undefined);
+  const allAnswered = questions.every((_,i) => quizAnswers[i] !== undefined);
   document.getElementById('quiz-submit').disabled = !allAnswered;
   if (allAnswered) {
     document.getElementById('quiz-submit').scrollIntoView({behavior:'smooth', block:'nearest'});
@@ -5036,23 +5093,46 @@ function selectAnswer(qi, oi) {
 }
 
 async function submitQuiz() {
+  const questions = activeQuestions();
+  const errEl = document.getElementById('quiz-error');
+  errEl.classList.add('hidden');
+  const submitBtn = document.getElementById('quiz-submit');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Submitting...';
+
+  // Send raw answers — the server grades authoritatively and tells us
+  // exactly which questions were right or wrong.
+  const answers = {};
+  Object.keys(quizAnswers).forEach(qi => { answers[qi] = quizAnswers[qi]; });
+
+  let d;
+  try {
+    d = await api('POST', '/training/complete', {answers});
+  } catch(e) {
+    errEl.textContent = e.message || 'Something went wrong submitting your quiz — please try again.';
+    errEl.classList.remove('hidden');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Submit answers';
+    return;
+  }
+
   quizSubmitted = true;
-  let correct = 0;
-  HWTC_QUESTIONS.forEach((q, qi) => {
-    const selected = quizAnswers[qi];
-    const isCorrect = selected === q.correct;
-    if (isCorrect) correct++;
+  const results = d.results || [];
+  results.forEach((r, qi) => {
+    const q = questions[qi];
+    if (!q) return;
     q.options.forEach((_, oi) => {
       const el = document.getElementById(`qo-${qi}-${oi}`);
       const radio = document.getElementById(`qr-${qi}-${oi}`);
+      if (!el || !radio) return;
       el.style.cursor = 'default';
-      if (oi === q.correct) {
+      if (oi === r.correct) {
         el.style.borderColor = 'var(--green)';
         el.style.background = 'var(--green-bg)';
         radio.textContent = '✓';
         radio.style.borderColor = 'var(--green)';
         radio.style.color = 'var(--green)';
-      } else if (oi === selected && !isCorrect) {
+      } else if (oi === r.selected && !r.is_correct) {
         el.style.borderColor = 'var(--red)';
         el.style.background = 'var(--red-bg)';
         radio.textContent = '✕';
@@ -5061,36 +5141,37 @@ async function submitQuiz() {
       }
     });
     const expEl = document.getElementById(`quiz-exp-${qi}`);
-    expEl.textContent = q.explanation;
-    expEl.classList.remove('hidden');
+    if (expEl) {
+      expEl.textContent = r.explanation || '';
+      expEl.classList.remove('hidden');
+    }
   });
 
-  const score = Math.round((correct / HWTC_QUESTIONS.length) * 100);
-  document.getElementById('quiz-submit').style.display = 'none';
+  const correct = results.filter(r => r.is_correct).length;
+  const score = d.score;
+  const passed = d.passed;
+  submitBtn.style.display = 'none';
   document.querySelector('button[onclick="renderSlideView();currentSlide=0"]').style.display = 'none';
 
-  try {
-    const d = await api('POST', '/training/complete', {score});
-    const passed = d.passed;
-    const resultEl = document.getElementById('quiz-result');
-    resultEl.innerHTML = passed
-      ? `<div class="panel mt-20" style="background:var(--green-bg);border-color:#a8d8b9;text-align:center;padding:32px;border-radius:var(--r)">           <div style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:6px">You passed!</div>
-           <div class="text-sm text-muted">${correct} of ${HWTC_QUESTIONS.length} correct · ${score}%</div>
-           <p class="text-sm mt-12" style="color:var(--ink2)">You are now authorized to submit purchase requests for Horizon West Theater Company.</p>
-           <button class="btn btn-primary mt-16" onclick="nav('new-request')">Submit your first purchase request →</button>
-         </div>`
-      : `<div class="panel mt-20" style="background:var(--red-bg);border-color:#e8b4b4;text-align:center;padding:32px;border-radius:var(--r)">           <div style="font-size:22px;font-weight:700;color:var(--red);margin-bottom:6px">Not quite — ${score}%</div>
-           <div class="text-sm text-muted">${correct} of ${HWTC_QUESTIONS.length} correct · Need 80% to pass</div>
-           <p class="text-sm mt-12" style="color:var(--ink2)">Review the explanations above, then try again. You've got this!</p>
-           <button class="btn btn-outline mt-16" onclick="renderTraining()">Try again from the start</button>
-         </div>`;
+  const resultEl = document.getElementById('quiz-result');
+  resultEl.innerHTML = passed
+    ? `<div class="panel mt-20" style="background:var(--green-bg);border-color:#a8d8b9;text-align:center;padding:32px;border-radius:var(--r)">           <div style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:6px">You passed!</div>
+         <div class="text-sm text-muted">${correct} of ${results.length} correct · ${score}%</div>
+         <p class="text-sm mt-12" style="color:var(--ink2)">You are now authorized to submit purchase requests for Horizon West Theater Company.</p>
+         <button class="btn btn-primary mt-16" onclick="nav('new-request')">Submit your first purchase request →</button>
+       </div>`
+    : `<div class="panel mt-20" style="background:var(--red-bg);border-color:#e8b4b4;text-align:center;padding:32px;border-radius:var(--r)">           <div style="font-size:22px;font-weight:700;color:var(--red);margin-bottom:6px">Not quite — ${score}%</div>
+         <div class="text-sm text-muted">${correct} of ${results.length} correct · Need ${d.pass_mark}% to pass</div>
+         <p class="text-sm mt-12" style="color:var(--ink2)">Review the explanations above, then try again. You've got this!</p>
+         <button class="btn btn-outline mt-16" onclick="renderTraining()">Try again from the start</button>
+       </div>`;
 
-    resultEl.scrollIntoView({behavior:'smooth', block:'start'});
-    if (passed) {
-      currentUser.training_complete = 1;
-      document.getElementById('sb-training-badge').style.display = 'none';
-    }
-  } catch(e) { toast(e.message, 'error'); }
+  resultEl.scrollIntoView({behavior:'smooth', block:'start'});
+  if (passed) {
+    currentUser.training_complete = 1;
+    const badge = document.getElementById('sb-training-badge');
+    if (badge) badge.style.display = 'none';
+  }
 }
 
 // ── Training Admin ─────────────────────────────────────────────────────────────
