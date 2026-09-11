@@ -4892,6 +4892,28 @@ let quizAnswers = {};
 let quizSubmitted = false;
 let TRAINING_MODULE = null; // loaded from the DB — this is what admin edits actually change
 
+async function downloadTrainingCertificate() {
+  try {
+    const r = await fetch('/api/training/certificate', {credentials: 'include'});
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.error || 'Could not generate certificate.');
+    }
+    const blob = await r.blob();
+    let filename = 'HWTC_Training_Certificate.pdf';
+    const disp = r.headers.get('Content-Disposition') || '';
+    const m = disp.match(/filename="?([^"]+)"?/);
+    if (m) filename = m[1];
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    toast(e.message, 'error');
+  }
+}
+
 async function renderTraining() {
   try {
     const status = await api('GET', '/training/status');
@@ -4906,6 +4928,7 @@ async function renderTraining() {
           <p class="text-muted text-sm">You passed with a score of <strong>${status.score}%</strong>. You are authorized to submit purchase requests for Horizon West Theater Company.</p>
           <div style="margin-top:24px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
             <button class="btn btn-primary" onclick="nav('new-request')">Submit a purchase request →</button>
+            <button class="btn btn-outline" onclick="downloadTrainingCertificate()">Download certificate</button>
             <button class="btn btn-outline" onclick="startTrainingReview()">Review training again</button>
           </div>
         </div>`;
@@ -5158,7 +5181,10 @@ async function submitQuiz() {
     ? `<div class="panel mt-20" style="background:var(--green-bg);border-color:#a8d8b9;text-align:center;padding:32px;border-radius:var(--r)">           <div style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:6px">You passed!</div>
          <div class="text-sm text-muted">${correct} of ${results.length} correct · ${score}%</div>
          <p class="text-sm mt-12" style="color:var(--ink2)">You are now authorized to submit purchase requests for Horizon West Theater Company.</p>
-         <button class="btn btn-primary mt-16" onclick="nav('new-request')">Submit your first purchase request →</button>
+         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:16px">
+           <button class="btn btn-primary" onclick="nav('new-request')">Submit your first purchase request →</button>
+           <button class="btn btn-outline" onclick="downloadTrainingCertificate()">Download certificate</button>
+         </div>
        </div>`
     : `<div class="panel mt-20" style="background:var(--red-bg);border-color:#e8b4b4;text-align:center;padding:32px;border-radius:var(--r)">           <div style="font-size:22px;font-weight:700;color:var(--red);margin-bottom:6px">Not quite — ${score}%</div>
          <div class="text-sm text-muted">${correct} of ${results.length} correct · Need ${d.pass_mark}% to pass</div>
