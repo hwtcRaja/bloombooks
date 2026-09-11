@@ -545,28 +545,28 @@ def init_db():
     if c.fetchone()['n'] == 0:
         sample_questions = json.dumps([
             {
-                "question": "What must you do BEFORE making a purchase for HWTC?",
-                "options": ["Buy it and submit a receipt later", "Get pre-approval from the Treasurer and President", "Ask a fellow volunteer", "Post in the group chat"],
+                "question": "You want to buy something for HWTC but need the company to pay for it directly. What do you submit?",
+                "options": ["A Company Purchase Request, before buying", "A SAP, after buying", "Nothing — just buy it", "An email to the whole board"],
+                "correct": 0,
+                "explanation": "A Company Purchase Request is submitted before the purchase — HWTC buys the item directly on your behalf against your approved budget."
+            },
+            {
+                "question": "You already paid for something out of pocket, within your approved budget. What do you submit?",
+                "options": ["A Company Purchase Request", "A SAP, with your receipt", "Nothing — the budget covers it automatically", "A refund form from your bank"],
                 "correct": 1,
-                "explanation": "All purchases require pre-approval through the purchasing system unless it is a genuine emergency."
+                "explanation": "SAP is how you request reimbursement for something you've already bought within your approved budget. It always needs the original receipt."
+            },
+            {
+                "question": "Does having a receipt automatically mean you'll be reimbursed?",
+                "options": ["Yes, always", "No — it also has to be within your approved budget and follow purchasing guidelines", "Only if it's under $20", "Only for online purchases"],
+                "correct": 1,
+                "explanation": "A receipt alone doesn't guarantee reimbursement. The purchase still needs to fall within an approved budget and follow HWTC's purchasing guidelines."
             },
             {
                 "question": "What qualifies as an emergency purchase?",
-                "options": ["Anything under $20", "Items needed immediately that cannot wait for the approval process", "Anything from a thrift store", "Purchases made on weekends"],
+                "options": ["Anything under $20", "Items needed immediately where advance budget approval isn't practical", "Anything from a thrift store", "Purchases made on weekends"],
                 "correct": 1,
-                "explanation": "Emergency purchases are items genuinely needed right away where waiting for approval is not possible — like a last-minute prop find at a thrift store during tech week."
-            },
-            {
-                "question": "What do you need to submit with every purchase?",
-                "options": ["Just the amount", "A receipt (photo or scan)", "An invoice from the vendor", "Nothing if it's under $10"],
-                "correct": 1,
-                "explanation": "A receipt is required for every purchase — even small ones. This protects you and the organization."
-            },
-            {
-                "question": "Who gives final approval on all purchases?",
-                "options": ["The Director", "Any board member", "The Treasurer only", "Both the Treasurer AND the President"],
-                "correct": 3,
-                "explanation": "Both the Treasurer and President must approve all purchases. The Treasurer reviews first, then the President gives final sign-off."
+                "explanation": "Emergency purchases are for situations where waiting for the normal approval process isn't practical. They must be authorized by the Treasurer, President, or Vice President."
             },
             {
                 "question": "What happens to your budget area when a purchase is approved?",
@@ -602,6 +602,11 @@ def init_db():
         ("bb_purchase_requests", "needs_revision",    "INTEGER DEFAULT 0"),
         ("bb_purchase_requests", "revision_note",     "TEXT"),
         ("bb_purchase_requests", "statement_id",      "INTEGER"),
+        ("bb_purchase_requests", "resident_producer_note",     "TEXT"),
+        ("bb_purchase_requests", "resident_producer_acted_by", "INTEGER"),
+        ("bb_purchase_requests", "resident_producer_acted_at", "TEXT"),
+        ("bb_purchase_requests", "approval_chain",   "TEXT DEFAULT '[]'"),
+        ("bb_purchase_requests", "approval_step",    "INTEGER DEFAULT 0"),
         ("bb_users",             "is_active",         "INTEGER DEFAULT 1"),
         ("bb_users",             "phone",              "TEXT"),
         ("bb_users",             "receipt_token",     "TEXT"),
@@ -664,6 +669,31 @@ def require_auth(roles=None):
         return jsonify({'error': 'Insufficient permissions'}), 403
     return None
 
+# ─── Mandatory training gate ───────────────────────────────────────────────────
+# Applies to every non-admin user, org-wide: nothing that creates, edits, or
+# deletes anything is allowed until purchasing training is complete. This is a
+# single before_request hook rather than a per-route check so a new submit-type
+# route can't accidentally ship ungated.
+TRAINING_GATE_EXEMPT_PREFIXES = ('/api/auth', '/api/training', '/api/receipt/')
+
+@app.before_request
+def enforce_training_gate():
+    if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        return None
+    path = request.path
+    if not path.startswith('/api/'):
+        return None
+    if path.startswith(TRAINING_GATE_EXEMPT_PREFIXES):
+        return None
+    u = current_user()
+    if not u:
+        return None  # let the route's own require_auth() report unauthenticated access
+    if u['role'] == 'admin':
+        return None
+    if not u.get('training_complete'):
+        return jsonify({'error': 'Please complete your purchasing training before using BloomBooks.'}), 403
+    return None
+
 # ─── Production / budget permission helpers ───────────────────────────────────
 ORG_APPROVER_ROLES = ('admin', 'treasurer', 'president')
 # Resident Producer has full authority over show setup and budget-setting (same as
@@ -688,17 +718,43 @@ def get_budget_approver_emails():
     return [dict(u) for u in users]
 
 def get_production_producers(pid):
-    """Return the list of producer users (id/name/email) for a production."""
+    """Return the list of producer users (id/name/email/role) for a production.
+    'role' here is the user's global bb_users.role — used to detect when the
+    person producing this show is also a Resident Producer, which collapses
+    the approval chain (see build_approval_chain)."""
     if not pid:
         return []
     conn = get_db()
-    rows = conn.execute('''SELECT u.id, u.name, u.email
+    rows = conn.execute('''SELECT u.id, u.name, u.email, u.role
                            FROM bb_production_members m
                            JOIN bb_users u ON m.user_id = u.id
                            WHERE m.production_id=%s AND m.member_role=%s''',
                         (pid, 'producer')).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+def build_approval_chain(production_id):
+    """
+    Returns the ordered list of statuses a purchase request must pass
+    through before it's fully approved.
+
+    Production purchases:
+      • A producer is assigned to the show, and that producer is also a
+        Resident Producer  → Producer, Treasurer
+      • A producer is assigned, but is NOT a Resident Producer          → Producer, Resident Producer, Treasurer
+      • No producer assigned on the production (falls back to the same
+        path as an org-level/company purchase)                          → Treasurer, Resident Producer
+
+    Company / org-level purchases (no production attached):
+      • Treasurer, Resident Producer
+    """
+    if production_id:
+        producers = get_production_producers(production_id)
+        if producers:
+            if any(p.get('role') == 'resident_producer' for p in producers):
+                return ['pending_producer', 'pending_treasurer']
+            return ['pending_producer', 'pending_resident_producer', 'pending_treasurer']
+    return ['pending_treasurer', 'pending_resident_producer']
 
 def is_producer_of(uid, pid):
     """True if the user is a producer on the given production."""
@@ -968,7 +1024,7 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
                               estimated_cost, req_type, purchase_method, item_url,
                               production_id, status):
     """Fire notifications when a new request is submitted."""
-    type_label   = 'SAP (Self-Authorized Purchase)' if req_type == 'sap' else 'Pre-approval request'
+    type_label   = 'SAP — reimbursement for something already purchased' if req_type == 'sap' else 'Company Purchase Request'
     method_label = 'Online' if purchase_method == 'online' else 'In-store'
     amount_str   = f'${float(estimated_cost):.2f}'
     url_line     = f'<p style="margin:8px 0"><a href="{item_url}" style="color:#0f6e56">{item_url}</a></p>' if item_url else ''
@@ -986,11 +1042,11 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
             send_email(p['email'], f'Purchase request needs your approval: {req_title}',
                 email_html('New Purchase Request — Producer Review Needed', body,
                            'Review in BloomBooks', APP_URL))
-        if req_type == 'sap':
-            sap_note = '<p style="color:#c97c10;font-size:13px">This SAP still requires your approval after producer review.</p>'
-            for a in get_admin_emails():
-                send_email(a['email'], f'SAP submitted (FYI): {req_title}',
-                    email_html('SAP Submitted — FYI', body + sap_note, 'View in BloomBooks', APP_URL))
+    elif status == 'pending_resident_producer':
+        for a in get_role_emails('resident_producer'):
+            send_email(a['email'], f'Needs Resident Producer review: {req_title}',
+                email_html('New Purchase Request — Resident Producer Review Needed', body,
+                           'Review in BloomBooks', APP_URL))
     else:
         prefix = 'SAP' if req_type == 'sap' else 'New request'
         for a in get_admin_emails():
@@ -1012,7 +1068,8 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
 
 
 def notify_request_status_change(req_id, req_title, submitter_id, new_status,
-                                  acted_by_name, note, production_id, estimated_cost, actual_cost=None):
+                                  acted_by_name, note, production_id, estimated_cost,
+                                  actual_cost=None, req_type=None):
     """Notify relevant parties when a request status changes."""
     submitter = get_user_email(submitter_id)
     amount    = f'${float(actual_cost or estimated_cost):.2f}'
@@ -1020,37 +1077,44 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
 
     if new_status == 'pending_treasurer':
         if submitter:
-            send_email(submitter['email'], f'✓ Producer approved: {req_title}',
-                email_html('Producer Approved — Awaiting Treasurer',
-                    f'<p>The producer approved your request for <strong>{req_title}</strong>. It is now with the Treasurer for review.</p>{note_html}',
+            send_email(submitter['email'], f'✓ Approved, next stop Treasurer: {req_title}',
+                email_html('Approved — Awaiting Treasurer',
+                    f'<p><strong>{acted_by_name}</strong> approved your request for <strong>{req_title}</strong>. It is now with the Treasurer.</p>{note_html}',
                     'View in BloomBooks', APP_URL))
         for a in get_admin_emails():
             send_email(a['email'], f'Awaiting treasurer review: {req_title}',
-                email_html('Producer Approved — Treasurer Review Needed',
+                email_html('Treasurer Review Needed',
                     f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Treasurer review needed.</p>{note_html}',
                     'Review in BloomBooks', APP_URL))
 
-    elif new_status == 'pending_president':
+    elif new_status == 'pending_resident_producer':
         if submitter:
-            send_email(submitter['email'], f'✓ Treasurer approved: {req_title}',
-                email_html('Treasurer Approved — Awaiting President',
-                    f'<p>The treasurer approved your request for <strong>{req_title}</strong>. Awaiting president sign-off.</p>{note_html}',
+            send_email(submitter['email'], f'✓ Approved, next stop Resident Producer: {req_title}',
+                email_html('Approved — Awaiting Resident Producer',
+                    f'<p><strong>{acted_by_name}</strong> approved your request for <strong>{req_title}</strong>. It now needs Resident Producer review.</p>{note_html}',
                     'View in BloomBooks', APP_URL))
-        for a in get_role_emails('president'):
-            send_email(a['email'], f'Final sign-off needed: {req_title}',
-                email_html('President Sign-Off Needed',
-                    f'<p>Treasurer approved <strong>{req_title}</strong> ({amount}). Needs your final approval.</p>{note_html}',
+        for a in get_role_emails('resident_producer'):
+            send_email(a['email'], f'Resident Producer review needed: {req_title}',
+                email_html('Resident Producer Review Needed',
+                    f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Your review is needed.</p>{note_html}',
                     'Review in BloomBooks', APP_URL))
 
     elif new_status == 'approved':
         if submitter:
-            approved_body = (
-                f'<p>Your request for <strong>{req_title}</strong> ({amount}) has been <strong>fully approved</strong>!</p>'
-                '<p>You are cleared to purchase. Keep your receipt — submit it through BloomBooks for reimbursement.</p>'
-                + note_html
-            )
-            send_email(submitter['email'], f'Approved — go buy it! {req_title}',
-                email_html('Purchase Approved! ✓', approved_body, 'View in BloomBooks', APP_URL))
+            if req_type == 'sap':
+                approved_body = (
+                    f'<p>Your reimbursement request for <strong>{req_title}</strong> ({amount}) has been <strong>approved</strong>!</p>'
+                    '<p>The treasurer will process your reimbursement.</p>' + note_html
+                )
+                subject = f'Approved for reimbursement: {req_title}'
+            else:
+                approved_body = (
+                    f'<p>Your Company Purchase Request for <strong>{req_title}</strong> ({amount}) has been <strong>approved</strong>!</p>'
+                    '<p>HWTC will make the purchase on your behalf.</p>' + note_html
+                )
+                subject = f'Approved — HWTC will purchase: {req_title}'
+            send_email(submitter['email'], subject,
+                email_html('Purchase Request Approved! ✓', approved_body, 'View in BloomBooks', APP_URL))
 
     elif new_status == 'denied':
         if submitter:
@@ -1092,6 +1156,10 @@ def notify_reimbursement_paid(user_id, amount, method, req_title):
 def notify_welcome(name, email, temp_password, role):
     """Welcome email to newly created user with their login details."""
     role_label = role.replace('_', ' ').title()
+    training_note = (
+        '<p style="font-size:13px;color:#666">Purchasing training is required and comes first — everything else in '
+        'BloomBooks (submitting a request, adding a receipt, anything) stays locked until it\'s complete.</p>'
+    ) if role != 'admin' else ''
     welcome_body = (
         f'<p>An account has been created for you in BloomBooks, the purchasing, reimbursement, and contractor management system for Horizon West Theater Company.</p>'
         f'<table style="width:100%;border-collapse:collapse;margin:12px 0;background:#fff;border:1px solid #e0ddd6;border-radius:6px">'
@@ -1099,10 +1167,18 @@ def notify_welcome(name, email, temp_password, role):
         f'<tr><td style="padding:8px 12px;color:#666;border-bottom:1px solid #e0ddd6">Password</td><td style="padding:8px 12px;font-weight:600;color:#0f6e56;border-bottom:1px solid #e0ddd6">{temp_password}</td></tr>'
         f'<tr><td style="padding:8px 12px;color:#666">Role</td><td style="padding:8px 12px">{role_label}</td></tr>'
         f'</table>'
-        f'<p style="font-size:13px;color:#666">Please sign in and complete your purchasing training before submitting any requests.</p>'
+        f'{training_note}'
+        '<p style="font-size:13px;color:#666">A quick summary of how purchasing works:</p>'
+        '<ul style="font-size:13px;color:#666;padding-left:18px;margin:4px 0 12px">'
+        '<li>Budgets are approved in advance. Once your budget is approved, you can spend within it at your discretion.</li>'
+        '<li>Already bought something within your budget? Submit a <strong>SAP</strong> request with your receipt to get reimbursed.</li>'
+        '<li>Don\'t have the means to pay out of pocket? Submit a <strong>Company Purchase Request</strong> and HWTC will buy it directly.</li>'
+        '<li>Having a receipt doesn\'t automatically make something reimbursable — it still needs to be within budget and follow purchasing guidelines.</li>'
+        '</ul>'
     )
     send_email(email, 'Welcome to BloomBooks — Horizon West Theater Company',
-        email_html(f'Welcome to BloomBooks, {name.split()[0]}!', welcome_body, 'Sign in to BloomBooks', APP_URL))
+        email_html(f'Welcome to BloomBooks, {name.split()[0]}!', welcome_body,
+                   'Sign in & start training' if role != 'admin' else 'Sign in to BloomBooks', APP_URL))
 
 
 # ─── Auth routes ─────────────────────────────────────────────────────────────
@@ -1384,11 +1460,10 @@ def create_request():
     err = require_auth()
     if err: return err
     u = current_user()
-    if not u['training_complete'] and u['role'] == 'volunteer':
-        return jsonify({'error': 'You must complete purchasing training before submitting requests.'}), 403
     data = request.json
     is_sap   = 1 if data.get('is_sap') else 0
     req_type = 'sap' if is_sap else 'pre_approval'
+    is_emergency = 1 if data.get('is_emergency') else 0
     purchase_method = data.get('purchase_method', 'in_store')
     item_url = data.get('item_url', '')
     prod_id  = data.get('production_id') or None
@@ -1396,19 +1471,19 @@ def create_request():
     # Enforce budget permissions — block org-level budgets for non-owners, etc.
     if budget_id and not user_can_use_budget(u, int(budget_id)):
         return jsonify({'error': 'You are not permitted to submit against that budget.'}), 403
-    if prod_id and get_production_producers(int(prod_id)):
-        status = 'pending_producer'
-    else:
-        status = 'pending_treasurer'
+    chain = build_approval_chain(int(prod_id) if prod_id else None)
+    status = chain[0]
     conn = get_db()
     conn.execute(
         '''INSERT INTO bb_purchase_requests
            (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
-            submitted_by,is_emergency,emergency_reason,purchase_method,item_url)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+            submitted_by,is_emergency,emergency_reason,authorized_by,purchase_method,item_url,
+            approval_chain,approval_step)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
         (req_type, status, data['title'], data.get('description',''), data.get('vendor',''),
          float(data['estimated_cost']), data.get('budget_id') or None,
-         prod_id, u['id'], is_sap, data.get('sap_reason',''), purchase_method, item_url)
+         prod_id, u['id'], is_emergency, data.get('emergency_reason',''), data.get('authorized_by',''),
+         purchase_method, item_url, json.dumps(chain), 0)
     )
     row = conn.execute('SELECT lastval() AS id').fetchone()
     req_id = row['id']
@@ -1451,54 +1526,83 @@ def delete_request(rid):
     log_action(u['id'],'deleted_request','request',rid,req['title'])
     return jsonify({'ok':True})
 
+def _stage_columns(stage):
+    """Which note/acted_by/acted_at columns to write for a given pending_* stage."""
+    return {
+        'pending_producer':          ('producer_note', 'producer_acted_by', 'producer_acted_at'),
+        'pending_resident_producer': ('resident_producer_note', 'resident_producer_acted_by', 'resident_producer_acted_at'),
+        'pending_treasurer':         ('treasurer_note', 'treasurer_acted_by', 'treasurer_acted_at'),
+    }.get(stage)
+
+def _actor_authorized_for_stage(u, stage, production_id):
+    """Is this user allowed to act on the request at its current stage?
+    Admin can act at any stage as an override."""
+    if u['role'] == 'admin':
+        return True
+    if stage == 'pending_producer':
+        return is_producer_of(u['id'], production_id)
+    if stage == 'pending_resident_producer':
+        return u['role'] == 'resident_producer'
+    if stage == 'pending_treasurer':
+        return u['role'] == 'treasurer'
+    return False
+
 @app.route('/api/requests/<int:rid>/approve', methods=['POST'])
 def approve_request(rid):
-    err = require_auth(['treasurer', 'president', 'admin'])
-    if err: return err
     u = current_user()
-    data = request.json
+    if not u:
+        return jsonify({'error': 'Not authenticated'}), 401
+    data = request.json or {}
     action = data.get('action')  # 'approve' or 'deny'
     note   = data.get('note', '')
 
     conn = get_db()
-    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=?', (rid,)).fetchone()
+    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s', (rid,)).fetchone()
     if not req:
         conn.close()
         return jsonify({'error': 'Request not found'}), 404
-
     req = dict(req)
-    new_status = req['status']
+    stage = req['status']
     now = datetime.now().isoformat()
 
-    if u['role'] in ('treasurer', 'admin') and req['status'] == 'pending_treasurer':
-        if action == 'approve':
-            new_status = 'pending_president'
-            conn.execute('UPDATE bb_purchase_requests SET status=%s,treasurer_note=%s,treasurer_acted_by=%s,treasurer_acted_at=%s,updated_at=%s WHERE id=?',
-                         (new_status, note, u['id'], now, now, rid))
-        else:
-            new_status = 'denied'
-            conn.execute('UPDATE bb_purchase_requests SET status=%s,treasurer_note=%s,treasurer_acted_by=%s,treasurer_acted_at=%s,updated_at=%s WHERE id=?',
-                         (new_status, note, u['id'], now, now, rid))
+    chain = json.loads(req.get('approval_chain') or '[]')
+    # Back-compat: older rows created before this chain existed won't have one stored.
+    if not chain:
+        chain = build_approval_chain(req.get('production_id'))
+    step = req.get('approval_step') or 0
+    if step >= len(chain) or chain[step] != stage:
+        conn.close()
+        return jsonify({'error': 'This request is not currently awaiting action at this stage'}), 400
 
-    elif u['role'] in ('president', 'admin') and req['status'] == 'pending_president':
-        if action == 'approve':
+    if not _actor_authorized_for_stage(u, stage, req.get('production_id')):
+        conn.close()
+        return jsonify({'error': 'You are not permitted to act on this request at its current stage'}), 403
+
+    note_col, by_col, at_col = _stage_columns(stage)
+
+    if action == 'deny':
+        new_status = 'denied'
+        conn.execute(f'UPDATE bb_purchase_requests SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,updated_at=%s WHERE id=%s',
+                     (new_status, note, u['id'], now, now, rid))
+    elif action == 'approve':
+        next_step = step + 1
+        if next_step >= len(chain):
             new_status = 'approved'
             actual = float(data.get('actual_cost', req['estimated_cost']))
-            conn.execute('UPDATE bb_purchase_requests SET status=%s,president_note=%s,president_acted_by=%s,president_acted_at=%s,actual_cost=%s,updated_at=%s WHERE id=?',
-                         (new_status, note, u['id'], now, actual, now, rid))
-            # update budget
-            conn.execute('UPDATE bb_budgets SET spent=spent+? WHERE id=?', (actual, req['budget_id']))
-            # create reimbursement record
+            conn.execute(f'''UPDATE bb_purchase_requests
+                              SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,actual_cost=%s,approval_step=%s,updated_at=%s
+                              WHERE id=%s''',
+                         (new_status, note, u['id'], now, actual, next_step, now, rid))
+            conn.execute('UPDATE bb_budgets SET spent=spent+%s WHERE id=%s', (actual, req['budget_id']))
             conn.execute('INSERT INTO bb_reimbursements (request_id,user_id,amount) VALUES (%s,%s,%s)',
                          (rid, req['submitted_by'], actual))
         else:
-            new_status = 'denied'
-            conn.execute('UPDATE bb_purchase_requests SET status=%s,president_note=%s,president_acted_by=%s,president_acted_at=%s,updated_at=%s WHERE id=?',
-                         (new_status, note, u['id'], now, now, rid))
-
+            new_status = chain[next_step]
+            conn.execute(f'UPDATE bb_purchase_requests SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,approval_step=%s,updated_at=%s WHERE id=%s',
+                         (new_status, note, u['id'], now, next_step, now, rid))
     else:
         conn.close()
-        return jsonify({'error': 'Action not permitted at this stage'}), 400
+        return jsonify({'error': "Action must be 'approve' or 'deny'"}), 400
 
     conn.commit()
     conn.close()
@@ -1510,7 +1614,8 @@ def approve_request(rid):
         acted_by_name=u['name'], note=note,
         production_id=req.get('production_id'),
         estimated_cost=req['estimated_cost'],
-        actual_cost=req.get('actual_cost')
+        actual_cost=req.get('actual_cost'),
+        req_type=req.get('type')
     )
     return jsonify({'ok': True, 'new_status': new_status})
 
@@ -1763,7 +1868,9 @@ def stats():
     u = current_user()
     conn = get_db()
 
-    if u['role'] in ('admin', 'treasurer', 'president'):
+    if u['role'] in ('admin', 'treasurer', 'president', 'resident_producer'):
+        pending_producer          = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE status='pending_producer'").fetchone()['count']
+        pending_resident_producer = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE status='pending_resident_producer'").fetchone()['count']
         pending_treasurer = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE status='pending_treasurer'").fetchone()['count']
         pending_president = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE status='pending_president'").fetchone()['count']
         pending_reimburse  = conn.execute("SELECT COUNT(*) as count FROM bb_reimbursements WHERE status='pending'").fetchone()['count']
@@ -1771,8 +1878,10 @@ def stats():
         total_spent        = conn.execute("SELECT COALESCE(SUM(actual_cost),0) as count FROM bb_purchase_requests WHERE status IN ('approved','reimbursed')").fetchone()['count']
         emergency_count    = conn.execute("SELECT COUNT(*) as count FROM bb_purchase_requests WHERE is_emergency=1").fetchone()['count']
         result = {
+            'pending_producer': pending_producer,
+            'pending_resident_producer': pending_resident_producer,
             'pending_treasurer': pending_treasurer,
-            'pending_president': pending_president,
+            'pending_president': pending_president,  # legacy stage; always 0 going forward
             'pending_reimburse': pending_reimburse,
             'total_requests': total_requests,
             'total_spent': round(total_spent, 2),
@@ -2223,14 +2332,14 @@ def add_statement_item(sid):
     # Create as a draft request (status='draft')
     conn.execute('''INSERT INTO bb_purchase_requests
                     (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
-                     submitted_by,is_emergency,purchase_method,item_url,authorized_by,
+                     submitted_by,is_emergency,emergency_reason,purchase_method,item_url,authorized_by,
                      reimb_method,reimb_handle,statement_id,submitted_at,updated_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
                  (data.get('type','pre_approval'), 'draft',
                   data['title'], data.get('description',''), data.get('vendor',''),
                   float(data['estimated_cost']), s.get('budget_id') or data.get('budget_id') or None,
                   s.get('production_id') or data.get('production_id') or None,
-                  u['id'], 1 if data.get('type')=='sap' else 0,
+                  u['id'], 1 if data.get('is_emergency') else 0, data.get('emergency_reason',''),
                   data.get('purchase_method','in_store'), data.get('item_url',''),
                   data.get('authorized_by',''), data.get('reimb_method',''), data.get('reimb_handle',''),
                   sid, now, now))
@@ -2253,7 +2362,7 @@ def update_statement_item(sid, rid):
     data = request.json
     fields,vals = [],[]
     for f in ['title','description','vendor','estimated_cost','actual_cost','purchase_method',
-              'item_url','authorized_by','reimb_method','reimb_handle']:
+              'item_url','authorized_by','emergency_reason','is_emergency','reimb_method','reimb_handle']:
         if f in data:
             fields.append(f'{f}=%s')
             vals.append(float(data[f]) if f in ('estimated_cost','actual_cost') else data[f])
@@ -2298,15 +2407,15 @@ def submit_statement(sid):
     if not items:
         conn.close(); return jsonify({'error':'Add at least one item before submitting'}),400
     now = datetime.now().isoformat()
-    # Determine initial status for each item
+    # Determine initial status for each item — each item's own production_id
+    # drives its chain (a statement's items don't have to share one show).
     prod_id = s.get('production_id')
-    if prod_id and get_production_producers(prod_id):
-        item_status = 'pending_producer'
-    else:
-        item_status = 'pending_treasurer'
+    chain = build_approval_chain(prod_id)
+    item_status = chain[0]
     for item in items:
-        conn.execute('''UPDATE bb_purchase_requests SET status=%s,submitted_at=%s,updated_at=%s
-                        WHERE id=%s''',(item_status,now,now,item['id']))
+        item_chain = build_approval_chain(item.get('production_id') or prod_id)
+        conn.execute('''UPDATE bb_purchase_requests SET status=%s,approval_chain=%s,approval_step=0,submitted_at=%s,updated_at=%s
+                        WHERE id=%s''',(item_chain[0],json.dumps(item_chain),now,now,item['id']))
     conn.execute("UPDATE bb_statements SET status='submitted',submitted_at=%s,updated_at=%s WHERE id=%s",
                  (now,now,sid))
     conn.commit()
@@ -2315,13 +2424,14 @@ def submit_statement(sid):
     # Notify approvers
     for item in items:
         item = dict(item)
+        item_prod_id = item.get('production_id') or prod_id
         notify_request_submitted(
             req_id=item['id'], req_title=item['title'],
             submitter_name=u['name'], submitter_email=u['email'],
             estimated_cost=item['estimated_cost'], req_type=item['type'],
             purchase_method=item.get('purchase_method','in_store'),
             item_url=item.get('item_url',''),
-            production_id=prod_id, status=item_status
+            production_id=item_prod_id, status=build_approval_chain(item_prod_id)[0]
         )
     return jsonify({'ok':True})
 
@@ -2338,8 +2448,7 @@ def send_back_request(rid):
     if not req: conn.close(); return jsonify({'error':'Not found'}),404
     req = dict(req)
     # Only approvers at the current stage can send back
-    can_act = (u['role'] in ('admin','treasurer','president') or
-               (req['status']=='pending_producer' and is_producer_of(u['id'],req.get('production_id'))))
+    can_act = _actor_authorized_for_stage(u, req['status'], req.get('production_id'))
     if not can_act:
         conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     now = datetime.now().isoformat()
@@ -2374,15 +2483,13 @@ def resubmit_request(rid):
         conn.close(); return jsonify({'error':'This request does not need revision'}),400
     data = request.json
     now = datetime.now().isoformat()
-    # Determine which stage to send back to
+    # Recompute the chain from scratch and restart it at step 0
     prod_id = req.get('production_id')
-    if prod_id and get_production_producers(prod_id):
-        new_status = 'pending_producer'
-    else:
-        new_status = 'pending_treasurer'
-    fields = ['status=%s','needs_revision=0','updated_at=%s']
-    vals   = [new_status, now]
-    for f in ['title','description','vendor','estimated_cost','purchase_method','item_url','authorized_by']:
+    chain = build_approval_chain(prod_id)
+    new_status = chain[0]
+    fields = ['status=%s','approval_chain=%s','approval_step=0','needs_revision=0','updated_at=%s']
+    vals   = [new_status, json.dumps(chain), now]
+    for f in ['title','description','vendor','estimated_cost','purchase_method','item_url','authorized_by','emergency_reason']:
         if f in data:
             fields.append(f'{f}=%s')
             vals.append(float(data[f]) if f=='estimated_cost' else data[f])
@@ -3487,9 +3594,11 @@ def mobile_list_statements(token):
 @app.route('/api/receipt/<token>/statements', methods=['POST'])
 def mobile_create_statement(token):
     conn = get_db()
-    u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    u = conn.execute('SELECT id,name,role,training_complete FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
     if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
     u = dict(u)
+    if u['role'] != 'admin' and not u.get('training_complete'):
+        conn.close(); return jsonify({'error':'Please complete your purchasing training before using BloomBooks.'}),403
     data = request.json
     if not data.get('title'): return jsonify({'error':'Title is required'}),400
     now = datetime.now().isoformat()
@@ -3503,9 +3612,11 @@ def mobile_create_statement(token):
 @app.route('/api/receipt/<token>/statements/<int:sid>/items', methods=['POST'])
 def mobile_add_statement_item(token, sid):
     conn = get_db()
-    u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    u = conn.execute('SELECT id,name,role,training_complete FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
     if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
     u = dict(u)
+    if u['role'] != 'admin' and not u.get('training_complete'):
+        conn.close(); return jsonify({'error':'Please complete your purchasing training before using BloomBooks.'}),403
     s = conn.execute('SELECT * FROM bb_statements WHERE id=%s AND created_by=%s',(sid,u['id'])).fetchone()
     if not s: conn.close(); return jsonify({'error':'Statement not found'}),404
     if dict(s)['status'] != 'draft': conn.close(); return jsonify({'error':'Statement already submitted'}),400
@@ -3516,6 +3627,7 @@ def mobile_add_statement_item(token, sid):
     budget_id = data.get('budget_id')
     req_type  = data.get('type','pre_approval')
     is_sap    = 1 if req_type == 'sap' else 0
+    is_emergency = 1 if data.get('is_emergency') in ('1','true','on',True) else 0
 
     if not title:     return jsonify({'error':'Title is required'}),400
     if not cost:      return jsonify({'error':'Amount is required'}),400
@@ -3524,13 +3636,13 @@ def mobile_add_statement_item(token, sid):
     now = datetime.now().isoformat()
     conn.execute('''INSERT INTO bb_purchase_requests
                     (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
-                     submitted_by,is_emergency,purchase_method,item_url,authorized_by,
+                     submitted_by,is_emergency,emergency_reason,purchase_method,item_url,authorized_by,
                      reimb_method,reimb_handle,statement_id,submitted_at,updated_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
                  (req_type,'draft',title,data.get('description',''),data.get('vendor',''),
                   float(cost),int(budget_id),
                   int(data['production_id']) if data.get('production_id') else None,
-                  u['id'],is_sap,data.get('purchase_method','in_store'),
+                  u['id'],is_emergency,data.get('emergency_reason',''),data.get('purchase_method','in_store'),
                   data.get('item_url',''),data.get('authorized_by',''),
                   data.get('reimb_method',''),data.get('reimb_handle',''),
                   sid,now,now))
@@ -3554,9 +3666,11 @@ def mobile_add_statement_item(token, sid):
 @app.route('/api/receipt/<token>/statements/<int:sid>/submit', methods=['POST'])
 def mobile_submit_statement(token, sid):
     conn = get_db()
-    u = conn.execute('SELECT id,name,email FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+    u = conn.execute('SELECT id,name,email,role,training_complete FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
     if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
     u = dict(u)
+    if u['role'] != 'admin' and not u.get('training_complete'):
+        conn.close(); return jsonify({'error':'Please complete your purchasing training before using BloomBooks.'}),403
     s = conn.execute('SELECT * FROM bb_statements WHERE id=%s AND created_by=%s',(sid,u['id'])).fetchone()
     if not s: conn.close(); return jsonify({'error':'Not found'}),404
     s = dict(s)
@@ -3567,10 +3681,10 @@ def mobile_submit_statement(token, sid):
     if not items: conn.close(); return jsonify({'error':'Add at least one item first'}),400
     now = datetime.now().isoformat()
     prod_id = s.get('production_id')
-    item_status = 'pending_producer' if (prod_id and get_production_producers(prod_id)) else 'pending_treasurer'
     for item in items:
-        conn.execute('UPDATE bb_purchase_requests SET status=%s,submitted_at=%s,updated_at=%s WHERE id=%s',
-                     (item_status,now,now,item['id']))
+        item_chain = build_approval_chain(item.get('production_id') or prod_id)
+        conn.execute('UPDATE bb_purchase_requests SET status=%s,approval_chain=%s,approval_step=0,submitted_at=%s,updated_at=%s WHERE id=%s',
+                     (item_chain[0],json.dumps(item_chain),now,now,item['id']))
     conn.execute("UPDATE bb_statements SET status='submitted',submitted_at=%s,updated_at=%s WHERE id=%s",(now,now,sid))
     conn.commit(); conn.close()
     return jsonify({'ok':True})
@@ -3579,10 +3693,12 @@ def mobile_submit_statement(token, sid):
 def submit_receipt_mobile(token):
     conn = get_db()
     try:
-        u = conn.execute('SELECT id,name FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
+        u = conn.execute('SELECT id,name,role,training_complete FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
         if not u:
             conn.close(); return jsonify({'error':'Invalid or expired link'}),404
         u = dict(u)
+        if u['role'] != 'admin' and not u.get('training_complete'):
+            conn.close(); return jsonify({'error':'Please complete your purchasing training before using BloomBooks.'}),403
         request_id = request.form.get('request_id')
         note       = request.form.get('note','')
         actual     = request.form.get('actual_cost','')
@@ -3623,13 +3739,17 @@ def mobile_new_request(token):
     u = conn.execute('SELECT id,name,role,training_complete,can_submit_org_level FROM bb_users WHERE receipt_token=%s AND is_active=1',(token,)).fetchone()
     if not u: conn.close(); return jsonify({'error':'Invalid or expired link'}),404
     u = dict(u); uid = u['id']
+    if u['role'] != 'admin' and not u.get('training_complete'):
+        conn.close(); return jsonify({'error':'Please complete your purchasing training before using BloomBooks.'}),403
     data      = request.form
     title     = data.get('title','').strip()
     budget_id = data.get('budget_id')
     est_cost  = data.get('estimated_cost','')
     req_type  = data.get('type','pre_approval')
     is_sap    = 1 if req_type == 'sap' else 0
-    sap_reason= data.get('sap_reason','')
+    is_emergency = 1 if data.get('is_emergency') in ('1','true','on',True) else 0
+    emergency_reason = data.get('emergency_reason','')
+    authorized_by = data.get('authorized_by','')
     method    = data.get('purchase_method','in_store')
     item_url  = data.get('item_url','')
     vendor    = data.get('vendor','')
@@ -3640,14 +3760,17 @@ def mobile_new_request(token):
     if not est_cost:  return jsonify({'error':'Please enter the estimated amount'}),400
     if not user_can_use_budget(u, int(budget_id)):
         conn.close(); return jsonify({'error':'You are not permitted to submit against that budget.'}),403
-    status = 'pending_producer' if (prod_id and get_production_producers(int(prod_id))) else 'pending_treasurer'
+    chain = build_approval_chain(int(prod_id) if prod_id else None)
+    status = chain[0]
     conn.execute('''INSERT INTO bb_purchase_requests
                     (type,status,title,description,vendor,estimated_cost,budget_id,production_id,
-                     submitted_by,is_emergency,emergency_reason,purchase_method,item_url)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                     submitted_by,is_emergency,emergency_reason,authorized_by,purchase_method,item_url,
+                     approval_chain,approval_step)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
                  (req_type,status,title,desc,vendor,float(est_cost),
                   int(budget_id),int(prod_id) if prod_id else None,
-                  uid,is_sap,sap_reason,method,item_url))
+                  uid,is_emergency,emergency_reason,authorized_by,method,item_url,
+                  json.dumps(chain),0))
     row = conn.execute('SELECT lastval() AS id').fetchone()
     req_id = row['id']
     if is_sap and 'file' in request.files and request.files['file'].filename:
