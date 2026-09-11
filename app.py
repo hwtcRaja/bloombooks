@@ -1815,31 +1815,51 @@ def complete_training():
     err = require_auth()
     if err: return err
     u = current_user()
-    data = request.json
-    score = int(data.get('score', 0))
+    data = request.json or {}
+    answers = data.get('answers', {})  # {question_index (str): selected_option_index}
 
     conn = get_db()
     module = conn.execute('SELECT * FROM bb_training_modules WHERE is_active=1 LIMIT 1').fetchone()
     if not module:
         conn.close()
         return jsonify({'error': 'No active training module'}), 404
+    module = dict(module)
+    questions = json.loads(module['questions'] or '[]')
 
+    # Grade server-side so the score can't be spoofed and we can tell the
+    # user exactly which questions they got right/wrong.
+    results = []
+    correct_count = 0
+    for i, q in enumerate(questions):
+        selected = answers.get(str(i))
+        selected = int(selected) if selected is not None else None
+        is_correct = selected == q.get('correct')
+        if is_correct:
+            correct_count += 1
+        results.append({
+            'question': q.get('question'),
+            'selected': selected,
+            'correct': q.get('correct'),
+            'is_correct': is_correct,
+            'explanation': q.get('explanation', ''),
+        })
+    score = round((correct_count / len(questions)) * 100) if questions else 0
     pass_mark = module['pass_mark']
     passed = 1 if score >= pass_mark else 0
 
     conn.execute('''INSERT INTO bb_training_completions (user_id,module_id,score,passed)
                     VALUES (%s,%s,%s,%s)
                     ON CONFLICT(user_id,module_id) DO UPDATE SET score=EXCLUDED.score,passed=EXCLUDED.passed,completed_at=to_char(now(),'YYYY-MM-DD HH24:MI:SS')''',
-                 (u['id'], module['id'], score, passed, score, passed))
+                 (u['id'], module['id'], score, passed))
 
     if passed:
-        conn.execute('UPDATE bb_users SET training_complete=1 WHERE id=?', (u['id'],))
+        conn.execute('UPDATE bb_users SET training_complete=1 WHERE id=%s', (u['id'],))
 
     conn.commit()
     conn.close()
 
     log_action(u['id'], 'completed_training', 'training', module['id'], f'score={score} passed={passed}')
-    return jsonify({'ok': True, 'passed': bool(passed), 'score': score, 'pass_mark': pass_mark})
+    return jsonify({'ok': True, 'passed': bool(passed), 'score': score, 'pass_mark': pass_mark, 'results': results})
 
 @app.route('/api/training/status', methods=['GET'])
 def training_status():
