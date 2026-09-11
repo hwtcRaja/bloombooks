@@ -286,7 +286,19 @@ function showRErr(msg){const e=document.getElementById('r-error');e.textContent=
 function renderNewRequestTab() {
   const u = pageData.user;
   const budgets = pageData.budgets||[];
-  const trained = u.training_complete;
+  const trained = u.role === 'admin' || u.training_complete;
+  if (!trained) {
+    document.getElementById('main-content').innerHTML = `
+      <div class="user-greeting">
+        <div class="user-av">${u.name.charAt(0).toUpperCase()}</div>
+        <div><div class="user-name">${u.name}</div><div class="user-sub">Submit a new purchase request</div></div>
+      </div>
+      <div class="card"><div class="card-body">
+        <div class="fw-600" style="margin-bottom:6px">Training required</div>
+        <div style="font-size:13px;color:var(--ink3)">Purchasing training must be completed before you can submit a request. Please contact an admin or treasurer to complete your training.</div>
+      </div></div>`;
+    return;
+  }
   let budgetOpts = '<option value="">Select department / budget...</option>';
   const byProd={},orgBudgets=[];
   for (const b of budgets) {
@@ -313,13 +325,12 @@ function renderNewRequestTab() {
       <div class="user-av">${u.name.charAt(0).toUpperCase()}</div>
       <div><div class="user-name">${u.name}</div><div class="user-sub">Submit a new purchase request</div></div>
     </div>
-    ${!trained?`<div class="training-warn">⚠️ Training not yet complete. You can still submit but an admin may need to approve access.</div>`:''}
     <div class="card"><div class="card-label">Request type</div><div class="card-body" style="padding-top:8px">
       <div class="type-toggle">
         <div class="type-opt active-pre" id="ntype-pre" onclick="setNewType('pre_approval')">
-          <div class="type-opt-title">Pre-approval</div><div class="type-opt-sub">Submit before buying</div></div>
+          <div class="type-opt-title">Company Purchase Request</div><div class="type-opt-sub">Plan to buy — HWTC pays</div></div>
         <div class="type-opt" id="ntype-sap" onclick="setNewType('sap')">
-          <div class="type-opt-title">SAP</div><div class="type-opt-sub">Already purchased</div></div>
+          <div class="type-opt-title">SAP</div><div class="type-opt-sub">Already bought — reimburse me</div></div>
       </div>
     </div></div>
     <div class="card"><div class="card-label">Purchase details</div><div class="card-body">
@@ -348,11 +359,19 @@ function renderNewRequestTab() {
     </div></div>
     <div id="n-sap-section" style="display:none">
       <div class="card"><div class="card-label">SAP details</div><div class="card-body">
-        <div class="form-group"><label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
-          <textarea id="n-sap-reason" class="form-textarea" placeholder="Explain the circumstances..."></textarea></div>
-        <div class="form-group"><label class="form-label">Who authorized this purchase? <span class="req">*</span></label>
-          <input type="text" id="n-authorized-by" class="form-input" placeholder="e.g. Producer Sarah approved verbally">
-          <div class="form-hint">Name/role of who told you to buy this</div></div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="n-is-emergency" onchange="toggleMobileEmergencyFields(this.checked)">
+            <span style="font-size:13px">This was an emergency purchase (advance budget approval wasn't practical)</span>
+          </label>
+        </div>
+        <div id="n-emergency-fields" style="display:none">
+          <div class="form-group"><label class="form-label">What made this an emergency?</label>
+            <textarea id="n-sap-reason" class="form-textarea" placeholder="Briefly explain the circumstances..."></textarea></div>
+          <div class="form-group"><label class="form-label">Who authorized it? <span class="req">*</span></label>
+            <input type="text" id="n-authorized-by" class="form-input" placeholder="e.g. Treasurer Sarah authorized by text">
+            <div class="form-hint">Emergency purchases must be authorized by the Treasurer, President, or Vice President</div></div>
+        </div>
       </div></div>
       <div class="card"><div class="card-label">Reimbursement preference</div><div class="card-body">
         <div class="two-col">
@@ -378,6 +397,10 @@ function renderNewRequestTab() {
     </div></div>
     <div id="n-error" class="form-error" style="margin-bottom:10px;display:none"></div>
     <button class="btn-primary" id="n-submit-btn" onclick="submitNewRequest()">Submit Request</button>`;
+}
+
+function toggleMobileEmergencyFields(isEmergency) {
+  document.getElementById('n-emergency-fields').style.display = isEmergency ? 'block' : 'none';
 }
 
 function updateMobileReimbHandle(method) {
@@ -422,8 +445,9 @@ async function submitNewRequest() {
   const rawUrl  = newMethod==='online'?(document.getElementById('n-item-url')?.value.trim()||''):'';
   const itemUrl = rawUrl&&!rawUrl.match(/^https?:\/\//)?'https://'+rawUrl:rawUrl;
   const desc    = document.getElementById('n-desc')?.value.trim()||'';
-  const sapReason   = document.getElementById('n-sap-reason')?.value.trim()||'';
-  const authorizedBy= document.getElementById('n-authorized-by')?.value.trim()||'';
+  const isEmergency = newType==='sap' && (document.getElementById('n-is-emergency')?.checked||false);
+  const emergencyReason = isEmergency ? (document.getElementById('n-sap-reason')?.value.trim()||'') : '';
+  const authorizedBy= isEmergency ? (document.getElementById('n-authorized-by')?.value.trim()||'') : '';
   const reimbMethod = document.getElementById('n-reimb-method')?.value||'';
   const reimbHandle = document.getElementById('n-reimb-handle')?.value.trim()||'';
   const errEl   = document.getElementById('n-error');
@@ -433,13 +457,14 @@ async function submitNewRequest() {
   if (!cost)  { showNErr('Please enter the estimated cost.'); return; }
   if (!budget){ showNErr('Please select a budget or department.'); return; }
   if (newMethod==='online'&&!itemUrl){ showNErr('Please provide a link to the item.'); return; }
-  if (newType==='sap'&&!sapReason){ showNErr('Please explain why prior approval was not possible.'); return; }
-  if (newType==='sap'&&!authorizedBy){ showNErr('Please specify who authorized this purchase.'); return; }
+  if (newType==='sap'&&!newFile){ showNErr('Please attach a receipt for this purchase.'); return; }
+  if (isEmergency&&!authorizedBy){ showNErr('Please specify which Treasurer, President, or Vice President authorized this.'); return; }
   btn.disabled=true; btn.textContent='Submitting...';
   const fd=new FormData();
   fd.append('title',title); fd.append('estimated_cost',cost); fd.append('budget_id',budget);
   fd.append('type',newType); fd.append('purchase_method',newMethod); fd.append('vendor',vendor);
-  fd.append('item_url',itemUrl); fd.append('description',desc); fd.append('sap_reason',sapReason);
+  fd.append('item_url',itemUrl); fd.append('description',desc);
+  fd.append('is_emergency',isEmergency?'1':'0'); fd.append('emergency_reason',emergencyReason);
   fd.append('authorized_by',authorizedBy); fd.append('reimb_method',reimbMethod);
   fd.append('reimb_handle',reimbHandle);
   if (prodId) fd.append('production_id',prodId);
@@ -584,7 +609,7 @@ function showMobileAddItem(sid) {
       <h2 style="font-size:17px;font-weight:700">Add item to statement</h2>
     </div>
     <div class="type-toggle" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
-      <div class="type-opt active-pre" id="sit-pre" onclick="setSItemType('pre_approval')"><div class="type-opt-title">Pre-approval</div></div>
+      <div class="type-opt active-pre" id="sit-pre" onclick="setSItemType('pre_approval')"><div class="type-opt-title">Company Purchase Request</div></div>
       <div class="type-opt" id="sit-sap" onclick="setSItemType('sap')"><div class="type-opt-title">SAP</div></div>
     </div>
     <div class="form-group"><label class="form-label">Description <span class="req">*</span></label>
@@ -598,17 +623,25 @@ function showMobileAddItem(sid) {
     <div class="form-group"><label class="form-label">Vendor</label>
       <input type="text" id="sit-vendor" class="form-input" placeholder="Store or website"></div>
     <div id="sit-sap-fields" style="display:none">
-      <div class="form-group"><label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
-        <textarea id="sit-sap-reason" class="form-textarea"></textarea></div>
-      <div class="form-group"><label class="form-label">Who authorized this? <span class="req">*</span></label>
-        <input type="text" id="sit-auth" class="form-input" placeholder="e.g. Producer Sarah approved"></div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="sit-is-emergency" onchange="document.getElementById('sit-emergency-fields').style.display=this.checked?'block':'none'">
+          <span style="font-size:13px">Emergency purchase (advance approval wasn't practical)</span>
+        </label>
+      </div>
+      <div id="sit-emergency-fields" style="display:none">
+        <div class="form-group"><label class="form-label">What made this an emergency?</label>
+          <textarea id="sit-sap-reason" class="form-textarea"></textarea></div>
+        <div class="form-group"><label class="form-label">Who authorized it? <span class="req">*</span></label>
+          <input type="text" id="sit-auth" class="form-input" placeholder="e.g. Treasurer Sarah authorized by text"></div>
+      </div>
       <div class="two-col" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="form-group"><label class="form-label">Reimb method</label>
           <select id="sit-reimb-method" class="form-select"><option value="">Default</option>${reimbOpts}</select></div>
         <div class="form-group"><label class="form-label">Account info</label>
           <input type="text" id="sit-reimb-handle" class="form-input" placeholder="Username"></div>
       </div>
-      <div class="form-group"><label class="form-label">Receipt photo</label>
+      <div class="form-group"><label class="form-label">Receipt photo <span class="req">*</span></label>
         <div class="upload-zone" id="sit-upload-zone" onclick="document.getElementById('sit-receipt-file').click()">          <div class="upload-text" style="font-size:13px">Tap to attach receipt</div>
         </div>
         <input type="file" id="sit-receipt-file" accept="image/*,application/pdf" style="display:none"
@@ -633,25 +666,26 @@ async function addMobileStatementItem(sid, btn) {
   const cost     = document.getElementById('sit-cost').value;
   const budget   = document.getElementById('sit-budget').value;
   const vendor   = document.getElementById('sit-vendor').value.trim();
-  const sapReason= document.getElementById('sit-sap-reason')?.value.trim()||'';
-  const auth     = document.getElementById('sit-auth')?.value.trim()||'';
+  const isEmergency = statementItemType==='sap' && (document.getElementById('sit-is-emergency')?.checked||false);
+  const sapReason= isEmergency ? (document.getElementById('sit-sap-reason')?.value.trim()||'') : '';
+  const auth     = isEmergency ? (document.getElementById('sit-auth')?.value.trim()||'') : '';
   const reimbM   = document.getElementById('sit-reimb-method')?.value||'';
   const reimbH   = document.getElementById('sit-reimb-handle')?.value.trim()||'';
   const errEl    = document.getElementById('sit-error');
+  const sitFile=document.getElementById('sit-receipt-file')?.files[0];
   errEl.style.display='none';
   if (!title){errEl.textContent='Description is required';errEl.style.display='block';return;}
   if (!cost){errEl.textContent='Amount is required';errEl.style.display='block';return;}
   if (!budget){errEl.textContent='Please select a budget';errEl.style.display='block';return;}
-  if (statementItemType==='sap'&&!sapReason){errEl.textContent='Please explain why prior approval was not possible';errEl.style.display='block';return;}
-  if (statementItemType==='sap'&&!auth){errEl.textContent='Please specify who authorized this purchase';errEl.style.display='block';return;}
+  if (statementItemType==='sap'&&!sitFile){errEl.textContent='Please attach a receipt for this purchase';errEl.style.display='block';return;}
+  if (isEmergency&&!auth){errEl.textContent='Please specify which Treasurer, President, or Vice President authorized this';errEl.style.display='block';return;}
   btn.disabled=true;btn.textContent='Adding...';
   try {
     const fd=new FormData();
     fd.append('type',statementItemType);fd.append('title',title);
     fd.append('estimated_cost',cost);fd.append('budget_id',budget);
-    fd.append('vendor',vendor);fd.append('sap_reason',sapReason);
+    fd.append('vendor',vendor);fd.append('is_emergency',isEmergency?'1':'0');fd.append('emergency_reason',sapReason);
     fd.append('authorized_by',auth);fd.append('reimb_method',reimbM);fd.append('reimb_handle',reimbH);
-    const sitFile=document.getElementById('sit-receipt-file')?.files[0];
     if(statementItemType==='sap'&&sitFile)fd.append('file',sitFile);
     const r=await fetch(`/api/receipt/${token}/statements/${sid}/items`,{method:'POST',body:fd});
     const d=await r.json();

@@ -455,7 +455,7 @@ tr:hover td{background:var(--cream)}
 let currentUser = null;
 let currentPage = 'dashboard';
 let allBudgets  = [];
-let pendingCounts = {treasurer: 0, president: 0, reimb: 0};
+let pendingCounts = {producer: 0, resident_producer: 0, treasurer: 0, reimb: 0};
 
 // ── API ───────────────────────────────────────────────────────────────────────
 async function api(method, path, body, isFile) {
@@ -594,7 +594,7 @@ async function refreshBadges() {
     const s = await api('GET', '/stats');
     const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
     if (isAdmin) {
-      const total = (s.pending_producer||0) + (s.pending_treasurer||0) + (s.pending_president||0);
+      const total = (s.pending_producer||0) + (s.pending_treasurer||0) + (s.pending_resident_producer||0);
       const apBadge = document.getElementById('sb-approval-badge');
       apBadge.textContent = total;
       apBadge.style.display = total > 0 ? '' : 'none';
@@ -621,9 +621,9 @@ async function loadBudgets() {
 // ── Status helpers ──────────────────────────────────────────────────────────
 function statusBadge(status, isSAP) {
   const map = {
-    pending_producer:  ['badge-pending', 'Awaiting producer'],
-    pending_treasurer: ['badge-treasurer', 'Awaiting treasurer'],
-    pending_president: ['badge-president', 'Awaiting president'],
+    pending_producer:          ['badge-pending', 'Awaiting producer'],
+    pending_resident_producer: ['badge-president', 'Awaiting resident producer'],
+    pending_treasurer:         ['badge-treasurer', 'Awaiting treasurer'],
     needs_revision:    ['badge-sap', '↩ Needs revision'],
     approved:          ['badge-approved', 'Approved'],
     denied:            ['badge-denied', 'Denied'],
@@ -658,10 +658,10 @@ async function renderDashboard() {
         <div class="stat-grid">
           <div class="stat-card amber"><div class="stat-label">Awaiting producer</div><div class="stat-value">${stats.pending_producer||0}</div></div>
           <div class="stat-card"><div class="stat-label">Awaiting treasurer</div><div class="stat-value">${stats.pending_treasurer||0}</div></div>
-          <div class="stat-card"><div class="stat-label">Awaiting president</div><div class="stat-value">${stats.pending_president||0}</div></div>
+          <div class="stat-card"><div class="stat-label">Awaiting resident producer</div><div class="stat-value">${stats.pending_resident_producer||0}</div></div>
           <div class="stat-card teal"><div class="stat-label">Pending reimbursement</div><div class="stat-value">${stats.pending_reimburse||0}</div></div>
           <div class="stat-card green"><div class="stat-label">Total approved spend</div><div class="stat-value">${fmtMoney(stats.total_spent||0)}</div></div>
-          <div class="stat-card"><div class="stat-label">Self-Authorized Purchase (SAP)s</div><div class="stat-value">${stats.emergency_count||0}</div></div>
+          <div class="stat-card"><div class="stat-label">Emergency purchases</div><div class="stat-value">${stats.emergency_count||0}</div></div>
         </div>`;
     } else {
       statsHtml = `
@@ -760,7 +760,7 @@ async function renderMyRequests() {
               </td>
               <td>${fmtMoney(r.estimated_cost)}</td>
               <td class="td-muted">${r.budget_name||'—'}</td>
-              <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
+              <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Company Purchase</span>'}</td>
               <td class="td-muted">${fmtDate(r.submitted_at)}</td>
               <td>${statusBadge(r.status, false)}</td>
               <td>
@@ -780,7 +780,7 @@ async function renderMyRequests() {
 
 // ── New Request ────────────────────────────────────────────────────────────────
 async function renderNewRequest() {
-  if (!currentUser.training_complete && currentUser.role === 'volunteer') {
+  if (currentUser.role !== 'admin' && !currentUser.training_complete) {
     document.getElementById('content').innerHTML = `
       <div class="training-gate">        <div><h3>Training required before submitting requests</h3>
         <p>Please complete the HWTC purchasing training first.</p></div>
@@ -810,15 +810,15 @@ async function renderNewRequest() {
             <label style="display:block;cursor:pointer">
               <input type="radio" name="req-type" value="pre" checked onchange="toggleSAP(false)" style="display:none">
               <div id="type-pre" style="border:2px solid var(--teal);border-radius:var(--r);padding:14px;background:var(--teal3)">
-                <div class="fw-600 text-sm">Pre-approval request</div>
-                <div class="text-xs text-muted mt-4">Submit before buying. Wait for approval.</div>
+                <div class="fw-600 text-sm">Company Purchase Request</div>
+                <div class="text-xs text-muted mt-4">You haven't bought it yet — ask HWTC to buy it on your behalf.</div>
               </div>
             </label>
             <label style="display:block;cursor:pointer">
-              <input type="radio" name="req-type" value="emergency" onchange="toggleSAP(true)" style="display:none">
+              <input type="radio" name="req-type" value="sap" onchange="toggleSAP(true)" style="display:none">
               <div id="type-sap" style="border:2px solid var(--border);border-radius:var(--r);padding:14px">
-                <div class="fw-600 text-sm">SAP — Self-Authorized Purchase</div>
-                <div class="text-xs text-muted mt-4">Already bought without prior approval.</div>
+                <div class="fw-600 text-sm">SAP</div>
+                <div class="text-xs text-muted mt-4">You already bought it within your budget — request reimbursement.</div>
               </div>
             </label>
           </div>
@@ -892,14 +892,20 @@ async function renderNewRequest() {
             <label class="form-label">Description / notes</label>
             <textarea id="req-desc" class="form-textarea" placeholder="Why is this needed? Any additional context..."></textarea>
           </div>
+          <div id="sap-emergency-toggle" class="form-group hidden">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="req-is-emergency" onchange="toggleEmergencyFields(this.checked)">
+              <span class="text-sm">This was an emergency purchase (advance budget approval wasn't practical)</span>
+            </label>
+          </div>
           <div id="sap-field" class="form-group hidden">
-            <label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
-            <textarea id="req-sap-reason" class="form-textarea" placeholder="Explain why this could not wait for pre-approval..."></textarea>
+            <label class="form-label">What made this an emergency?</label>
+            <textarea id="req-sap-reason" class="form-textarea" placeholder="Briefly explain the circumstances..."></textarea>
           </div>
           <div id="sap-auth-field" class="form-group hidden">
-            <label class="form-label">Who authorized this purchase? <span class="req">*</span></label>
-            <input type="text" id="req-authorized-by" class="form-input" placeholder="e.g. Producer Sarah approved verbally">
-            <div class="form-hint">Name and/or role of the person who told you to make this purchase</div>
+            <label class="form-label">Who authorized it? <span class="req">*</span></label>
+            <input type="text" id="req-authorized-by" class="form-input" placeholder="e.g. Treasurer Sarah authorized by text">
+            <div class="form-hint">Emergency purchases must be authorized by the Treasurer, President, or Vice President</div>
           </div>
           <div id="sap-reimb-field" class="hidden">
             <hr class="divider">
@@ -919,7 +925,7 @@ async function renderNewRequest() {
             </div>
           </div>
           <div id="sap-upload" class="hidden">
-            <label class="form-label">Receipt (required for SAP)</label>
+            <label class="form-label">Receipt <span class="req">*</span></label>
             <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()">
               <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto;opacity:.5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
               <p>Click to upload receipt photo or PDF</p>
@@ -961,7 +967,7 @@ function onProductionChange(prodId) {
   const hint = document.getElementById('prod-approval-hint');
   if (!hint) return;
   if (prodId) {
-    hint.textContent = 'Show purchases go to the producer for approval first, then treasurer, then president.';
+    hint.textContent = 'Show purchases go to the producer for approval first, then treasurer (a Resident Producer step is added in between unless the producer is also the Resident Producer).';
     hint.style.color = 'var(--teal)';
   } else {
     hint.textContent = '';
@@ -1037,14 +1043,23 @@ function handleNewFileSelect(input) {
 }
 
 function toggleSAP(isSAP) {
-  document.getElementById('sap-field').classList.toggle('hidden', !isSAP);
-  document.getElementById('sap-auth-field').classList.toggle('hidden', !isSAP);
+  document.getElementById('sap-emergency-toggle').classList.toggle('hidden', !isSAP);
   document.getElementById('sap-reimb-field').classList.toggle('hidden', !isSAP);
   document.getElementById('sap-upload').classList.toggle('hidden', !isSAP);
+  if (!isSAP) {
+    const cb = document.getElementById('req-is-emergency');
+    if (cb) cb.checked = false;
+    toggleEmergencyFields(false);
+  }
   document.getElementById('type-pre').style.border = isSAP ? '2px solid var(--border)' : '2px solid var(--teal)';
   document.getElementById('type-pre').style.background = isSAP ? '' : 'var(--teal3)';
   document.getElementById('type-sap').style.border = isSAP ? '2px solid var(--amber)' : '2px solid var(--border)';
   document.getElementById('type-sap').style.background = isSAP ? 'var(--amber-bg)' : '';
+}
+
+function toggleEmergencyFields(isEmergency) {
+  document.getElementById('sap-field').classList.toggle('hidden', !isEmergency);
+  document.getElementById('sap-auth-field').classList.toggle('hidden', !isEmergency);
 }
 
 function togglePurchaseMethod(method) {
@@ -1063,8 +1078,9 @@ async function submitRequest() {
   const budget = document.getElementById('req-budget').value;
   const desc   = document.getElementById('req-desc').value.trim();
   const isSAP  = document.querySelector('input[name="req-type"]:checked').value === 'sap';
-  const sapReason    = document.getElementById('req-sap-reason')?.value.trim() || '';
-  const authorizedBy = document.getElementById('req-authorized-by')?.value.trim() || '';
+  const isEmergency  = isSAP && (document.getElementById('req-is-emergency')?.checked || false);
+  const emergencyReason = isEmergency ? (document.getElementById('req-sap-reason')?.value.trim() || '') : '';
+  const authorizedBy    = isEmergency ? (document.getElementById('req-authorized-by')?.value.trim() || '') : '';
   const reimbMethod  = document.getElementById('req-reimb-method')?.value || '';
   const reimbHandle  = document.getElementById('req-reimb-handle')?.value.trim() || '';
   const method = document.querySelector('input[name="purchase-method"]:checked')?.value || 'in_store';
@@ -1079,11 +1095,11 @@ async function submitRequest() {
   if (!title || !cost || !budget) {
     errEl.textContent = 'Please fill in all required fields.'; errEl.classList.remove('hidden'); return;
   }
-  if (isSAP && !sapReason) {
-    errEl.textContent = 'Please explain why prior approval was not possible.'; errEl.classList.remove('hidden'); return;
+  if (isSAP && !newReceiptFile) {
+    errEl.textContent = 'Please attach a receipt for this purchase.'; errEl.classList.remove('hidden'); return;
   }
-  if (isSAP && !authorizedBy) {
-    errEl.textContent = 'Please specify who authorized this SAP purchase.'; errEl.classList.remove('hidden'); return;
+  if (isEmergency && !authorizedBy) {
+    errEl.textContent = 'Please specify which Treasurer, President, or Vice President authorized this.'; errEl.classList.remove('hidden'); return;
   }
   if (method === 'online' && !itemUrl) {
     errEl.textContent = 'Please provide a link to the item for online purchases.'; errEl.classList.remove('hidden'); return;
@@ -1095,7 +1111,8 @@ async function submitRequest() {
       budget_id: parseInt(budget),
       production_id: prodId ? parseInt(prodId) : null,
       is_sap: isSAP,
-      sap_reason: sapReason,
+      is_emergency: isEmergency,
+      emergency_reason: emergencyReason,
       authorized_by: authorizedBy,
       reimb_method: reimbMethod,
       reimb_handle: reimbHandle,
@@ -1123,9 +1140,15 @@ async function showRequestDetail(rid) {
   if (!r) return;
 
   const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
-  const canApprove = isAdmin && (r.status === 'pending_treasurer' || r.status === 'pending_president');
-  const canApproveNow = (currentUser.role === 'treasurer' || currentUser.role === 'admin') && r.status === 'pending_treasurer'
-    || (currentUser.role === 'president' || currentUser.role === 'admin') && r.status === 'pending_president';
+  let reqChain = [];
+  try { reqChain = JSON.parse(r.approval_chain || '[]'); } catch(e) {}
+  const STAGE_LABEL2 = {pending_producer:'Producer', pending_resident_producer:'Resident Producer', pending_treasurer:'Treasurer'};
+  const canApprove = isAdmin && ['pending_producer','pending_treasurer','pending_resident_producer'].includes(r.status);
+  const canApproveNow =
+       ((currentUser.role === 'treasurer' || currentUser.role === 'admin') && r.status === 'pending_treasurer')
+    || ((currentUser.role === 'resident_producer' || currentUser.role === 'admin') && r.status === 'pending_resident_producer')
+    || ((currentUser.role === 'producer' || currentUser.role === 'admin') && r.status === 'pending_producer');
+  const isFinalStage = reqChain.length && reqChain[reqChain.length-1] === r.status;
 
   const receiptsHtml = r.receipts && r.receipts.length > 0 ?
     `<div class="receipt-grid">${r.receipts.map(rc => `
@@ -1143,8 +1166,8 @@ async function showRequestDetail(rid) {
 
   const approvalHtml = canApproveNow ? `
     <div class="approve-panel">
-      <h4>${r.status === 'pending_treasurer' ? 'Treasurer review' : 'President sign-off'}</h4>
-      ${r.status === 'pending_president' ? `
+      <h4>${STAGE_LABEL2[r.status] || 'Review'}</h4>
+      ${isFinalStage ? `
         <div class="form-group">
           <label class="form-label">Confirm actual cost</label>
           <input type="number" id="actual-cost" class="form-input" value="${r.actual_cost || r.estimated_cost}" step="0.01">
@@ -1172,13 +1195,14 @@ async function showRequestDetail(rid) {
         <div><div class="text-xs text-muted">Estimated cost</div><div class="fw-600 text-sm mt-4">${fmtMoney(r.estimated_cost)}</div></div>
         <div><div class="text-xs text-muted">Purchase method</div><div class="fw-600 text-sm mt-4">${r.purchase_method==='online'?'Online':'In-store'}${r.vendor?' — '+r.vendor:''}</div></div>
         <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div></div>
-        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.is_sap ? 'SAP — Self-Authorized' : 'Pre-approval'}</div></div>
+        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.is_sap ? 'SAP — reimbursement' : 'Company Purchase Request'}</div></div>
       </div>
       ${r.item_url ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Item link</div><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:13px;color:var(--teal);word-break:break-all">${r.item_url}</a></div>` : ''}
       ${r.description ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Description</div><div class="text-sm">${r.description}</div></div>` : ''}
-      ${r.sap_reason ? `<div class="mb-16"><div class="text-xs text-muted mb-4">SAP reason</div><div class="text-sm" style="color:var(--amber)">${r.sap_reason}</div></div>` : ''}
+      ${r.is_emergency ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Emergency authorization</div><div class="text-sm" style="color:var(--amber)">${r.emergency_reason||''}${r.authorized_by?' — authorized by '+r.authorized_by:''}</div></div>` : ''}
+      ${r.producer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Producer note</div><div class="text-sm">${r.producer_note}</div></div>` : ''}
+      ${r.resident_producer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Resident Producer note</div><div class="text-sm">${r.resident_producer_note}</div></div>` : ''}
       ${r.treasurer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Treasurer note</div><div class="text-sm">${r.treasurer_note}</div></div>` : ''}
-      ${r.president_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">President note</div><div class="text-sm">${r.president_note}</div></div>` : ''}
       <hr class="divider">
       <div class="text-xs text-muted mb-8">Receipts</div>
       ${receiptsHtml}
@@ -1261,21 +1285,30 @@ async function renderApprovals() {
 
     // "In Review" = has at least one approval but not fully done yet
     const inReview = all.filter(r =>
-      ['pending_treasurer','pending_president'].includes(r.status) &&
-      (r.producer_acted_at || r.treasurer_acted_at)
+      ['pending_treasurer','pending_resident_producer'].includes(r.status) &&
+      (r.producer_acted_at || r.treasurer_acted_at || r.resident_producer_acted_at)
     );
     const inReviewIds = new Set(inReview.map(r => r.id));
-    const pending  = all.filter(r => ['pending_producer','pending_treasurer','pending_president'].includes(r.status) && !inReviewIds.has(r.id));
+    const pending  = all.filter(r => ['pending_producer','pending_treasurer','pending_resident_producer'].includes(r.status) && !inReviewIds.has(r.id));
     const approved = all.filter(r => r.status === 'approved');
     const paid     = all.filter(r => r.status === 'reimbursed');
     const denied   = all.filter(r => r.status === 'denied');
 
+    const STAGE_LABEL = {pending_producer:'Producer', pending_resident_producer:'Resident Producer', pending_treasurer:'Treasurer'};
+
     function approvalTrail(r) {
-      const isShow = !!r.production_id;
-      const steps = [];
-      if (isShow) steps.push({ label:'Producer', done:!!r.producer_acted_at, note:r.producer_note, current:r.status==='pending_producer' });
-      steps.push({ label:'Treasurer', done:!!r.treasurer_acted_at, note:r.treasurer_note, current:r.status==='pending_treasurer' });
-      steps.push({ label:'President', done:!!r.president_acted_at, note:r.president_note, current:r.status==='pending_president' });
+      let chain = [];
+      try { chain = JSON.parse(r.approval_chain || '[]'); } catch(e) {}
+      if (!chain.length) return '';
+      const stepDone = (stage) => stage==='pending_producer' ? !!r.producer_acted_at
+        : stage==='pending_resident_producer' ? !!r.resident_producer_acted_at
+        : !!r.treasurer_acted_at;
+      const stepNote = (stage) => stage==='pending_producer' ? r.producer_note
+        : stage==='pending_resident_producer' ? r.resident_producer_note
+        : r.treasurer_note;
+      const steps = chain.map(stage => ({
+        label: STAGE_LABEL[stage] || stage, done: stepDone(stage), note: stepNote(stage), current: r.status === stage
+      }));
       return '<div class="flex gap-4 mt-8 flex-wrap" style="align-items:center">' +
         steps.map((s,i) => {
           const color = s.done ? 'var(--green)' : s.current ? 'var(--amber)' : 'var(--ink3)';
@@ -1287,9 +1320,9 @@ async function renderApprovals() {
     }
 
     function canActOn(r) {
-      if (currentUser.role === 'admin') return ['pending_producer','pending_treasurer','pending_president'].includes(r.status);
+      if (currentUser.role === 'admin') return ['pending_producer','pending_treasurer','pending_resident_producer'].includes(r.status);
       if (currentUser.role === 'treasurer') return r.status === 'pending_treasurer';
-      if (currentUser.role === 'president') return r.status === 'pending_president';
+      if (currentUser.role === 'resident_producer') return r.status === 'pending_resident_producer';
       if (currentUser.role === 'producer') return r.status === 'pending_producer';
       return false;
     }
@@ -1314,7 +1347,8 @@ async function renderApprovals() {
           ${r.receipts&&r.receipts.length>0?`<div class="flex gap-3 mt-5">${r.receipts.map(rc=>`<div class="receipt-thumb" style="width:36px;height:36px" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.outerHTML='<span></span>'"></div>`).join('')}</div>`:''}
           ${approvalTrail(r)}
           ${acting?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
-            ${r.status==='pending_president'?`<input type="number" id="act-${r.id}" class="form-input mb-6" value="${r.actual_cost||r.estimated_cost}" step="0.01" placeholder="Actual cost" style="padding:5px 9px;font-size:12px">` :''}
+            ${(()=>{ let ch=[]; try{ch=JSON.parse(r.approval_chain||'[]');}catch(e){} const isFinal = ch.length && ch[ch.length-1]===r.status;
+              return isFinal ? `<input type="number" id="act-${r.id}" class="form-input mb-6" value="${r.actual_cost||r.estimated_cost}" step="0.01" placeholder="Actual cost" style="padding:5px 9px;font-size:12px">` : ''; })()}
             <textarea id="note-${r.id}" class="form-textarea mb-6" style="min-height:38px;font-size:12px" placeholder="Note (optional)..."></textarea>
             <div class="flex gap-6">
               <button class="btn btn-approve btn-sm" style="flex:1" onclick="quickApprove(${r.id},'approve')">✓ Approve</button>
@@ -1356,7 +1390,7 @@ async function renderApprovals() {
           ${denied.map(r=>`<div class="card" style="opacity:.55"><div class="card-body" style="padding:10px 13px">
             <div class="fw-600 text-sm mb-1">${r.title}</div>
             <div class="text-xs text-muted">${r.submitter_name} · ${fmtMoney(r.estimated_cost)}</div>
-            ${r.president_note||r.treasurer_note||r.producer_note?`<div class="text-xs mt-4" style="color:var(--red)">${r.president_note||r.treasurer_note||r.producer_note}</div>`:''}
+            ${r.treasurer_note||r.resident_producer_note||r.producer_note?`<div class="text-xs mt-4" style="color:var(--red)">${r.treasurer_note||r.resident_producer_note||r.producer_note}</div>`:''}
           </div></div>`).join('')}
         </div>
       </div>`:''}`;
@@ -1389,8 +1423,9 @@ async function renderAllRequests() {
       <div class="flex flex-center gap-12 mb-16">
         <select id="all-req-filter" class="form-select" style="width:200px" onchange="renderAllRequests()">
           <option value="">All statuses</option>
+          <option value="pending_producer">Awaiting producer</option>
           <option value="pending_treasurer">Awaiting treasurer</option>
-          <option value="pending_president">Awaiting president</option>
+          <option value="pending_resident_producer">Awaiting resident producer</option>
           <option value="approved">Approved</option>
           <option value="denied">Denied</option>
           <option value="reimbursed">Reimbursed</option>
@@ -1407,7 +1442,7 @@ async function renderAllRequests() {
                 <td class="td-muted">${r.submitter_name}</td>
                 <td>${fmtMoney(r.estimated_cost)}</td>
                 <td class="td-muted">${r.budget_name||'—'}</td>
-                <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Pre-approval</span>'}</td>
+                <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Company Purchase</span>'}</td>
                 <td class="td-muted">${fmtDate(r.submitted_at)}</td>
                 <td>${statusBadge(r.status, false)}</td>
                 <td><button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">View</button></td>
@@ -3556,9 +3591,9 @@ function buildItemFormHTML(sid, item) {
     <div class="modal-body">
       <div class="type-toggle" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
         <div class="type-opt ${!isSAP?'active-pre':''}" id="sitem-pre" onclick="setItemType('pre_approval')">
-          <div class="fw-600 text-sm">Pre-approval</div><div class="text-xs text-muted">Plan to buy</div></div>
+          <div class="fw-600 text-sm">Company Purchase Request</div><div class="text-xs text-muted">Plan to buy — HWTC pays</div></div>
         <div class="type-opt ${isSAP?'active-sap':''}" id="sitem-sap" onclick="setItemType('sap')">
-          <div class="fw-600 text-sm">SAP</div><div class="text-xs text-muted">Already bought</div></div>
+          <div class="fw-600 text-sm">SAP</div><div class="text-xs text-muted">Already bought — reimburse me</div></div>
       </div>
       <input type="hidden" id="sitem-type" value="${item?.type||'pre_approval'}">
       <div class="form-group"><label class="form-label">Item description <span class="req">*</span></label>
@@ -3581,12 +3616,21 @@ function buildItemFormHTML(sid, item) {
         <label class="form-label">Item link</label>
         <input type="url" id="sitem-url" class="form-input" value="${item?.item_url||''}" placeholder="https://..."></div>
       <div id="sitem-sap-fields" class="${isSAP?'':'hidden'}">
-        <div class="form-group"><label class="form-label">Why was prior approval not possible? <span class="req">*</span></label>
-          <textarea id="sitem-sap-reason" class="form-textarea" placeholder="Explain why this could not wait for pre-approval...">${item?.sap_reason||''}</textarea></div>
-        <div class="form-group"><label class="form-label">Who authorized this purchase? <span class="req">*</span></label>
-          <input type="text" id="sitem-auth" class="form-input" value="${item?.authorized_by||''}" placeholder="e.g. Producer Sarah approved verbally"></div>
         <div class="form-group">
-          <label class="form-label">Receipt photo</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="sitem-is-emergency" ${item?.is_emergency?'checked':''} onchange="toggleItemEmergencyFields(this.checked)">
+            <span class="text-sm">This was an emergency purchase (advance budget approval wasn't practical)</span>
+          </label>
+        </div>
+        <div id="sitem-emergency-fields" class="${item?.is_emergency?'':'hidden'}">
+          <div class="form-group"><label class="form-label">What made this an emergency?</label>
+            <textarea id="sitem-sap-reason" class="form-textarea" placeholder="Briefly explain the circumstances...">${item?.emergency_reason||''}</textarea></div>
+          <div class="form-group"><label class="form-label">Who authorized it? <span class="req">*</span></label>
+            <input type="text" id="sitem-auth" class="form-input" value="${item?.authorized_by||''}" placeholder="e.g. Treasurer Sarah authorized by text">
+            <div class="form-hint">Emergency purchases must be authorized by the Treasurer, President, or Vice President</div></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Receipt photo <span class="req">*</span></label>
           <div class="upload-area" onclick="document.getElementById('sitem-receipt-file').click()" style="padding:14px;text-align:center;cursor:pointer">
             <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto 4px;display:block;opacity:.4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
             <span class="text-xs text-muted">Click to attach receipt photo or PDF</span>
@@ -3624,6 +3668,10 @@ function setItemType(type) {
   document.getElementById('sitem-sap-fields').className = isSAP ? '' : 'hidden';
 }
 
+function toggleItemEmergencyFields(isEmergency) {
+  document.getElementById('sitem-emergency-fields').className = isEmergency ? '' : 'hidden';
+}
+
 function setItemMethod(method) {
   document.getElementById('sitem-method').value = method;
   const isOnline = method === 'online';
@@ -3649,6 +3697,7 @@ function getItemFormData() {
   const type   = document.getElementById('sitem-type').value;
   const rawUrl = document.getElementById('sitem-url')?.value.trim()||'';
   const itemUrl= rawUrl&&!rawUrl.match(/^https?:\/\//)?'https://'+rawUrl:rawUrl;
+  const isEmergency = type === 'sap' && (document.getElementById('sitem-is-emergency')?.checked || false);
   return {
     type,
     title:          document.getElementById('sitem-title').value.trim(),
@@ -3656,8 +3705,9 @@ function getItemFormData() {
     vendor:         document.getElementById('sitem-vendor').value.trim(),
     purchase_method:document.getElementById('sitem-method').value,
     item_url:       itemUrl,
-    sap_reason:     document.getElementById('sitem-sap-reason')?.value.trim()||'',
-    authorized_by:  document.getElementById('sitem-auth')?.value.trim()||'',
+    is_emergency:   isEmergency,
+    emergency_reason: isEmergency ? (document.getElementById('sitem-sap-reason')?.value.trim()||'') : '',
+    authorized_by:  isEmergency ? (document.getElementById('sitem-auth')?.value.trim()||'') : '',
     reimb_method:   document.getElementById('sitem-reimb-method').value,
     reimb_handle:   document.getElementById('sitem-reimb-handle').value.trim(),
     _file:          document.getElementById('sitem-receipt-file')?.files[0]||null,
@@ -3670,8 +3720,8 @@ async function saveStatementItem(sid) {
   errEl.classList.add('hidden');
   if (!data.title) { errEl.textContent='Description is required'; errEl.classList.remove('hidden'); return; }
   if (!data.estimated_cost) { errEl.textContent='Amount is required'; errEl.classList.remove('hidden'); return; }
-  if (data.type==='sap'&&!data.sap_reason) { errEl.textContent='Please explain why prior approval was not possible'; errEl.classList.remove('hidden'); return; }
-  if (data.type==='sap'&&!data.authorized_by) { errEl.textContent='Please specify who authorized this SAP'; errEl.classList.remove('hidden'); return; }
+  if (data.type==='sap'&&!data._file) { errEl.textContent='Please attach a receipt for this purchase'; errEl.classList.remove('hidden'); return; }
+  if (data.is_emergency&&!data.authorized_by) { errEl.textContent='Please specify which Treasurer, President, or Vice President authorized this'; errEl.classList.remove('hidden'); return; }
   try {
     const {_file, ...payload} = data;
     const res = await api('POST', `/statements/${sid}/items`, payload);
