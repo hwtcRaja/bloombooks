@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, session, send_from_directory
+from flask import Flask, request, jsonify, session, send_from_directory, send_file
 from flask_cors import CORS
 import psycopg2
 import psycopg2.extras
@@ -16,7 +16,7 @@ import requests as req_lib
 import base64
 import time
 from cryptography.fernet import Fernet, InvalidToken
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -1879,6 +1879,38 @@ def training_status():
         'completed': bool(completion and completion['passed']),
         'score': completion['score'] if completion else None
     })
+
+@app.route('/api/training/certificate', methods=['GET'])
+def training_certificate():
+    err = require_auth()
+    if err: return err
+    u = current_user()
+    conn = get_db()
+    module = conn.execute('SELECT * FROM bb_training_modules WHERE is_active=1 LIMIT 1').fetchone()
+    if not module:
+        conn.close()
+        return jsonify({'error': 'No active training module'}), 404
+    module = dict(module)
+    completion = conn.execute('SELECT * FROM bb_training_completions WHERE user_id=%s AND module_id=%s',
+                               (u['id'], module['id'])).fetchone()
+    conn.close()
+    if not completion or not completion['passed']:
+        return jsonify({'error': 'Complete and pass training before downloading a certificate.'}), 403
+    completion = dict(completion)
+
+    raw_date = completion.get('completed_at') or ''
+    try:
+        completed_date = datetime.strptime(raw_date[:19], '%Y-%m-%d %H:%M:%S').strftime('%B %d, %Y')
+    except ValueError:
+        completed_date = raw_date[:10] or datetime.now().strftime('%B %d, %Y')
+
+    pdf_bytes = build_training_certificate_pdf(
+        name=u['name'], score=completion['score'],
+        completed_date=completed_date, module_title=module.get('title') or 'HWTC Purchasing Policy Training'
+    )
+    safe_name = re.sub(r'[^A-Za-z0-9]+', '_', u['name']).strip('_') or 'certificate'
+    return send_file(io.BytesIO(pdf_bytes), mimetype='application/pdf', as_attachment=True,
+                      download_name=f'HWTC_Training_Certificate_{safe_name}.pdf')
 
 # ─── Dashboard stats ─────────────────────────────────────────────────────────
 @app.route('/api/stats', methods=['GET'])
@@ -4054,6 +4086,100 @@ def _pdf_page_decorations(title):
         _pdf_header(c, title)
         _pdf_footer(c)
     return _fn
+
+def build_training_certificate_pdf(name, score, completed_date, module_title='HWTC Purchasing Policy Training'):
+    """A landscape certificate of completion, awarded once a user passes training."""
+    buf = io.BytesIO()
+    PAGE = landscape(letter)
+    W, H = PAGE
+    c = pdfcanvas.Canvas(buf, pagesize=PAGE)
+    cx = W / 2
+
+    c.setFillColor(colors.white)
+    c.rect(0, 0, W, H, fill=1, stroke=0)
+
+    # Decorative double border
+    margin = 28
+    c.setStrokeColor(TEAL)
+    c.setLineWidth(2.2)
+    c.rect(margin, margin, W - 2 * margin, H - 2 * margin, fill=0, stroke=1)
+    inner = margin + 10
+    c.setStrokeColor(TEAL_DARK)
+    c.setLineWidth(0.75)
+    c.rect(inner, inner, W - 2 * inner, H - 2 * inner, fill=0, stroke=1)
+
+    # Logo
+    if os.path.exists(LOGO_PATH):
+        logo_w = 1.7 * inch
+        logo_h = logo_w / LOGO_ASPECT
+        logo_y = H - inner - 0.55 * inch - logo_h
+        c.drawImage(LOGO_PATH, cx - logo_w / 2, logo_y, width=logo_w, height=logo_h, mask='auto')
+        top_y = logo_y - 0.45 * inch
+    else:
+        top_y = H - inner - 1.0 * inch
+
+    c.setFillColor(TEAL)
+    c.setFont('Helvetica-Bold', 13)
+    c.drawCentredString(cx, top_y, 'C E R T I F I C A T E   O F   C O M P L E T I O N')
+
+    c.setFillColor(PDF_INK2)
+    c.setFont('Helvetica-Oblique', 13)
+    c.drawCentredString(cx, top_y - 0.45 * inch, 'This certifies that')
+
+    c.setFillColor(PDF_INK)
+    c.setFont('Times-Bold', 32)
+    c.drawCentredString(cx, top_y - 1.0 * inch, name)
+    name_w = c.stringWidth(name, 'Times-Bold', 32)
+    c.setStrokeColor(TEAL)
+    c.setLineWidth(1)
+    c.line(cx - name_w / 2 - 12, top_y - 1.15 * inch, cx + name_w / 2 + 12, top_y - 1.15 * inch)
+
+    c.setFillColor(PDF_INK2)
+    c.setFont('Helvetica', 13)
+    c.drawCentredString(cx, top_y - 1.55 * inch, 'has successfully completed the')
+    c.setFillColor(TEAL_DARK)
+    c.setFont('Helvetica-Bold', 16)
+    c.drawCentredString(cx, top_y - 1.9 * inch, module_title)
+    c.setFillColor(PDF_INK2)
+    c.setFont('Helvetica', 12)
+    c.drawCentredString(cx, top_y - 2.25 * inch, f'for {ORG_NAME}, with a score of {score}%')
+
+    # Seal (drawn, not an image asset — a filled circle with a checkmark stroke)
+    seal_r = 0.42 * inch
+    seal_cx, seal_cy = cx, inner + 0.95 * inch
+    c.setFillColor(TEAL)
+    c.circle(seal_cx, seal_cy, seal_r, fill=1, stroke=0)
+    c.setStrokeColor(colors.white)
+    c.setLineWidth(4)
+    c.setLineCap(1)
+    c.setLineJoin(1)
+    p = c.beginPath()
+    p.moveTo(seal_cx - seal_r * 0.45, seal_cy - seal_r * 0.05)
+    p.lineTo(seal_cx - seal_r * 0.12, seal_cy - seal_r * 0.38)
+    p.lineTo(seal_cx + seal_r * 0.5, seal_cy + seal_r * 0.35)
+    c.drawPath(p, fill=0, stroke=1)
+
+    # Date / issuer line
+    bottom_y = inner + 0.5 * inch
+    col_w = 2.1 * inch
+    left_x = inner + 1.0 * inch
+    right_x = W - inner - 1.0 * inch - col_w
+
+    c.setStrokeColor(PDF_INK2)
+    c.setLineWidth(0.75)
+    c.line(left_x, bottom_y, left_x + col_w, bottom_y)
+    c.line(right_x, bottom_y, right_x + col_w, bottom_y)
+
+    c.setFont('Helvetica', 10)
+    c.setFillColor(PDF_INK2)
+    c.drawCentredString(left_x + col_w / 2, bottom_y - 14, completed_date)
+    c.drawCentredString(left_x + col_w / 2, bottom_y - 28, 'Date Completed')
+    c.drawCentredString(right_x + col_w / 2, bottom_y - 14, ORG_NAME)
+    c.drawCentredString(right_x + col_w / 2, bottom_y - 28, 'Issuing Organization')
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 def build_agreement_pdf(title, body_text, signer_name, signer_ip, signer_ua, consent_at, signed_at, token):
     buf = io.BytesIO()
