@@ -940,6 +940,113 @@ def rolecall_revenue_line(conn, pid):
         'confirmed_regs': rev['confirmed_regs'], 'pending_regs': rev['pending_regs'],
     }
 
+# ── RoleCall ticket sales (live, via RoleCall's read-only API) ────────────
+# Ticket money is more involved than enrollment (comps, codes, service
+# fees, Square fees, checkout donations, program ads), so instead of
+# re-implementing it against RoleCall's tables we ask RoleCall for its own
+# numbers. Set on the BloomBooks service in Railway:
+#   ROLECALL_API_KEY   the key from RoleCall → Settings → Integrations
+#   ROLECALL_BASE_URL  https://rolecall.hwtco.org (default)
+# Uses the same bb_rolecall_links row as Rising Stars enrollment, so any
+# production built from (or linked to) RoleCall gets its ticket actuals.
+ROLECALL_BASE_URL = os.environ.get('ROLECALL_BASE_URL', 'https://rolecall.hwtco.org').rstrip('/')
+_RC_FIN_CACHE = {}
+RC_FIN_CACHE_SECONDS = 120
+_RC_DOWN_UNTIL = [0.0]   # after a failed call, don't keep waiting on RoleCall for a minute
+
+def fetch_rolecall_financials(rc_production_id, fresh=False):
+    """RoleCall's sales actuals for one production (dict), or None if the
+    key isn't set or RoleCall can't be reached. Cached briefly so a page
+    listing many productions doesn't call RoleCall over and over."""
+    key = os.environ.get('ROLECALL_API_KEY', '').strip()
+    if not key or not rc_production_id:
+        return None
+    hit = _RC_FIN_CACHE.get(rc_production_id)
+    if hit and not fresh and time.time() - hit[0] < RC_FIN_CACHE_SECONDS:
+        return hit[1]
+    if not fresh and time.time() < _RC_DOWN_UNTIL[0]:
+        return hit[1] if hit else None
+    try:
+        r = req_lib.get(f'{ROLECALL_BASE_URL}/api/integrations/bloombooks/productions/{rc_production_id}/financials',
+                        headers={'X-API-Key': key}, timeout=6)
+        if r.status_code == 404:
+            return None   # that production doesn't exist in RoleCall (anymore)
+        if r.status_code != 200:
+            app.logger.warning(f'RoleCall financials {rc_production_id}: HTTP {r.status_code}')
+            if r.status_code in (401, 403) or r.status_code >= 500:
+                _RC_DOWN_UNTIL[0] = time.time() + 60
+            return hit[1] if hit else None
+        data = r.json()
+    except Exception as e:
+        app.logger.warning(f'RoleCall financials {rc_production_id} failed: {e}')
+        _RC_DOWN_UNTIL[0] = time.time() + 60
+        return hit[1] if hit else None
+    _RC_FIN_CACHE[rc_production_id] = (time.time(), data)
+    return data
+
+def rolecall_ticket_lines(conn, pid, fresh=False):
+    """Read-only revenue rows for the production's ticket activity in RoleCall,
+    shaped like bb_production_revenue rows. Rows with exclude_from_total are
+    shown but not added into the production's revenue totals."""
+    link = get_rolecall_link(conn, pid)
+    if not link:
+        return []
+    base = {'id': None, 'received_date': None, 'rolecall_live': True, 'readonly': True,
+            'rc_production_id': link['rc_production_id'], 'rc_production_name': link.get('rc_production_name')}
+    if not os.environ.get('ROLECALL_API_KEY', '').strip():
+        return [dict(base, source='Ticket Sales (RoleCall)', expected=0, actual=0, available=False, exclude_from_total=True,
+                     description='Not connected yet: add ROLECALL_API_KEY to BloomBooks in Railway (key from RoleCall → Settings → Integrations).')]
+    fin = fetch_rolecall_financials(link['rc_production_id'], fresh=fresh)
+    if not fin:
+        return [dict(base, source='Ticket Sales (RoleCall)', expected=0, actual=0, available=False, exclude_from_total=True,
+                     description='Linked to RoleCall, but ticket data is unavailable right now.')]
+    er = fin.get('earned_revenue') or {}
+    cr = fin.get('contributed_revenue') or {}
+    ex = fin.get('expenses') or {}
+    ct = fin.get('counts') or {}
+    c2d = lambda c: round(int(c or 0) / 100.0, 2)
+    tickets, svc, ads = c2d(er.get('ticket_sales_cents')), c2d(er.get('service_fees_cents')), c2d(er.get('program_ads_cents'))
+    sqfee, dons = c2d(ex.get('square_processing_fees_cents')), c2d(cr.get('checkout_donations_cents'))
+    if not (ct.get('tickets_sold') or ads or dons):
+        return []          # nothing sold yet (or this production doesn't use RoleCall ticketing)
+    # The ticket forecast from Build Show is the "expected" for ticket sales,
+    # unless someone already added their own ticket-sales line (then that one
+    # carries the forecast and we don't count it twice).
+    has_manual_ticket_line = conn.execute(
+        "SELECT 1 FROM bb_production_revenue WHERE production_id=%s AND LOWER(source) LIKE '%%ticket%%' LIMIT 1", (pid,)).fetchone()
+    est = 0.0
+    if not has_manual_ticket_line:
+        p = conn.execute('SELECT est_ticket_sales FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+        est = float((p or {}).get('est_ticket_sales') or 0)
+    asof = (fin.get('as_of') or '')[:16].replace('T', ' ')
+    comps = int(ct.get('comps') or 0)
+    rows = [dict(base, source='Ticket Sales (RoleCall)', available=True,
+                 expected=round(max(est, tickets), 2) if est else tickets, actual=tickets,
+                 description=(f"{int(ct.get('tickets_sold') or 0)} tickets · {int(ct.get('orders') or 0)} orders"
+                              + (f" · {comps} comps (${c2d(ct.get('comp_face_value_cents')):,.2f} face value)" if comps else '')
+                              + (f" · forecast ${est:,.2f}" if est else '')
+                              + f" — live from RoleCall{(' as of ' + asof) if asof else ''}"))]
+    if svc:
+        rows.append(dict(base, source='Ticket Service Fees (RoleCall)', available=True, expected=svc, actual=svc,
+                         description='Service fees buyers paid on top of ticket prices'))
+    if ads:
+        rows.append(dict(base, source='Program Ads (RoleCall)', available=True, expected=ads, actual=ads,
+                         description=f"{int(ct.get('program_ad_items') or 0)} ads, well wishes & cast grams"))
+    if sqfee:
+        pend = int(ex.get('square_fees_still_pending_orders') or 0)
+        rows.append(dict(base, source='Square Processing Fees (RoleCall)', available=True, expected=-sqfee, actual=-sqfee,
+                         description='Taken out by Square before deposit' + (f' ({pend} orders still waiting on Square)' if pend else '')))
+    if dons:
+        rows.append(dict(base, source='Ticket Checkout Donations (RoleCall)', available=True, expected=dons, actual=dons,
+                         exclude_from_total=True, description='Contributed income, so it is shown here but not counted in show revenue'))
+    return rows
+
+def rolecall_ticket_totals(conn, pid):
+    rows = rolecall_ticket_lines(conn, pid)
+    rows = [r for r in rows if not r.get('exclude_from_total')]
+    return sum(r['expected'] for r in rows), sum(r['actual'] for r in rows), bool(rows)
+
+
 def log_action(user_id, action, entity_type=None, entity_id=None, detail=None):
     conn = get_db()
     conn.execute('INSERT INTO bb_audit_log (user_id,action,entity_type,entity_id,detail) VALUES (%s,%s,%s,%s,%s)',
@@ -2047,6 +2154,12 @@ def list_productions():
             prod['rolecall_linked'] = True
             prod['rolecall_revenue_actual'] = rc_line['actual']
             prod['rolecall_revenue_expected'] = rc_line['expected']
+        # ...and its live ticket sales from RoleCall
+        t_exp, t_act, t_any = rolecall_ticket_totals(conn, prod['id'])
+        if t_any:
+            exp += t_exp
+            act += t_act
+            prod['rolecall_ticket_actual'] = t_act
         prod['total_revenue_expected'] = exp
         prod['total_revenue_actual']   = act
         prod['net_cost'] = prod['total_spent'] - act
@@ -2599,9 +2712,11 @@ def list_revenue(pid):
     result = [dict(r) for r in rows]
     # Prepend the live RoleCall Rising Stars line, if this production is linked.
     rc_line = rolecall_revenue_line(conn, pid)
+    tix = rolecall_ticket_lines(conn, pid, fresh=request.args.get('refresh') == '1')
     conn.close()
     if rc_line:
         result.insert(0, rc_line)
+    result[0:0] = tix
     return jsonify(result)
 
 @app.route('/api/productions/<int:pid>/revenue', methods=['POST'])
