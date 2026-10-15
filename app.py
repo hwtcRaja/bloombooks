@@ -1144,21 +1144,53 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
         f'</table>{url_line}'
     )
 
+    # Emails that got an "action needed" message — used below so nobody also
+    # gets a duplicate FYI copy of the same request.
+    notified = set()
     if status == 'pending_producer' and production_id:
         for p in get_production_producers(production_id):
             send_email(p['email'], f'Purchase request needs your approval: {req_title}',
                 email_html('New Purchase Request — Producer Review Needed', body,
                            'Review in BloomBooks', APP_URL))
+            notified.add((p['email'] or '').strip().lower())
     elif status == 'pending_resident_producer':
         for a in get_role_emails('resident_producer'):
             send_email(a['email'], f'Needs Resident Producer review: {req_title}',
                 email_html('New Purchase Request — Resident Producer Review Needed', body,
                            'Review in BloomBooks', APP_URL))
+            notified.add((a['email'] or '').strip().lower())
     else:
         prefix = 'SAP' if req_type == 'sap' else 'New request'
         for a in get_admin_emails():
             send_email(a['email'], f'{prefix}: {req_title}',
                 email_html('New Purchase Request — Review Needed', body, 'Review in BloomBooks', APP_URL))
+            notified.add((a['email'] or '').strip().lower())
+
+    # FYI heads-up to Resident Producers and the Treasurer on EVERY new
+    # submission, whatever stage it starts at, so they see requests coming
+    # before it's their turn. Skips anyone already notified above and the
+    # submitter themselves.
+    stage_labels = {
+        'pending_producer':          'the show\'s Producer',
+        'pending_resident_producer': 'the Resident Producer',
+        'pending_treasurer':         'the Treasurer',
+    }
+    stage_label = stage_labels.get(status, 'the approval queue')
+    fyi_body = body + (
+        f'<p style="font-size:13px;color:#666">No action needed from you yet. '
+        f'This request is currently with {stage_label}. You will get another email '
+        f'when it reaches your review step.</p>'
+    )
+    skip = set(notified)
+    skip.add((submitter_email or '').strip().lower())
+    for a in get_role_emails('resident_producer') + get_role_emails('treasurer'):
+        addr = (a.get('email') or '').strip().lower()
+        if not addr or addr in skip:
+            continue
+        skip.add(addr)
+        send_email(a['email'], f'FYI — new request submitted: {req_title}',
+            email_html('New Purchase Request Submitted (FYI)', fyi_body,
+                       'View in BloomBooks', APP_URL))
 
     # Confirm receipt to submitter
     confirm_body = (
@@ -1172,6 +1204,121 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
     )
     send_email(submitter_email, f'Request received: {req_title}',
         email_html('Your Request Was Received', confirm_body, 'View in BloomBooks', APP_URL))
+
+
+def _stage_action_recipients(status, production_id):
+    """Who must act on a request at this stage — same routing as
+    notify_request_submitted."""
+    if status == 'pending_producer' and production_id:
+        return get_production_producers(production_id)
+    if status == 'pending_resident_producer':
+        return get_role_emails('resident_producer')
+    return get_admin_emails()
+
+
+def notify_statement_submitted(statement_title, items, default_production_id,
+                               submitter_name, submitter_email):
+    """One summary email per person for a whole statement, instead of one
+    email per line item. Each approver gets the items that need their review;
+    Resident Producers and Treasurers also see the remaining items as FYI.
+    The submitter gets one confirmation listing everything."""
+    stage_labels = {
+        'pending_producer':          "Producer",
+        'pending_resident_producer': 'Resident Producer',
+        'pending_treasurer':         'Treasurer',
+    }
+
+    # Work out each item's first stage and who acts on it
+    rows = []
+    for item in items:
+        item = dict(item)
+        pid = item.get('production_id') or default_production_id
+        status = build_approval_chain(pid)[0]
+        rows.append({
+            'id': item['id'],
+            'title': item['title'],
+            'amount': float(item.get('estimated_cost') or 0),
+            'type': item.get('type'),
+            'status': status,
+            'actors': _stage_action_recipients(status, pid),
+        })
+    total = sum(r['amount'] for r in rows)
+    sub_key = (submitter_email or '').strip().lower()
+
+    # recipients: email(lower) -> {'email','action':[rows],'fyi':[rows]}
+    recipients = {}
+    def _slot(person):
+        key = (person.get('email') or '').strip().lower()
+        if not key:
+            return None
+        return recipients.setdefault(key, {'email': person['email'], 'action': [], 'fyi': []})
+
+    for r in rows:
+        actor_keys = set()
+        for a in r['actors']:
+            slot = _slot(a)
+            if slot is not None:
+                slot['action'].append(r)
+                actor_keys.add((a.get('email') or '').strip().lower())
+        for a in get_role_emails('resident_producer') + get_role_emails('treasurer'):
+            key = (a.get('email') or '').strip().lower()
+            if not key or key in actor_keys or key == sub_key:
+                continue
+            slot = _slot(a)
+            if r not in slot['fyi']:
+                slot['fyi'].append(r)
+
+    def _table(rlist, show_stage):
+        th = 'padding:6px 4px;color:#666;text-align:left;font-weight:500;border-bottom:1px solid #e0ddd6'
+        td = 'padding:6px 4px;border-bottom:1px solid #eee'
+        head = (f'<tr><th style="{th}">Item</th><th style="{th}">Type</th>'
+                + (f'<th style="{th}">With</th>' if show_stage else '')
+                + f'<th style="{th};text-align:right">Amount</th></tr>')
+        body = ''
+        for r in rlist:
+            t = 'SAP' if r['type'] == 'sap' else 'Company Purchase'
+            body += (f'<tr><td style="{td};font-weight:600">{r["title"]}</td><td style="{td}">{t}</td>'
+                     + (f'<td style="{td}">{stage_labels.get(r["status"], "Approval queue")}</td>' if show_stage else '')
+                     + f'<td style="{td};text-align:right">${r["amount"]:.2f}</td></tr>')
+        sub = sum(r['amount'] for r in rlist)
+        cols = 3 if show_stage else 2
+        body += (f'<tr><td colspan="{cols}" style="padding:6px 4px;font-weight:600">Total</td>'
+                 f'<td style="padding:6px 4px;text-align:right;font-weight:600">${sub:.2f}</td></tr>')
+        return f'<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:14px">{head}{body}</table>'
+
+    n = len(rows)
+    intro = (f'<p><strong>{submitter_name}</strong> submitted the statement '
+             f'<strong>{statement_title}</strong> with {n} item{"s" if n != 1 else ""} '
+             f'(${total:.2f} total).</p>')
+
+    for key, slot in recipients.items():
+        if key == sub_key and not slot['action']:
+            continue
+        html = intro
+        if slot['action']:
+            html += '<h3 style="margin:16px 0 4px;font-size:15px">Needs your review</h3>' + _table(slot['action'], False)
+        if slot['fyi']:
+            html += ('<h3 style="margin:16px 0 4px;font-size:15px">For your information</h3>'
+                     '<p style="font-size:13px;color:#666;margin:0">No action needed from you yet on these. '
+                     'You will get another email when one reaches your review step.</p>'
+                     + _table(slot['fyi'], True))
+        if slot['action']:
+            k = len(slot['action'])
+            subject = f'Statement needs your review: {statement_title} ({k} item{"s" if k != 1 else ""})'
+            title, cta = 'New Statement — Review Needed', 'Review in BloomBooks'
+        else:
+            subject = f'FYI — statement submitted: {statement_title}'
+            title, cta = 'New Statement Submitted (FYI)', 'View in BloomBooks'
+        send_email(slot['email'], subject, email_html(title, html, cta, APP_URL))
+
+    # One confirmation to the submitter
+    first = (submitter_name or '').split()[0] if submitter_name else 'there'
+    confirm = (f'<p>Hi {first}, your statement <strong>{statement_title}</strong> has been submitted '
+               f'and its items are in the approval queue.</p>'
+               + _table(rows, True)
+               + '<p style="font-size:13px;color:#666">You will receive updates by email as each item moves through approval.</p>')
+    send_email(submitter_email, f'Statement received: {statement_title}',
+        email_html('Your Statement Was Received', confirm, 'View in BloomBooks', APP_URL))
 
 
 def notify_request_status_change(req_id, req_title, submitter_id, new_status,
@@ -2587,17 +2734,10 @@ def submit_statement(sid):
     conn.close()
     log_action(u['id'],'submitted_statement','statement',sid,s['title'])
     # Notify approvers
-    for item in items:
-        item = dict(item)
-        item_prod_id = item.get('production_id') or prod_id
-        notify_request_submitted(
-            req_id=item['id'], req_title=item['title'],
-            submitter_name=u['name'], submitter_email=u['email'],
-            estimated_cost=item['estimated_cost'], req_type=item['type'],
-            purchase_method=item.get('purchase_method','in_store'),
-            item_url=item.get('item_url',''),
-            production_id=item_prod_id, status=build_approval_chain(item_prod_id)[0]
-        )
+    notify_statement_submitted(
+        statement_title=s['title'], items=items, default_production_id=prod_id,
+        submitter_name=u['name'], submitter_email=u['email']
+    )
     return jsonify({'ok':True})
 
 # ─── Send back (needs revision) ───────────────────────────────────────────────
@@ -3854,6 +3994,12 @@ def mobile_submit_statement(token, sid):
                      (item_chain[0],json.dumps(item_chain),now,now,item['id']))
     conn.execute("UPDATE bb_statements SET status='submitted',submitted_at=%s,updated_at=%s WHERE id=%s",(now,now,sid))
     conn.commit(); conn.close()
+    log_action(u['id'],'mobile_submitted_statement','statement',sid,s['title'])
+    # Notify approvers (previously missing — mobile statement submits were silent)
+    notify_statement_submitted(
+        statement_title=s['title'], items=items, default_production_id=prod_id,
+        submitter_name=u['name'], submitter_email=u['email']
+    )
     return jsonify({'ok':True})
 
 @app.route('/api/receipt/<token>/submit', methods=['POST'])
