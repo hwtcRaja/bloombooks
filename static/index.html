@@ -646,7 +646,9 @@ function fmtMoney(n) {
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
 async function renderDashboard() {
-  const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
+  // Resident Producers get the org-wide stats from /api/stats, so they need the
+  // org-wide dashboard too (otherwise every card reads "undefined").
+  const isAdmin = ['admin','treasurer','president','resident_producer'].includes(currentUser.role);
   try {
     const stats = await api('GET', '/stats');
     const reqs = await api('GET', '/requests?mine=1');
@@ -1144,10 +1146,9 @@ async function showRequestDetail(rid) {
   try { reqChain = JSON.parse(r.approval_chain || '[]'); } catch(e) {}
   const STAGE_LABEL2 = {pending_producer:'Producer', pending_resident_producer:'Resident Producer', pending_treasurer:'Treasurer'};
   const canApprove = isAdmin && ['pending_producer','pending_treasurer','pending_resident_producer'].includes(r.status);
-  const canApproveNow =
-       ((currentUser.role === 'treasurer' || currentUser.role === 'admin') && r.status === 'pending_treasurer')
-    || ((currentUser.role === 'resident_producer' || currentUser.role === 'admin') && r.status === 'pending_resident_producer')
-    || ((currentUser.role === 'producer' || currentUser.role === 'admin') && r.status === 'pending_producer');
+  // Server decides (can_act on each request) — matches what /approve will accept,
+  // including producers identified by show membership rather than global role.
+  const canApproveNow = !!r.can_act;
   const isFinalStage = reqChain.length && reqChain[reqChain.length-1] === r.status;
 
   const receiptsHtml = r.receipts && r.receipts.length > 0 ?
@@ -1320,11 +1321,7 @@ async function renderApprovals() {
     }
 
     function canActOn(r) {
-      if (currentUser.role === 'admin') return ['pending_producer','pending_treasurer','pending_resident_producer'].includes(r.status);
-      if (currentUser.role === 'treasurer') return r.status === 'pending_treasurer';
-      if (currentUser.role === 'resident_producer') return r.status === 'pending_resident_producer';
-      if (currentUser.role === 'producer') return r.status === 'pending_producer';
-      return false;
+      return !!r.can_act;
     }
 
     function requestCard(r) {
