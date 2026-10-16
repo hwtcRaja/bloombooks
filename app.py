@@ -1706,6 +1706,22 @@ def list_requests():
         receipts = conn2.execute('SELECT * FROM bb_receipts WHERE request_id=%s',(r['id'],)).fetchall()
         r['receipts'] = [dict(rec) for rec in receipts]
         conn2.close()
+        # can_act: same rules as _actor_authorized_for_stage (which the approve
+        # endpoint enforces), so the UI shows Approve/Deny exactly when the
+        # server will accept it. Producer stage is checked against production
+        # membership (producer_ids above), not the user's global role.
+        st = r.get('status')
+        if u['role'] == 'admin':
+            can_act = st in ('pending_producer','pending_resident_producer','pending_treasurer')
+        elif st == 'pending_producer':
+            can_act = r.get('production_id') in producer_ids
+        elif st == 'pending_resident_producer':
+            can_act = u['role'] == 'resident_producer'
+        elif st == 'pending_treasurer':
+            can_act = u['role'] == 'treasurer'
+        else:
+            can_act = False
+        r['can_act'] = can_act
         result.append(r)
     return jsonify(result)
 
