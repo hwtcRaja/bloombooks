@@ -733,6 +733,19 @@ def get_production_producers(pid):
     conn.close()
     return [dict(r) for r in rows]
 
+def production_for_budget(budget_id, fallback=None):
+    """The production a request belongs to is whatever production its budget
+    belongs to (NULL for org budgets). The client's production_id is only used
+    when there's no budget yet (e.g. a draft statement line without one)."""
+    if not budget_id:
+        return int(fallback) if fallback else None
+    conn = get_db()
+    row = conn.execute('SELECT production_id FROM bb_budgets WHERE id=%s', (int(budget_id),)).fetchone()
+    conn.close()
+    if not row:
+        return int(fallback) if fallback else None
+    return row['production_id']
+
 def build_approval_chain(production_id):
     """
     Returns the ordered list of statuses a purchase request must pass
@@ -1785,8 +1798,8 @@ def create_request():
     is_emergency = 1 if data.get('is_emergency') else 0
     purchase_method = data.get('purchase_method', 'in_store')
     item_url = data.get('item_url', '')
-    prod_id  = data.get('production_id') or None
     budget_id = data.get('budget_id') or None
+    prod_id  = production_for_budget(budget_id, data.get('production_id'))
     # Enforce budget permissions — block org-level budgets for non-owners, etc.
     if budget_id and not user_can_use_budget(u, int(budget_id)):
         return jsonify({'error': 'You are not permitted to submit against that budget.'}), 403
@@ -2718,7 +2731,8 @@ def add_statement_item(sid):
                  (data.get('type','pre_approval'), 'draft',
                   data['title'], data.get('description',''), data.get('vendor',''),
                   float(data['estimated_cost']), s.get('budget_id') or data.get('budget_id') or None,
-                  s.get('production_id') or data.get('production_id') or None,
+                  production_for_budget(s.get('budget_id') or data.get('budget_id'),
+                                        s.get('production_id') or data.get('production_id')),
                   u['id'], 1 if data.get('is_emergency') else 0, data.get('emergency_reason',''),
                   data.get('purchase_method','in_store'), data.get('item_url',''),
                   data.get('authorized_by',''), data.get('reimb_method',''), data.get('reimb_handle',''),
@@ -2903,7 +2917,7 @@ def reassign_request_budget(rid):
     nb = conn.execute('SELECT * FROM bb_budgets WHERE id=%s AND is_active=1',(new_bid,)).fetchone()
     if not nb: conn.close(); return jsonify({'error':'Budget not found or inactive'}),404
     nb = dict(nb)
-    if nb['id'] == req.get('budget_id'):
+    if nb['id'] == req.get('budget_id') and nb.get('production_id') == req.get('production_id'):
         conn.close(); return jsonify({'error':'Request is already on that budget'}),400
     old_bid  = req.get('budget_id')
     old_prod = req.get('production_id')
@@ -2928,7 +2942,7 @@ def reassign_request_budget(rid):
         new_status = req['status']
     conn.commit(); conn.close()
     log_action(u['id'],'reassigned_budget','request',rid,
-               f'budget {old_bid} -> {nb["id"]}' + (f': {note}' if note else ''))
+               f'budget {old_bid} -> {nb["id"]}, production {old_prod} -> {new_prod}' + (f': {note}' if note else ''))
     if new_status != req['status']:
         submitter = get_user_email(req['submitted_by']) or {}
         notify_request_submitted(
@@ -4076,7 +4090,7 @@ def mobile_add_statement_item(token, sid):
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
                  (req_type,'draft',title,data.get('description',''),data.get('vendor',''),
                   float(cost),int(budget_id),
-                  int(data['production_id']) if data.get('production_id') else None,
+                  production_for_budget(budget_id, data.get('production_id')),
                   u['id'],is_emergency,data.get('emergency_reason',''),data.get('purchase_method','in_store'),
                   data.get('item_url',''),data.get('authorized_by',''),
                   data.get('reimb_method',''),data.get('reimb_handle',''),
@@ -4195,7 +4209,7 @@ def mobile_new_request(token):
     item_url  = data.get('item_url','')
     vendor    = data.get('vendor','')
     desc      = data.get('description','')
-    prod_id   = data.get('production_id') or None
+    prod_id   = production_for_budget(budget_id, data.get('production_id'))
     if not title:     return jsonify({'error':'Title is required'}),400
     if not budget_id: return jsonify({'error':'Please select a budget'}),400
     if not est_cost:  return jsonify({'error':'Please enter the estimated amount'}),400
