@@ -1584,7 +1584,7 @@ def list_budgets():
     can_org = is_admin or bool(u.get('can_submit_org_level'))
     owned_ids = user_owned_budget_ids(u['id'])
     if is_admin:
-        budgets = conn.execute('''SELECT b.*,p.name as production_name FROM bb_budgets b
+        budgets = conn.execute('''SELECT b.*,p.name as production_name,p.status as production_status FROM bb_budgets b
                                   LEFT JOIN bb_productions p ON b.production_id=p.id
                                   ORDER BY b.is_active DESC,p.name,b.name''').fetchall()
     else:
@@ -1610,7 +1610,7 @@ def list_budgets():
             clauses.append('b.production_id IS NULL')
         if clauses:
             where = '(' + ' OR '.join(clauses) + ') AND b.is_active=1'
-            budgets = conn.execute(f'''SELECT b.*,p.name as production_name FROM bb_budgets b
+            budgets = conn.execute(f'''SELECT b.*,p.name as production_name,p.status as production_status FROM bb_budgets b
                                        LEFT JOIN bb_productions p ON b.production_id=p.id
                                        WHERE {where}''', params).fetchall()
         else:
@@ -1697,7 +1697,13 @@ def update_budget(bid):
     if fields:
         vals.append(bid)
         conn.execute(f'UPDATE bb_budgets SET {",".join(fields)} WHERE id=%s', vals)
+        # Archiving/restoring a category takes its sub-budgets with it, so
+        # nothing is left orphaned (visible in dropdowns but not the tracker).
+        if 'is_active' in data:
+            conn.execute('UPDATE bb_budgets SET is_active=%s WHERE parent_id=%s', (data['is_active'], bid))
         conn.commit()
+    if 'is_active' in data:
+        log_action(u['id'], 'archived_budget' if not data['is_active'] else 'restored_budget', 'budget', bid, b.get('name'))
     conn.close()
     return jsonify({'ok':True})
 
@@ -2385,6 +2391,9 @@ def list_productions():
             bd['owners'] = [dict(o) for o in owners]
             prod['budgets'].append(bd)
         prod['total_spent'] = sum(b['spent'] for b in prod['budgets'])
+        prod['archived_budgets'] = [dict(b) for b in conn.execute(
+            'SELECT id,name,area,total_amount,spent FROM bb_budgets WHERE production_id=%s AND is_active=0 ORDER BY name',
+            (prod['id'],)).fetchall()]
         rev = conn.execute('SELECT expected,actual FROM bb_production_revenue WHERE production_id=%s',(prod['id'],)).fetchall()
         exp = sum(r['expected'] for r in rev)
         act = sum(r['actual']   for r in rev)
@@ -3996,7 +4005,8 @@ def get_receipt_page_data(token):
         budgets = conn.execute('''SELECT b.id,b.name,b.area,b.total_amount,b.spent,b.production_id,
                                           p.name as production_name
                                    FROM bb_budgets b LEFT JOIN bb_productions p ON b.production_id=p.id
-                                   WHERE b.is_active=1 ORDER BY p.name,b.name''').fetchall()
+                                   WHERE b.is_active=1 AND (p.status IS NULL OR p.status NOT IN ('archived','closed'))
+                                   ORDER BY p.name,b.name''').fetchall()
     else:
         clauses, params = [], []
         if my_prod_ids:
@@ -4008,7 +4018,7 @@ def get_receipt_page_data(token):
         if can_org:
             clauses.append('b.production_id IS NULL')
         if clauses:
-            where = '(' + ' OR '.join(clauses) + ') AND b.is_active=1'
+            where = '(' + ' OR '.join(clauses) + ") AND b.is_active=1 AND (p.status IS NULL OR p.status NOT IN ('archived','closed'))"
             budgets = conn.execute(f'''SELECT b.id,b.name,b.area,b.total_amount,b.spent,b.production_id,
                                               p.name as production_name
                                        FROM bb_budgets b LEFT JOIN bb_productions p ON b.production_id=p.id
