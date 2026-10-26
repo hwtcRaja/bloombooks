@@ -1380,7 +1380,7 @@ async function renderApprovals() {
               <button class="btn btn-approve btn-sm" style="flex:1" onclick="quickApprove(${r.id},'approve')">✓ Approve</button>
               <button class="btn btn-danger btn-sm" style="flex:1" onclick="quickApprove(${r.id},'deny')">✕ Deny</button>
               <button class="btn btn-outline btn-sm" title="Send back for revision" onclick="showSendBackModal(${r.id},'${r.title.replace(/'/g,"\\'")}')">↩</button>
-              <button class="btn btn-outline btn-sm" title="Move to a different budget" onclick="showReassignBudgetModal(${r.id},'${r.title.replace(/'/g,"\\'")}',${r.budget_id||'null'})">⇄</button>
+              <button class="btn btn-outline btn-sm" title="Move to a different budget" onclick="showReassignBudgetModal(${r.id},'${r.title.replace(/'/g,"\\'")}',${r.budget_id||'null'},${r.production_id||'null'})">⇄</button>
             </div>
           </div>`:`<button class="btn btn-outline btn-sm mt-6 w-full" onclick="showRequestDetail(${r.id})">View</button>`}
         </div>
@@ -3837,17 +3837,22 @@ async function doSendBack(rid) {
 }
 
 // ── Reassign budget ──────────────────────────────────────────────────────────
-async function showReassignBudgetModal(rid, title, currentBid) {
+async function showReassignBudgetModal(rid, title, currentBid, currentProd) {
   let budgets = [];
   try { budgets = await api('GET', '/budgets'); } catch(e) { toast(e.message,'error'); return; }
-  const active = budgets.filter(b => b.is_active && b.id !== currentBid);
+  // Keep the current budget in the list when the request isn't linked to that
+  // budget's show — picking it again repairs the link.
+  const cur = budgets.find(b => b.id === currentBid);
+  const linkBroken = cur && (cur.production_id || null) !== (currentProd || null);
+  const active = budgets.filter(b => b.is_active && (b.id !== currentBid || linkBroken));
   const org  = active.filter(b => !b.production_id);
   const prod = active.filter(b =>  b.production_id);
-  const opt  = b => `<option value="${b.id}">${b.production_name ? b.production_name+' · ' : ''}${b.name}</option>`;
+  const opt  = b => `<option value="${b.id}">${b.production_name ? b.production_name+' · ' : ''}${b.name}${b.id===currentBid ? ' (current — fix show link)' : ''}</option>`;
   const html = `
     <div class="modal-header"><span class="modal-title">Move to a different budget</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       <p class="text-sm mb-12">Move <strong>${title}</strong> to the correct budget. If it moves between org and a production, approval restarts with the right approvers.</p>
+      ${linkBroken ? `<div class="panel mb-12" style="background:var(--amber-bg);border-color:var(--amber);padding:8px 12px;font-size:13px">This request is on <strong>${cur.production_name ? cur.production_name+' · ' : ''}${cur.name}</strong> but isn't linked to that show, so it's being routed as an org purchase. Pick it below to fix the link.</div>` : ''}
       <div class="form-group"><label class="form-label">New budget <span class="req">*</span></label>
         <select id="reassign-budget" class="form-select">
           <option value="">Select a budget…</option>
