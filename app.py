@@ -733,6 +733,16 @@ def get_production_producers(pid):
     conn.close()
     return [dict(r) for r in rows]
 
+def pending_by_budget(conn):
+    """Money in flight per budget: requests still in approval (or sent back
+    for revision) that haven't hit `spent` yet. Drafts don't count."""
+    rows = conn.execute("""SELECT budget_id, COALESCE(SUM(estimated_cost),0) AS amt
+                            FROM bb_purchase_requests
+                            WHERE budget_id IS NOT NULL
+                              AND (status LIKE 'pending%%' OR status='needs_revision')
+                            GROUP BY budget_id""").fetchall()
+    return {r['budget_id']: round(float(r['amt']), 2) for r in rows}
+
 def production_for_budget(budget_id, fallback=None):
     """The production a request belongs to is whatever production its budget
     belongs to (NULL for org budgets). The client's production_id is only used
@@ -1605,12 +1615,14 @@ def list_budgets():
                                        WHERE {where}''', params).fetchall()
         else:
             budgets = []
+    pending = pending_by_budget(conn)
     conn.close()
     owned_set = set(owned_ids)
     result = []
     for b in budgets:
         bd = dict(b)
         bd['i_own'] = bd['id'] in owned_set
+        bd['pending'] = pending.get(bd['id'], 0)
         result.append(bd)
     return jsonify(result)
 
@@ -2345,6 +2357,7 @@ def list_productions():
     if err: return err
     u = current_user()
     conn = get_db()
+    pending = pending_by_budget(conn)
     is_admin = u['role'] in ('admin','treasurer','president','resident_producer')
     if is_admin:
         prods = conn.execute('SELECT * FROM bb_productions ORDER BY status,name').fetchall()
@@ -2366,6 +2379,7 @@ def list_productions():
         prod['budgets'] = []
         for b in budgets:
             bd = dict(b)
+            bd['pending'] = pending.get(bd['id'], 0)
             owners = conn.execute('''SELECT bm.user_id,u.name,u.email FROM bb_budget_members bm
                                      JOIN bb_users u ON bm.user_id=u.id WHERE bm.budget_id=%s''',(bd['id'],)).fetchall()
             bd['owners'] = [dict(o) for o in owners]
@@ -4006,12 +4020,14 @@ def get_receipt_page_data(token):
         productions = conn.execute(f"SELECT id,name,season FROM bb_productions WHERE id IN ({ph}) AND status='active'", my_prod_ids).fetchall()
     else:
         productions = []
+    pending = pending_by_budget(conn)
     conn.close()
     owned_set = set(owned_ids)
     budget_list = []
     for b in budgets:
         bd = dict(b)
         bd['i_own'] = bd['id'] in owned_set
+        bd['pending'] = pending.get(bd['id'], 0)
         budget_list.append(bd)
     return jsonify({'user':u,'requests':[dict(r) for r in reqs],
                     'budgets':budget_list,'productions':[dict(p) for p in productions]})
