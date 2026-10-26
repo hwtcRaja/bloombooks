@@ -160,6 +160,11 @@ tr:hover td{background:var(--cream)}
 
 /* ── Budget bar ─────────────────────────────────────────────────────── */
 .budget-bar-wrap{background:var(--cream3);border-radius:99px;height:8px;overflow:hidden;margin-top:8px;display:flex}
+.archive-fold{margin-top:12px}
+.archive-fold>summary{cursor:pointer;font-size:12px;color:var(--ink3);font-weight:600;padding:6px 0;list-style:none}
+.archive-fold>summary::-webkit-details-marker{display:none}
+.archive-fold>summary::before{content:'▸ ';}
+.archive-fold[open]>summary::before{content:'▾ ';}
 .budget-bar-pending{height:100%;background:repeating-linear-gradient(45deg,var(--amber) 0 3px,var(--amber-bg) 3px 6px);opacity:.85}
 .budget-bar-fill{height:100%;border-radius:99px;background:var(--teal);transition:width .4s ease}
 .budget-bar-fill.warn{background:var(--amber)}
@@ -836,6 +841,8 @@ async function renderNewRequest() {
   // Load productions user belongs to
   let myProductions = [];
   try { myProductions = await api('GET', '/productions'); } catch(e) {}
+  // Closed/archived shows can't take new requests, so keep them out of the picker
+  myProductions = myProductions.filter(p => !['closed','archived'].includes(p.status));
 
   const prodOpts = myProductions.length > 0
     ? myProductions.map(p => `<option value="${p.id}">${p.name} — ${p.season}</option>`).join('')
@@ -1663,8 +1670,11 @@ async function renderBudgets() {
 
     let html = '';
 
-    // Production budgets
-    for (const [pid, group] of Object.entries(byProd)) {
+    // Production budgets — closed/archived shows fold into "Past productions"
+    const isPastStatus = st => st === 'closed' || st === 'archived';
+    for (const b of budgets) if (b.production_id && byProd[b.production_id]) byProd[b.production_id].status = b.production_status;
+    const prodGroupHtml = (pid, group) => {
+      let html = '';
       const totalBudget = group.budgets.reduce((s,b) => s+b.total_amount, 0);
       const totalSpent  = group.budgets.reduce((s,b) => s+b.spent, 0);
       const totalPending = group.budgets.reduce((s,b) => s+(+b.pending||0), 0);
@@ -1684,11 +1694,19 @@ async function renderBudgets() {
             <div class="budget-bar-wrap mb-16"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
             ${group.budgets.filter(b=>b.is_active).map(b => budgetCard(b, canEdit)).join('')}
             ${group.budgets.filter(b=>!b.is_active).length > 0 ? `
-              <div class="text-xs text-muted mt-8 mb-8">Archived departments</div>
-              ${group.budgets.filter(b=>!b.is_active).map(b => budgetCard(b, canEdit)).join('')}` : ''}
+              <details class="archive-fold"><summary>Archived departments (${group.budgets.filter(b=>!b.is_active).length})</summary>
+              ${group.budgets.filter(b=>!b.is_active).map(b => budgetCard(b, canEdit)).join('')}</details>` : ''}
           </div>
         </div>`;
-    }
+      return html;
+    };
+    const prodEntries = Object.entries(byProd);
+    const pastProds = prodEntries.filter(([,g]) => isPastStatus(g.status));
+    for (const [pid, group] of prodEntries.filter(([,g]) => !isPastStatus(g.status))) html += prodGroupHtml(pid, group);
+    const pastProdHtml = pastProds.length
+      ? `<details class="archive-fold mb-16"><summary>Past productions — closed or archived (${pastProds.length})</summary>
+           <div class="mt-8">${pastProds.map(([pid, g]) => prodGroupHtml(pid, g)).join('')}</div></details>`
+      : '';
 
     // Org-level budgets — with parent/subcategory hierarchy
     if (orgBudgets.length > 0) {
@@ -1732,6 +1750,7 @@ async function renderBudgets() {
               <div class="budget-bar-wrap" style="height:4px"><div class="budget-bar-fill" style="width:${cp}%;height:4px"></div>${pendingSeg(c,'4px')}</div>
               ${canEdit?`<div class="flex gap-6 mt-4">
                 <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 7px" onclick="showBudgetModal(${c.id},'${c.name.replace(/'/g,"\\'")}','${c.area}','${c.season||''}',${c.total_amount},null,${c.parent_id})">Edit</button>
+                <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 7px" onclick="archiveBudget(${c.id})">Archive</button>
                 <button class="btn btn-danger btn-sm" style="font-size:11px;padding:2px 7px" onclick="confirmDeleteBudget(${c.id},'${c.name.replace(/'/g,"\\'")}')">Delete</button>
               </div>`:''}
             </div>`;
@@ -1739,16 +1758,18 @@ async function renderBudgets() {
           ${canEdit?`<div class="flex gap-6 mt-8">
             <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="showBudgetModal(${parent.id},'${parent.name.replace(/'/g,"\\'")}','${parent.area}','${parent.season||''}',0)">Edit</button>
             <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="showBudgetModal(0,'','','',0,null,${parent.id})">+ Sub-budget</button>
+            <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="archiveBudget(${parent.id}, ${children.length})">Archive</button>
             <button class="btn btn-danger btn-sm" style="font-size:11px;padding:3px 8px" onclick="confirmDeleteBudget(${parent.id},'${parent.name.replace(/'/g,"\\'")}')">Delete</button>
           </div>`:''}
         </div></div>`;
       });
       const archived = orgBudgets.filter(b => !b.is_active);
       if (archived.length > 0) {
-        html += `<div class="text-xs text-muted mt-12 mb-8">Archived</div>`;
-        html += archived.map(b => budgetCard(b, canEdit)).join('');
+        html += `<details class="archive-fold"><summary>Archived org budgets (${archived.length})</summary>
+          ${archived.map(b => budgetCard(b, canEdit)).join('')}</details>`;
       }
     }
+    html += pastProdHtml;
 
     if (!html) html = `<div class="empty"><h3>No budgets yet</h3>${isAdmin?'<button class="btn btn-primary mt-16" onclick="showBudgetModal()">Create first budget</button>':''}</div>`;
     document.getElementById('content').innerHTML = `<div class="section-sub">Track spend across productions and org areas</div>${html}`;
@@ -1837,10 +1858,23 @@ async function saveBudget(id, production_id) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
-async function archiveBudget(id) {
-  await api('PATCH', `/budgets/${id}`, {is_active: 0});
-  await loadBudgets(); renderBudgets(); toast('Budget archived.', 'info');
+async function archiveBudget(id, childCount=0) {
+  if (childCount > 0 && !confirm(`Archive this category and its ${childCount} sub-budget${childCount!==1?'s':''}?`)) return;
+  try {
+    await api('PATCH', `/budgets/${id}`, {is_active: 0});
+    await loadBudgets(); renderBudgets(); toast('Budget archived.', 'info');
+  } catch(e) { toast(e.message, 'error'); }
 }
+async function setDeptArchived(id, archive) {
+  if (archive && !confirm('Archive this department? It will be hidden from budget lists and dropdowns. You can restore it anytime.')) return;
+  try {
+    await api('PATCH', `/budgets/${id}`, {is_active: archive ? 0 : 1});
+    toast(archive ? 'Department archived.' : 'Department restored!', archive ? 'info' : 'success');
+    await loadBudgets();
+    openProductionDetail(_currentProd.id);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 async function restoreBudget(id) {
   await api('PATCH', `/budgets/${id}`, {is_active: 1});
   await loadBudgets(); renderBudgets(); toast('Budget restored!', 'success');
@@ -2241,12 +2275,20 @@ function renderProdTab() {
                   ${canManage ? `<div class="flex gap-8" style="margin-left:auto">
                     <button class="btn btn-outline btn-sm" onclick="showEditDeptModal(${b.id},'${b.name.replace(/'/g,"\\'")}','${b.area}',${b.total_amount})">Edit</button>
                     <button class="btn btn-outline btn-sm" onclick="showManageDeptOwnersModal(${b.id},'${b.name.replace(/'/g,"\\'")}',${JSON.stringify(b.owners||[]).replace(/"/g,'&quot;')})">Owners</button>
+                    <button class="btn btn-outline btn-sm" onclick="setDeptArchived(${b.id}, true)">Archive</button>
                     <button class="btn btn-danger btn-sm" onclick="deleteDepartment(${b.id},'${b.name.replace(/'/g,"\\'")}')">Delete</button>
                   </div>` : ''}
                 </div>
               </div>
             </div>`;
-          }).join('')}`;
+          }).join('')}
+      ${(p.archived_budgets||[]).length ? `
+        <details class="archive-fold"><summary>Archived departments (${p.archived_budgets.length})</summary>
+          ${p.archived_budgets.map(b => `<div class="card mb-8"><div class="card-body flex flex-center gap-8" style="padding:10px 14px">
+            <div><div class="fw-600 text-sm">${b.name}</div><div class="text-xs text-muted">${fmtMoney(b.spent)} spent of ${fmtMoney(b.total_amount)}</div></div>
+            ${canManage ? `<button class="btn btn-outline btn-sm" style="margin-left:auto" onclick="setDeptArchived(${b.id}, false)">Restore</button>` : ''}
+          </div></div>`).join('')}
+        </details>` : ''}`;
 
   } else if (_prodTab === 'team') {
     const producers = p.members.filter(m=>m.member_role==='producer');
@@ -3873,7 +3915,8 @@ async function showReassignBudgetModal(rid, title, currentBid, currentProd) {
   // budget's show — picking it again repairs the link.
   const cur = budgets.find(b => b.id === currentBid);
   const linkBroken = cur && (cur.production_id || null) !== (currentProd || null);
-  const active = budgets.filter(b => b.is_active && (b.id !== currentBid || linkBroken));
+  const active = budgets.filter(b => b.is_active && !['closed','archived'].includes(b.production_status)
+                                && (b.id !== currentBid || linkBroken));
   const org  = active.filter(b => !b.production_id);
   const prod = active.filter(b =>  b.production_id);
   const opt  = b => `<option value="${b.id}">${b.production_name ? b.production_name+' · ' : ''}${b.name}${b.id===currentBid ? ' (current — fix show link)' : ''}</option>`;
