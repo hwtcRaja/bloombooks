@@ -673,9 +673,20 @@ function budgetLeftLine(r) {
   const left = (r.budget_total || 0) - (r.budget_spent || 0);
   const pend = +r.budget_pending || 0;
   const after = left - pend;
-  return `<div class="text-xs" style="color:${left<0?'var(--red)':'var(--ink3)'}" title="${fmtMoney(r.budget_total||0)} allocated · ${fmtMoney(r.budget_spent||0)} spent${pend?` · ${fmtMoney(pend)} pending · ${fmtMoney(after)} left if all pending is approved`:''}">
-      ${fmtMoney(left)} left${pend?` · <span style="color:${after<0?'var(--red)':'var(--amber)'}">${fmtMoney(pend)} pending</span>`:''}
-    </div>`;
+  return `<div class="text-xs" style="color:${left<0?'var(--red)':'var(--ink3)'}" title="${fmtMoney(r.budget_total||0)} allocated · ${fmtMoney(r.budget_spent||0)} spent">
+      ${fmtMoney(left)} left${pend?` · <span style="color:var(--amber)">${fmtMoney(pend)} pending</span>`:''}
+    </div>${pend ? `<div class="text-xs fw-600" style="color:${after<0?'var(--red)':'var(--ink2, var(--ink))'}">${after<0?`${fmtMoney(-after)} over`:`${fmtMoney(after)} left`} if all approved</div>` : ''}`;
+}
+
+// ── Type cell: which show (or org) + how it's paid ──────────────────────────
+function typeCell(r) {
+  const scope = r.production_name
+    ? `<span class="badge badge-treasurer" style="font-size:10px" title="Production expense">${r.production_name}</span>`
+    : `<span class="badge" style="font-size:10px;background:var(--cream2);color:var(--ink2, var(--ink))" title="Organization expense">Org</span>`;
+  const how = r.is_sap
+    ? '<span class="badge badge-sap" style="font-size:10px">Reimbursement</span>'
+    : '<span class="text-xs text-muted">HWTC purchase</span>';
+  return `<div>${scope}</div><div class="mt-2">${how}</div>`;
 }
 
 // ── Dashboard stage cards ────────────────────────────────────────────────────
@@ -856,7 +867,7 @@ async function renderMyRequests() {
               </td>
               <td>${fmtMoney(r.estimated_cost)}</td>
               <td class="td-muted">${budgetCell(r)}</td>
-              <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Company Purchase</span>'}</td>
+              <td>${typeCell(r)}</td>
               <td class="td-muted">${fmtDate(r.submitted_at)}</td>
               <td>${statusBadge(r.status, false)}</td>
               <td>
@@ -1293,7 +1304,7 @@ async function showRequestDetail(rid) {
         <div><div class="text-xs text-muted">Estimated cost</div><div class="fw-600 text-sm mt-4">${fmtMoney(r.estimated_cost)}</div></div>
         <div><div class="text-xs text-muted">Purchase method</div><div class="fw-600 text-sm mt-4">${r.purchase_method==='online'?'Online':'In-store'}${r.vendor?' — '+r.vendor:''}</div></div>
         <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div>${r.budget_name?`<div class="mt-2">${budgetLeftLine(r)}</div>`:''}</div>
-        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.is_sap ? 'SAP — reimbursement' : 'Company Purchase Request'}</div></div>
+        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.production_name ? `Production expense — ${r.production_name}` : 'Org expense'}</div><div class="text-xs text-muted">${r.is_sap ? 'Reimbursement (SAP) — already purchased' : 'Company Purchase Request — HWTC pays'}</div></div>
       </div>
       ${r.item_url ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Item link</div><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:13px;color:var(--teal);word-break:break-all">${r.item_url}</a></div>` : ''}
       ${r.description ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Description</div><div class="text-sm">${r.description}</div></div>` : ''}
@@ -1549,7 +1560,7 @@ async function renderAllRequests() {
                 <td class="td-muted">${r.submitter_name}</td>
                 <td>${fmtMoney(r.estimated_cost)}</td>
                 <td class="td-muted">${budgetCell(r)}</td>
-                <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Company Purchase</span>'}</td>
+                <td>${typeCell(r)}</td>
                 <td class="td-muted">${fmtDate(r.submitted_at)}</td>
                 <td>${statusBadge(r.status, false)}</td>
                 <td><button class="btn btn-outline btn-sm" onclick="showRequestDetail(${r.id})">View</button></td>
