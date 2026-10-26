@@ -309,12 +309,12 @@ function renderNewRequestTab() {
   }
   for (const [,g] of Object.entries(byProd)) {
     budgetOpts+=`<optgroup label="${g.name}">`;
-    g.items.forEach(b=>{ budgetOpts+=`<option value="${b.id}">${b.name} (${fmtMoney(b.total_amount-b.spent)} left)</option>`; });
+    g.items.forEach(b=>{ budgetOpts+=`<option value="${b.id}">${b.name} (${fmtMoney(b.total_amount-b.spent)} left${b.pending>0?`, ${fmtMoney(b.pending)} pending`:''})</option>`; });
     budgetOpts+='</optgroup>';
   }
   if (orgBudgets.length>0){
     budgetOpts+=`<optgroup label="Org-level">`;
-    orgBudgets.forEach(b=>{ budgetOpts+=`<option value="${b.id}">${b.name} (${fmtMoney(b.total_amount-b.spent)} left)</option>`; });
+    orgBudgets.forEach(b=>{ budgetOpts+=`<option value="${b.id}">${b.name} (${fmtMoney(b.total_amount-b.spent)} left${b.pending>0?`, ${fmtMoney(b.pending)} pending`:''})</option>`; });
     budgetOpts+='</optgroup>';
   }
   const prodOpts=(pageData.productions||[]).map(p=>`<option value="${p.id}">${p.name} — ${p.season}</option>`).join('');

@@ -159,7 +159,8 @@ tr:hover td{background:var(--cream)}
 .quiz-explanation{font-size:13px;color:var(--ink2);margin-top:10px;padding:10px;background:var(--cream2);border-radius:var(--r-sm);border-left:3px solid var(--teal)}
 
 /* ── Budget bar ─────────────────────────────────────────────────────── */
-.budget-bar-wrap{background:var(--cream3);border-radius:99px;height:8px;overflow:hidden;margin-top:8px}
+.budget-bar-wrap{background:var(--cream3);border-radius:99px;height:8px;overflow:hidden;margin-top:8px;display:flex}
+.budget-bar-pending{height:100%;background:repeating-linear-gradient(45deg,var(--amber) 0 3px,var(--amber-bg) 3px 6px);opacity:.85}
 .budget-bar-fill{height:100%;border-radius:99px;background:var(--teal);transition:width .4s ease}
 .budget-bar-fill.warn{background:var(--amber)}
 .budget-bar-fill.danger{background:var(--red)}
@@ -643,6 +644,21 @@ async function loadBudgets() {
   } catch(e) {}
 }
 
+// ── Pending (in approval, not yet spent) ─────────────────────────────────────
+function pendingSeg(b, h) {
+  const p = +b.pending || 0;
+  if (!p || !(b.total_amount > 0)) return '';
+  const sp = Math.min(100, (b.spent / b.total_amount) * 100);
+  const w = Math.max(0, Math.min(100 - sp, (p / b.total_amount) * 100));
+  return `<div class="budget-bar-pending" style="width:${w}%${h ? ';height:' + h : ''}" title="${fmtMoney(p)} pending approval"></div>`;
+}
+function pendingNote(b) {
+  const p = +b.pending || 0;
+  if (!p) return '';
+  const after = b.total_amount - b.spent - p;
+  return `<div class="text-xs" style="color:${after<0?'var(--red)':'var(--amber)'}" title="${fmtMoney(after)} left if everything pending is approved">${fmtMoney(p)} pending</div>`;
+}
+
 // ── Status helpers ──────────────────────────────────────────────────────────
 function statusBadge(status, isSAP) {
   const map = {
@@ -736,9 +752,9 @@ async function renderDashboard() {
               return `<div class="mb-16">
                 <div class="flex flex-center gap-8 mb-4">
                   <span class="fw-600 text-sm">${b.name}</span>
-                  <span class="text-xs text-muted" style="margin-left:auto">${fmtMoney(b.spent)} / ${fmtMoney(b.total_amount)}</span>
+                  <span class="text-xs text-muted" style="margin-left:auto">${fmtMoney(b.spent)} / ${fmtMoney(b.total_amount)}${b.pending>0?` · <span style="color:var(--amber)">${fmtMoney(b.pending)} pending</span>`:''}</span>
                 </div>
-                <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div></div>
+                <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div>${pendingSeg(b)}</div>
               </div>`;
             }).join('')}
           </div>
@@ -1010,7 +1026,8 @@ function populateBudgetDropdown(prodId) {
     const rem = b.total_amount - b.spent;
     const yours = b.i_own ? ' — yours' : '';
     const tail = showArea ? ` — ${b.area}` : '';
-    return `<option value="${b.id}">${ownLabel(b)}${b.name}${tail} (${fmtMoney(rem)} remaining${yours})</option>`;
+    const pend = b.pending > 0 ? `, ${fmtMoney(b.pending)} pending` : '';
+    return `<option value="${b.id}">${ownLabel(b)}${b.name}${tail} (${fmtMoney(rem)} remaining${pend}${yours})</option>`;
   };
   let opts = '<option value="">Select a budget / department...</option>';
   if (prodId) {
@@ -1610,11 +1627,12 @@ async function renderBudgets() {
             <div style="margin-left:auto;text-align:right">
               <div class="fw-600" style="color:${remaining<0?'var(--red)':'var(--ink)'}">${fmtMoney(remaining)}</div>
               <div class="text-xs text-muted">of ${fmtMoney(b.total_amount)}</div>
+              ${pendingNote(b)}
             </div>
           </div>
-          <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div></div>
+          <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div>${pendingSeg(b)}</div>
           <div class="flex flex-center gap-8 mt-8">
-            <span class="text-xs text-muted">Spent: ${fmtMoney(b.spent)} · ${Math.round(pct)}%</span>
+            <span class="text-xs text-muted">Spent: ${fmtMoney(b.spent)} · ${Math.round(pct)}%${b.pending>0?` · Pending: ${fmtMoney(b.pending)}`:''}</span>
             ${canEdit ? `
               <div class="flex gap-6" style="margin-left:auto">
                 <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px"
@@ -1649,6 +1667,7 @@ async function renderBudgets() {
     for (const [pid, group] of Object.entries(byProd)) {
       const totalBudget = group.budgets.reduce((s,b) => s+b.total_amount, 0);
       const totalSpent  = group.budgets.reduce((s,b) => s+b.spent, 0);
+      const totalPending = group.budgets.reduce((s,b) => s+(+b.pending||0), 0);
       const pct = totalBudget > 0 ? Math.min(100, (totalSpent/totalBudget)*100) : 0;
       html += `
         <div class="card mb-16">
@@ -1656,7 +1675,7 @@ async function renderBudgets() {
             <div>
               <span class="card-title">${group.name}</span>
               <div class="text-xs text-muted mt-4">
-                Total: ${fmtMoney(totalBudget)} · Spent: ${fmtMoney(totalSpent)} · Remaining: ${fmtMoney(totalBudget-totalSpent)}
+                Total: ${fmtMoney(totalBudget)} · Spent: ${fmtMoney(totalSpent)}${totalPending>0?` · Pending: ${fmtMoney(totalPending)}`:''} · Remaining: ${fmtMoney(totalBudget-totalSpent)}
               </div>
             </div>
             ${isAdmin ? `<button class="btn btn-outline btn-sm" onclick="showBudgetModal(0,'','','',0,${pid})">+ Add dept</button>` : ''}
@@ -1682,6 +1701,7 @@ async function renderBudgets() {
         // Parent total = sum of children (rollup), parent.total_amount is just 0/ignored
         const rollupTotal = children.reduce((s,c)=>s+c.total_amount,0);
         const rollupSpent = children.reduce((s,c)=>s+c.spent,0);
+        const rollupPending = children.reduce((s,c)=>s+(+c.pending||0),0);
         const pp = rollupTotal>0?Math.min(100,(rollupSpent/rollupTotal)*100):0;
         const pr = rollupTotal - rollupSpent;
         html += `<div class="card mb-12"><div class="card-body" style="padding:14px 16px">
@@ -1693,9 +1713,10 @@ async function renderBudgets() {
             <div style="margin-left:auto;text-align:right">
               <div class="fw-600" style="color:${pr<0?'var(--red)':'var(--ink)'}">${fmtMoney(pr)} remaining</div>
               <div class="text-xs text-muted">${fmtMoney(rollupSpent)} of ${fmtMoney(rollupTotal)} spent</div>
+              ${pendingNote({total_amount: rollupTotal, spent: rollupSpent, pending: rollupPending})}
             </div>
           </div>
-          <div class="budget-bar-wrap mb-8"><div class="budget-bar-fill ${pp>90?'danger':pp>70?'warn':''}" style="width:${pp}%"></div></div>
+          <div class="budget-bar-wrap mb-8"><div class="budget-bar-fill ${pp>90?'danger':pp>70?'warn':''}" style="width:${pp}%"></div>${pendingSeg({total_amount: rollupTotal, spent: rollupSpent, pending: rollupPending})}</div>
           ${children.map(c => {
             const cp = c.total_amount>0?Math.min(100,(c.spent/c.total_amount)*100):0;
             const cr = c.total_amount - c.spent;
@@ -1705,9 +1726,10 @@ async function renderBudgets() {
                 <div style="margin-left:auto;text-align:right">
                   <div class="fw-600 text-sm" style="color:${cr<0?'var(--red)':'var(--ink)'}">${fmtMoney(cr)}</div>
                   <div class="text-xs text-muted">of ${fmtMoney(c.total_amount)}</div>
+                  ${pendingNote(c)}
                 </div>
               </div>
-              <div class="budget-bar-wrap" style="height:4px"><div class="budget-bar-fill" style="width:${cp}%;height:4px"></div></div>
+              <div class="budget-bar-wrap" style="height:4px"><div class="budget-bar-fill" style="width:${cp}%;height:4px"></div>${pendingSeg(c,'4px')}</div>
               ${canEdit?`<div class="flex gap-6 mt-4">
                 <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 7px" onclick="showBudgetModal(${c.id},'${c.name.replace(/'/g,"\\'")}','${c.area}','${c.season||''}',${c.total_amount},null,${c.parent_id})">Edit</button>
                 <button class="btn btn-danger btn-sm" style="font-size:11px;padding:2px 7px" onclick="confirmDeleteBudget(${c.id},'${c.name.replace(/'/g,"\\'")}')">Delete</button>
@@ -1909,9 +1931,9 @@ async function renderProductions() {
                   <div class="flex flex-center gap-8">
                     <span class="text-xs fw-600" style="width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.name}</span>
                     ${ownerNames ? `<span class="text-xs text-muted" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ownerNames}</span>` : '<span style="flex:1"></span>'}
-                    <span class="text-xs text-muted">${fmtMoney(b.total_amount-b.spent)}</span>
+                    <span class="text-xs text-muted">${fmtMoney(b.total_amount-b.spent)}${b.pending>0?` <span style="color:var(--amber)">(${fmtMoney(b.pending)} pending)</span>`:''}</span>
                   </div>
-                  <div class="budget-bar-wrap mt-4" style="height:4px"><div class="budget-bar-fill" style="width:${bp}%;height:4px"></div></div>
+                  <div class="budget-bar-wrap mt-4" style="height:4px"><div class="budget-bar-fill" style="width:${bp}%;height:4px"></div>${pendingSeg(b,'4px')}</div>
                 </div>`;
               }).join('')}
               ${p.budgets.length===0?'<div class="text-xs text-muted">No departments set up yet</div>':''}
@@ -2166,6 +2188,7 @@ function renderProdTab() {
   if (_prodTab === 'departments') {
     const deptTotal = p.budgets.reduce((s,b)=>s+b.total_amount,0);
     const deptSpent = p.budgets.reduce((s,b)=>s+b.spent,0);
+    const deptPending = p.budgets.reduce((s,b)=>s+(+b.pending||0),0);
     const unallocated = round2((p.remaining_balance||0) - deptTotal);
     const unspent = round2(deptTotal - deptSpent);
     tc.innerHTML = `
@@ -2180,6 +2203,11 @@ function renderProdTab() {
             <div class="text-xs text-muted">Unspent</div>
             <div class="fw-600" style="font-size:20px">${fmtMoney(unspent)}</div>
             <div class="text-xs text-muted">of ${fmtMoney(deptTotal)} allocated across departments, not yet spent</div>
+          </div>
+          <div>
+            <div class="text-xs text-muted">Pending approval</div>
+            <div class="fw-600" style="font-size:20px;color:${deptPending>0?'var(--amber)':'var(--ink)'}">${fmtMoney(deptPending)}</div>
+            <div class="text-xs text-muted">submitted but not yet approved — ${fmtMoney(round2(unspent-deptPending))} left if all approved</div>
           </div>
         </div>
       </div></div>
@@ -2199,9 +2227,10 @@ function renderProdTab() {
                   <div style="margin-left:auto;text-align:right">
                     <div class="fw-600" style="color:${remaining<0?'var(--red)':'var(--ink)'}">${fmtMoney(remaining)}</div>
                     <div class="text-xs text-muted">of ${fmtMoney(b.total_amount)}</div>
+                    ${pendingNote(b)}
                   </div>
                 </div>
-                <div class="budget-bar-wrap mb-8"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div></div>
+                <div class="budget-bar-wrap mb-8"><div class="budget-bar-fill ${pct>90?'danger':pct>70?'warn':''}" style="width:${pct}%"></div>${pendingSeg(b)}</div>
                 <div class="flex flex-center gap-8">
                   <div>
                     <span class="text-xs text-muted">Owners: </span>
