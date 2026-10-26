@@ -742,11 +742,10 @@ def build_approval_chain(production_id):
       • A producer is assigned to the show, and that producer is also a
         Resident Producer  → Producer, Treasurer
       • A producer is assigned, but is NOT a Resident Producer          → Producer, Resident Producer, Treasurer
-      • No producer assigned on the production (falls back to the same
-        path as an org-level/company purchase)                          → Treasurer, Resident Producer
+      • No producer assigned on the production                          → Treasurer, Resident Producer
 
     Company / org-level purchases (no production attached):
-      • Treasurer, Resident Producer
+      • Treasurer, President
     """
     if production_id:
         producers = get_production_producers(production_id)
@@ -754,7 +753,8 @@ def build_approval_chain(production_id):
             if any(p.get('role') == 'resident_producer' for p in producers):
                 return ['pending_producer', 'pending_treasurer']
             return ['pending_producer', 'pending_resident_producer', 'pending_treasurer']
-    return ['pending_treasurer', 'pending_resident_producer']
+        return ['pending_treasurer', 'pending_resident_producer']
+    return ['pending_treasurer', 'pending_president']
 
 def is_producer_of(uid, pid):
     """True if the user is a producer on the given production."""
@@ -1103,6 +1103,15 @@ def get_admin_emails():
     conn.close()
     return [dict(u) for u in users]
 
+def app_link(kind=None, obj_id=None):
+    """Deep link into the BloomBooks SPA. The front end reads the hash on load
+    (and after login) and opens the matching page or record."""
+    if kind and obj_id:
+        return f"{APP_URL}/#{kind}-{obj_id}"
+    if kind:
+        return f"{APP_URL}/#{kind}"
+    return APP_URL
+
 def email_html(title, body, cta_text=None, cta_url=None):
     cta = ''
     if cta_text:
@@ -1151,29 +1160,35 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
         for p in get_production_producers(production_id):
             send_email(p['email'], f'Purchase request needs your approval: {req_title}',
                 email_html('New Purchase Request — Producer Review Needed', body,
-                           'Review in BloomBooks', APP_URL))
+                           'Review in BloomBooks', app_link('request', req_id)))
             notified.add((p['email'] or '').strip().lower())
+    elif status == 'pending_president':
+        for a in get_role_emails('president'):
+            send_email(a['email'], f'Needs President review: {req_title}',
+                email_html('New Purchase Request — President Review Needed', body,
+                           'Review in BloomBooks', app_link('request', req_id)))
+            notified.add((a['email'] or '').strip().lower())
     elif status == 'pending_resident_producer':
         for a in get_role_emails('resident_producer'):
             send_email(a['email'], f'Needs Resident Producer review: {req_title}',
                 email_html('New Purchase Request — Resident Producer Review Needed', body,
-                           'Review in BloomBooks', APP_URL))
+                           'Review in BloomBooks', app_link('request', req_id)))
             notified.add((a['email'] or '').strip().lower())
     else:
         prefix = 'SAP' if req_type == 'sap' else 'New request'
         for a in get_admin_emails():
             send_email(a['email'], f'{prefix}: {req_title}',
-                email_html('New Purchase Request — Review Needed', body, 'Review in BloomBooks', APP_URL))
+                email_html('New Purchase Request — Review Needed', body, 'Review in BloomBooks', app_link('request', req_id)))
             notified.add((a['email'] or '').strip().lower())
 
-    # FYI heads-up to Resident Producers and the Treasurer on EVERY new
-    # submission, whatever stage it starts at, so they see requests coming
-    # before it's their turn. Skips anyone already notified above and the
-    # submitter themselves.
+    # FYI heads-up to the people at later steps of this request's chain, so
+    # they see it coming before it's their turn. Skips anyone already
+    # notified above and the submitter themselves.
     stage_labels = {
         'pending_producer':          'the show\'s Producer',
         'pending_resident_producer': 'the Resident Producer',
         'pending_treasurer':         'the Treasurer',
+        'pending_president':         'the President',
     }
     stage_label = stage_labels.get(status, 'the approval queue')
     fyi_body = body + (
@@ -1183,14 +1198,14 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
     )
     skip = set(notified)
     skip.add((submitter_email or '').strip().lower())
-    for a in get_role_emails('resident_producer') + get_role_emails('treasurer'):
+    for a in _later_stage_people(production_id):
         addr = (a.get('email') or '').strip().lower()
         if not addr or addr in skip:
             continue
         skip.add(addr)
         send_email(a['email'], f'FYI — new request submitted: {req_title}',
             email_html('New Purchase Request Submitted (FYI)', fyi_body,
-                       'View in BloomBooks', APP_URL))
+                       'View in BloomBooks', app_link('request', req_id)))
 
     # Confirm receipt to submitter
     confirm_body = (
@@ -1203,7 +1218,7 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
         f'<p style="font-size:13px;color:#666">You will receive updates by email as it moves through the approval process.</p>'
     )
     send_email(submitter_email, f'Request received: {req_title}',
-        email_html('Your Request Was Received', confirm_body, 'View in BloomBooks', APP_URL))
+        email_html('Your Request Was Received', confirm_body, 'View in BloomBooks', app_link('request', req_id)))
 
 
 def _stage_action_recipients(status, production_id):
@@ -1213,19 +1228,38 @@ def _stage_action_recipients(status, production_id):
         return get_production_producers(production_id)
     if status == 'pending_resident_producer':
         return get_role_emails('resident_producer')
+    if status == 'pending_president':
+        return get_role_emails('president')
     return get_admin_emails()
+
+
+def _later_stage_people(production_id):
+    """People who approve at a LATER step of this request's chain — they get
+    an FYI heads-up on submission. Follows the chain, so e.g. Resident
+    Producers no longer hear about org purchases they never approve."""
+    chain = build_approval_chain(production_id)
+    people = []
+    for stage in chain[1:]:
+        if stage == 'pending_treasurer':
+            people += get_role_emails('treasurer')
+        elif stage == 'pending_president':
+            people += get_role_emails('president')
+        elif stage == 'pending_resident_producer':
+            people += get_role_emails('resident_producer')
+    return people
 
 
 def notify_statement_submitted(statement_title, items, default_production_id,
                                submitter_name, submitter_email):
     """One summary email per person for a whole statement, instead of one
     email per line item. Each approver gets the items that need their review;
-    Resident Producers and Treasurers also see the remaining items as FYI.
+    People at later steps of each item's chain also see it as FYI.
     The submitter gets one confirmation listing everything."""
     stage_labels = {
         'pending_producer':          "Producer",
         'pending_resident_producer': 'Resident Producer',
         'pending_treasurer':         'Treasurer',
+        'pending_president':         'President',
     }
 
     # Work out each item's first stage and who acts on it
@@ -1241,6 +1275,7 @@ def notify_statement_submitted(statement_title, items, default_production_id,
             'type': item.get('type'),
             'status': status,
             'actors': _stage_action_recipients(status, pid),
+            'later':  _later_stage_people(pid),
         })
     total = sum(r['amount'] for r in rows)
     sub_key = (submitter_email or '').strip().lower()
@@ -1260,7 +1295,7 @@ def notify_statement_submitted(statement_title, items, default_production_id,
             if slot is not None:
                 slot['action'].append(r)
                 actor_keys.add((a.get('email') or '').strip().lower())
-        for a in get_role_emails('resident_producer') + get_role_emails('treasurer'):
+        for a in r['later']:
             key = (a.get('email') or '').strip().lower()
             if not key or key in actor_keys or key == sub_key:
                 continue
@@ -1309,7 +1344,7 @@ def notify_statement_submitted(statement_title, items, default_production_id,
         else:
             subject = f'FYI — statement submitted: {statement_title}'
             title, cta = 'New Statement Submitted (FYI)', 'View in BloomBooks'
-        send_email(slot['email'], subject, email_html(title, html, cta, APP_URL))
+        send_email(slot['email'], subject, email_html(title, html, cta, app_link('approvals' if slot['action'] else 'all-requests')))
 
     # One confirmation to the submitter
     first = (submitter_name or '').split()[0] if submitter_name else 'there'
@@ -1318,7 +1353,7 @@ def notify_statement_submitted(statement_title, items, default_production_id,
                + _table(rows, True)
                + '<p style="font-size:13px;color:#666">You will receive updates by email as each item moves through approval.</p>')
     send_email(submitter_email, f'Statement received: {statement_title}',
-        email_html('Your Statement Was Received', confirm, 'View in BloomBooks', APP_URL))
+        email_html('Your Statement Was Received', confirm, 'View in BloomBooks', app_link('statements')))
 
 
 def notify_request_status_change(req_id, req_title, submitter_id, new_status,
@@ -1334,24 +1369,36 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
             send_email(submitter['email'], f'✓ Approved, next stop Treasurer: {req_title}',
                 email_html('Approved — Awaiting Treasurer',
                     f'<p><strong>{acted_by_name}</strong> approved your request for <strong>{req_title}</strong>. It is now with the Treasurer.</p>{note_html}',
-                    'View in BloomBooks', APP_URL))
+                    'View in BloomBooks', app_link('request', req_id)))
         for a in get_admin_emails():
             send_email(a['email'], f'Awaiting treasurer review: {req_title}',
                 email_html('Treasurer Review Needed',
                     f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Treasurer review needed.</p>{note_html}',
-                    'Review in BloomBooks', APP_URL))
+                    'Review in BloomBooks', app_link('request', req_id)))
 
     elif new_status == 'pending_resident_producer':
         if submitter:
             send_email(submitter['email'], f'✓ Approved, next stop Resident Producer: {req_title}',
                 email_html('Approved — Awaiting Resident Producer',
                     f'<p><strong>{acted_by_name}</strong> approved your request for <strong>{req_title}</strong>. It now needs Resident Producer review.</p>{note_html}',
-                    'View in BloomBooks', APP_URL))
+                    'View in BloomBooks', app_link('request', req_id)))
         for a in get_role_emails('resident_producer'):
             send_email(a['email'], f'Resident Producer review needed: {req_title}',
                 email_html('Resident Producer Review Needed',
                     f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Your review is needed.</p>{note_html}',
-                    'Review in BloomBooks', APP_URL))
+                    'Review in BloomBooks', app_link('request', req_id)))
+
+    elif new_status == 'pending_president':
+        if submitter:
+            send_email(submitter['email'], f'✓ Approved, next stop President: {req_title}',
+                email_html('Approved — Awaiting President',
+                    f'<p><strong>{acted_by_name}</strong> approved your request for <strong>{req_title}</strong>. It now needs President review.</p>{note_html}',
+                    'View in BloomBooks', app_link('request', req_id)))
+        for a in get_role_emails('president'):
+            send_email(a['email'], f'President review needed: {req_title}',
+                email_html('President Review Needed',
+                    f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Your review is needed.</p>{note_html}',
+                    'Review in BloomBooks', app_link('request', req_id)))
 
     elif new_status == 'approved':
         if submitter:
@@ -1368,7 +1415,7 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
                 )
                 subject = f'Approved — HWTC will purchase: {req_title}'
             send_email(submitter['email'], subject,
-                email_html('Purchase Request Approved! ✓', approved_body, 'View in BloomBooks', APP_URL))
+                email_html('Purchase Request Approved! ✓', approved_body, 'View in BloomBooks', app_link('request', req_id)))
 
     elif new_status == 'denied':
         if submitter:
@@ -1378,15 +1425,15 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
                 + '<p style="font-size:13px;color:#666">Please reach out to the treasurer or producer with any questions.</p>'
             )
             send_email(submitter['email'], f'Request not approved: {req_title}',
-                email_html('Purchase Request — Not Approved', denied_body))
+                email_html('Purchase Request — Not Approved', denied_body, 'View in BloomBooks', app_link('request', req_id)))
         denied_admin_body = f'<p><strong>{acted_by_name}</strong> denied the request for <strong>{req_title}</strong>.</p>{note_html}'
         for a in get_admin_emails():
             send_email(a['email'], f'Request denied: {req_title}',
-                email_html('Request Denied', denied_admin_body))
+                email_html('Request Denied', denied_admin_body, 'View in BloomBooks', app_link('request', req_id)))
         if production_id:
             for p in get_production_producers(production_id):
                 send_email(p['email'], f'Request denied: {req_title}',
-                    email_html('Request Denied', denied_admin_body))
+                    email_html('Request Denied', denied_admin_body, 'View in BloomBooks', app_link('request', req_id)))
 
 
 def notify_reimbursement_paid(user_id, amount, method, req_title):
@@ -1712,13 +1759,15 @@ def list_requests():
         # membership (producer_ids above), not the user's global role.
         st = r.get('status')
         if u['role'] == 'admin':
-            can_act = st in ('pending_producer','pending_resident_producer','pending_treasurer')
+            can_act = st in ('pending_producer','pending_resident_producer','pending_treasurer','pending_president')
         elif st == 'pending_producer':
             can_act = r.get('production_id') in producer_ids
         elif st == 'pending_resident_producer':
             can_act = u['role'] == 'resident_producer'
         elif st == 'pending_treasurer':
             can_act = u['role'] == 'treasurer'
+        elif st == 'pending_president':
+            can_act = u['role'] == 'president'
         else:
             can_act = False
         r['can_act'] = can_act
@@ -1802,6 +1851,7 @@ def _stage_columns(stage):
         'pending_producer':          ('producer_note', 'producer_acted_by', 'producer_acted_at'),
         'pending_resident_producer': ('resident_producer_note', 'resident_producer_acted_by', 'resident_producer_acted_at'),
         'pending_treasurer':         ('treasurer_note', 'treasurer_acted_by', 'treasurer_acted_at'),
+        'pending_president':         ('president_note', 'president_acted_by', 'president_acted_at'),
     }.get(stage)
 
 def _actor_authorized_for_stage(u, stage, production_id):
@@ -1815,6 +1865,8 @@ def _actor_authorized_for_stage(u, stage, production_id):
         return u['role'] == 'resident_producer'
     if stage == 'pending_treasurer':
         return u['role'] == 'treasurer'
+    if stage == 'pending_president':
+        return u['role'] == 'president'
     return False
 
 @app.route('/api/requests/<int:rid>/approve', methods=['POST'])
@@ -2203,7 +2255,7 @@ def stats():
             'pending_producer': pending_producer,
             'pending_resident_producer': pending_resident_producer,
             'pending_treasurer': pending_treasurer,
-            'pending_president': pending_president,  # legacy stage; always 0 going forward
+            'pending_president': pending_president,
             'pending_reimburse': pending_reimburse,
             'total_requests': total_requests,
             'total_spent': round(total_spent, 2),
@@ -2786,7 +2838,7 @@ def send_back_request(rid):
                 f'<p>Your request for <strong>{req["title"]}</strong> has been sent back for revision.</p>'
                 f'<p><strong>What needs to change:</strong> {note}</p>'
                 f'<p>Please update your request and resubmit.</p>',
-                'View in BloomBooks', APP_URL))
+                'View in BloomBooks', app_link('request', rid)))
     return jsonify({'ok':True})
 
 @app.route('/api/requests/<int:rid>/resubmit', methods=['POST'])
@@ -2827,6 +2879,66 @@ def resubmit_request(rid):
         item_url=req.get('item_url',''), production_id=prod_id, status=new_status
     )
     return jsonify({'ok':True})
+
+# ─── Reassign budget (fix org vs production mix-ups without sending back) ─────
+@app.route('/api/requests/<int:rid>/reassign-budget', methods=['POST'])
+def reassign_request_budget(rid):
+    u = current_user()
+    if not u: return jsonify({'error':'Not authenticated'}),401
+    data    = request.json or {}
+    new_bid = data.get('budget_id')
+    note    = (data.get('note') or '').strip()
+    if not new_bid: return jsonify({'error':'Pick a budget'}),400
+    conn = get_db()
+    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s',(rid,)).fetchone()
+    if not req: conn.close(); return jsonify({'error':'Not found'}),404
+    req = dict(req)
+    if not req['status'].startswith('pending_'):
+        conn.close(); return jsonify({'error':'Only pending requests can be moved to another budget'}),400
+    # Admin/treasurer/president, or whoever is the approver at the current stage
+    can_act = (u['role'] in ('admin','treasurer','president')
+               or _actor_authorized_for_stage(u, req['status'], req.get('production_id')))
+    if not can_act:
+        conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    nb = conn.execute('SELECT * FROM bb_budgets WHERE id=%s AND is_active=1',(new_bid,)).fetchone()
+    if not nb: conn.close(); return jsonify({'error':'Budget not found or inactive'}),404
+    nb = dict(nb)
+    if nb['id'] == req.get('budget_id'):
+        conn.close(); return jsonify({'error':'Request is already on that budget'}),400
+    old_bid  = req.get('budget_id')
+    old_prod = req.get('production_id')
+    new_prod = nb.get('production_id')
+    now = datetime.now().isoformat()
+    # Org vs production (or show A vs show B) changes who approves, so restart
+    # the chain. A move within the same production keeps its current progress.
+    if new_prod != old_prod:
+        chain = build_approval_chain(new_prod)
+        conn.execute('''UPDATE bb_purchase_requests SET budget_id=%s, production_id=%s,
+                        status=%s, approval_chain=%s, approval_step=0,
+                        producer_acted_at=NULL, producer_acted_by=NULL,
+                        resident_producer_acted_at=NULL, resident_producer_acted_by=NULL,
+                        treasurer_acted_at=NULL, treasurer_acted_by=NULL,
+                        president_acted_at=NULL, president_acted_by=NULL,
+                        updated_at=%s WHERE id=%s''',
+                     (nb['id'], new_prod, chain[0], json.dumps(chain), now, rid))
+        new_status = chain[0]
+    else:
+        conn.execute('UPDATE bb_purchase_requests SET budget_id=%s, updated_at=%s WHERE id=%s',
+                     (nb['id'], now, rid))
+        new_status = req['status']
+    conn.commit(); conn.close()
+    log_action(u['id'],'reassigned_budget','request',rid,
+               f'budget {old_bid} -> {nb["id"]}' + (f': {note}' if note else ''))
+    if new_status != req['status']:
+        submitter = get_user_email(req['submitted_by']) or {}
+        notify_request_submitted(
+            req_id=rid, req_title=req['title'],
+            submitter_name=submitter.get('name',''), submitter_email=submitter.get('email',''),
+            estimated_cost=req['estimated_cost'], req_type=req['type'],
+            purchase_method=req.get('purchase_method','in_store'),
+            item_url=req.get('item_url',''), production_id=new_prod, status=new_status
+        )
+    return jsonify({'ok':True,'status':new_status,'restarted':new_status!=req['status']})
 
 # ─── User profile ─────────────────────────────────────────────────────────────
 @app.route('/api/profile', methods=['GET'])
@@ -3410,7 +3522,7 @@ def request_budget_approval(pid):
                     f'<p><strong>{u["name"]}</strong> has requested budget approval for <strong>{prod.get("name","")}</strong> ({prod.get("season","")}).</p>'
                     f'<p>Hard costs total: ${(prod.get("hard_costs_total") or 0):,.2f}</p>'
                     '<p>Review it and either approve with a total budget, or send it back for adjustments.</p>',
-                    'Review in BloomBooks', APP_URL))
+                    'Review in BloomBooks', app_link('production', pid)))
     except Exception as e:
         app.logger.warning(f'Could not send budget-approval-requested email: {e}')
     return jsonify({'ok': True})
@@ -3447,7 +3559,7 @@ def send_back_budget(pid):
                     f'<p>Your budget approval request for <strong>{prod.get("name","")}</strong> has been sent back for adjustments by <strong>{u["name"]}</strong>.</p>'
                     f'<p><strong>What needs to change:</strong> {note}</p>'
                     '<p>Update the hard costs and resubmit when ready.</p>',
-                    'View in BloomBooks', APP_URL))
+                    'View in BloomBooks', app_link('production', pid)))
         except Exception as e:
             app.logger.warning(f'Could not send budget-sent-back email: {e}')
     conn.close()
@@ -3489,7 +3601,7 @@ def board_approve_production(pid):
                     f'<p>Your budget request for <strong>{prod.get("name","")}</strong> has been approved by <strong>{u["name"]}</strong>.</p>'
                     f'<p>Total budget: ${total_budget:,.2f}</p>'
                     '<p>You can now allocate the remaining balance across departments.</p>',
-                    'View in BloomBooks', APP_URL))
+                    'View in BloomBooks', app_link('production', pid)))
         except Exception as e:
             app.logger.warning(f'Could not send budget-approved email: {e}')
     conn.close()
