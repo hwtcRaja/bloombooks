@@ -1776,10 +1776,12 @@ def list_requests():
     base += ' ORDER BY r.submitted_at DESC'
 
     rows = conn.execute(base, params).fetchall()
+    pending = pending_by_budget(conn)
     conn.close()
     result = []
     for row in rows:
         r = dict(row)
+        r['budget_pending'] = pending.get(r.get('budget_id'), 0)
         conn2 = get_db()
         receipts = conn2.execute('SELECT * FROM bb_receipts WHERE request_id=%s',(r['id'],)).fetchall()
         r['receipts'] = [dict(rec) for rec in receipts]
@@ -2303,6 +2305,29 @@ def stats():
             'my_pending': my_pending,
             'my_owed': round(my_owed, 2),
         }
+
+    # What's waiting on THIS user — same rules as can_act / the approve
+    # endpoint, so the badge matches what they can actually act on.
+    if u['role'] == 'admin':
+        waiting = conn.execute("SELECT COUNT(*) AS c FROM bb_purchase_requests WHERE status LIKE 'pending%%'").fetchone()['c']
+    else:
+        clauses, params = [], []
+        prod_ids = [r['production_id'] for r in conn.execute(
+            "SELECT production_id FROM bb_production_members WHERE user_id=%s AND member_role='producer'",
+            (u['id'],)).fetchall()]
+        if prod_ids:
+            ph = ','.join(['%s'] * len(prod_ids))
+            clauses.append(f"(status='pending_producer' AND production_id IN ({ph}))"); params += prod_ids
+        stage_for_role = {'resident_producer': 'pending_resident_producer',
+                          'treasurer': 'pending_treasurer', 'president': 'pending_president'}
+        if u['role'] in stage_for_role:
+            clauses.append('status=%s'); params.append(stage_for_role[u['role']])
+        waiting = conn.execute(f"SELECT COUNT(*) AS c FROM bb_purchase_requests WHERE {' OR '.join(clauses)}",
+                               params).fetchone()['c'] if clauses else 0
+    result['waiting_on_me'] = waiting
+    result['needs_revision_mine'] = conn.execute(
+        "SELECT COUNT(*) AS c FROM bb_purchase_requests WHERE submitted_by=%s AND status='needs_revision'",
+        (u['id'],)).fetchone()['c']
 
     conn.close()
     return jsonify(result)
