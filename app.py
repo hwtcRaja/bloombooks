@@ -1782,6 +1782,10 @@ def list_requests():
     for row in rows:
         r = dict(row)
         r['budget_pending'] = pending.get(r.get('budget_id'), 0)
+        # The table stores the kind in `type` ('sap' / 'pre_approval'); there is
+        # no is_sap column, so the UI's r.is_sap was always undefined and every
+        # request displayed as a Company Purchase. Derive it here.
+        r['is_sap'] = 1 if r.get('type') == 'sap' else 0
         conn2 = get_db()
         receipts = conn2.execute('SELECT * FROM bb_receipts WHERE request_id=%s',(r['id'],)).fetchall()
         r['receipts'] = [dict(rec) for rec in receipts]
