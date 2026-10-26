@@ -92,6 +92,11 @@ img{max-width:100%}
 .stat-value{font-size:26px;font-weight:700;color:var(--ink);line-height:1.1}
 .stat-sub{font-size:12px;color:var(--ink3);margin-top:2px}
 .stat-card.amber .stat-value{color:var(--amber)}
+.stat-card.clickable{cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.stat-card.clickable:hover{border-color:var(--teal);box-shadow:0 0 0 3px rgba(15,110,86,.10)}
+.stat-card.mine{border-color:var(--red);background:#fff7f6}
+.stat-card.mine .stat-value{color:var(--red)}
+.stat-hint{font-size:11px;color:var(--ink3);margin-top:2px}
 .stat-card.teal .stat-value{color:var(--teal)}
 .stat-card.red .stat-value{color:var(--red)}
 .stat-card.green .stat-value{color:var(--green)}
@@ -360,6 +365,7 @@ tr:hover td{background:var(--cream)}
         <button class="sb-item" data-page="my-requests" onclick="nav('my-requests')">
           <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/></svg>
           My Requests
+          <span class="sb-badge red" id="sb-myreq-badge" style="display:none" title="Sent back to you for changes">0</span>
         </button>
         <button class="sb-item" data-page="new-request" onclick="nav('new-request')">
           <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
@@ -550,6 +556,8 @@ function showApp() {
   if (sbUsers) sbUsers.style.display = isAdmin ? '' : 'none';
   loadBudgets();
   refreshBadges();
+  // Keep badges fresh while the tab is open (someone else may approve/submit)
+  if (!window._badgeTimer) window._badgeTimer = setInterval(() => { if (currentUser && !document.hidden) refreshBadges(); }, 60000);
   if (!openDeepLink()) nav('dashboard');
 }
 
@@ -624,18 +632,25 @@ async function refreshBadges() {
   try {
     const s = await api('GET', '/stats');
     const isAdmin = ['admin','treasurer','president'].includes(currentUser.role);
+    // Approval Queue badge = requests waiting on YOU (not everything in flight)
+    const apBadge = document.getElementById('sb-approval-badge');
+    if (apBadge) {
+      const n = s.waiting_on_me || 0;
+      apBadge.textContent = n;
+      apBadge.title = `${n} waiting on you`;
+      apBadge.style.display = n > 0 ? '' : 'none';
+    }
+    // My Requests badge = your requests sent back for changes
+    const mrBadge = document.getElementById('sb-myreq-badge');
+    if (mrBadge) {
+      const n = s.needs_revision_mine || 0;
+      mrBadge.textContent = n;
+      mrBadge.style.display = n > 0 ? '' : 'none';
+    }
     if (isAdmin) {
-      const total = (s.pending_producer||0) + (s.pending_treasurer||0) + (s.pending_resident_producer||0) + (s.pending_president||0);
-      const apBadge = document.getElementById('sb-approval-badge');
-      apBadge.textContent = total;
-      apBadge.style.display = total > 0 ? '' : 'none';
       const reBadge = document.getElementById('sb-reimb-badge');
       reBadge.textContent = s.pending_reimburse || 0;
       reBadge.style.display = (s.pending_reimburse||0) > 0 ? '' : 'none';
-    }
-    if (s.is_producer && (s.pending_my_productions||0) > 0) {
-      const apBadge = document.getElementById('sb-approval-badge');
-      if (apBadge) { apBadge.textContent = s.pending_my_productions; apBadge.style.display = ''; }
     }
     if (!currentUser.training_complete) {
       document.getElementById('sb-training-badge').style.display = '';
@@ -647,6 +662,34 @@ async function loadBudgets() {
   try {
     allBudgets = await api('GET', '/budgets');
   } catch(e) {}
+}
+
+// ── Budget cell for request rows: name + what's left on that allocation ─────
+function budgetCell(r) {
+  if (!r.budget_name) return '<span class="td-muted">—</span>';
+  return `<div>${r.budget_name}</div>${budgetLeftLine(r)}`;
+}
+function budgetLeftLine(r) {
+  const left = (r.budget_total || 0) - (r.budget_spent || 0);
+  const pend = +r.budget_pending || 0;
+  const after = left - pend;
+  return `<div class="text-xs" style="color:${left<0?'var(--red)':'var(--ink3)'}" title="${fmtMoney(r.budget_total||0)} allocated · ${fmtMoney(r.budget_spent||0)} spent${pend?` · ${fmtMoney(pend)} pending · ${fmtMoney(after)} left if all pending is approved`:''}">
+      ${fmtMoney(left)} left${pend?` · <span style="color:${after<0?'var(--red)':'var(--amber)'}">${fmtMoney(pend)} pending</span>`:''}
+    </div>`;
+}
+
+// ── Dashboard stage cards ────────────────────────────────────────────────────
+function waitingCard(stats) {
+  const n = stats.waiting_on_me || 0;
+  return `<div class="stat-card ${n>0?'mine':''} clickable" onclick="nav('approvals')">
+    <div class="stat-label">Waiting on you</div><div class="stat-value">${n}</div>
+    <div class="stat-hint">${n>0?'Open your approval queue →':'All caught up'}</div></div>`;
+}
+function stageCard(label, status, stats, cls='') {
+  const n = stats[status] || 0;
+  return `<div class="stat-card ${cls} clickable" onclick="showRequestsWithStatus('${status}')" title="See what's ${label.toLowerCase()}">
+    <div class="stat-label">${label}</div><div class="stat-value">${n}</div>
+    <div class="stat-hint">${n>0?'View list →':'&nbsp;'}</div></div>`;
 }
 
 // ── Pending (in approval, not yet spent) ─────────────────────────────────────
@@ -705,19 +748,23 @@ async function renderDashboard() {
     if (isAdmin) {
       statsHtml = `
         <div class="stat-grid">
-          <div class="stat-card amber"><div class="stat-label">Awaiting producer</div><div class="stat-value">${stats.pending_producer||0}</div></div>
-          <div class="stat-card"><div class="stat-label">Awaiting treasurer</div><div class="stat-value">${stats.pending_treasurer||0}</div></div>
-          <div class="stat-card"><div class="stat-label">Awaiting resident producer</div><div class="stat-value">${stats.pending_resident_producer||0}</div></div>
-          <div class="stat-card teal"><div class="stat-label">Pending reimbursement</div><div class="stat-value">${stats.pending_reimburse||0}</div></div>
+          ${waitingCard(stats)}
+          ${stageCard('Awaiting producer', 'pending_producer', stats, 'amber')}
+          ${stageCard('Awaiting resident producer', 'pending_resident_producer', stats)}
+          ${stageCard('Awaiting treasurer', 'pending_treasurer', stats)}
+          ${stageCard('Awaiting president', 'pending_president', stats)}
+          <div class="stat-card teal clickable" onclick="nav('reimbursements')"><div class="stat-label">Pending reimbursement</div><div class="stat-value">${stats.pending_reimburse||0}</div></div>
           <div class="stat-card green"><div class="stat-label">Total approved spend</div><div class="stat-value">${fmtMoney(stats.total_spent||0)}</div></div>
           <div class="stat-card"><div class="stat-label">Emergency purchases</div><div class="stat-value">${stats.emergency_count||0}</div></div>
         </div>`;
     } else {
       statsHtml = `
         <div class="stat-grid">
-          <div class="stat-card"><div class="stat-label">My requests</div><div class="stat-value">${stats.my_requests}</div></div>
-          <div class="stat-card green"><div class="stat-label">Approved</div><div class="stat-value">${stats.my_approved}</div></div>
-          <div class="stat-card amber"><div class="stat-label">Pending</div><div class="stat-value">${stats.my_pending}</div></div>
+          ${(stats.waiting_on_me||0) > 0 ? waitingCard(stats) : ''}
+          ${(stats.needs_revision_mine||0) > 0 ? `<div class="stat-card mine clickable" onclick="nav('my-requests')"><div class="stat-label">Sent back to you</div><div class="stat-value">${stats.needs_revision_mine}</div><div class="stat-hint">Needs your changes →</div></div>` : ''}
+          <div class="stat-card clickable" onclick="nav('my-requests')"><div class="stat-label">My requests</div><div class="stat-value">${stats.my_requests}</div></div>
+          <div class="stat-card green clickable" onclick="nav('my-requests')"><div class="stat-label">Approved</div><div class="stat-value">${stats.my_approved}</div></div>
+          <div class="stat-card amber clickable" onclick="nav('my-requests')"><div class="stat-label">Pending</div><div class="stat-value">${stats.my_pending}</div></div>
           <div class="stat-card teal"><div class="stat-label">I'm owed</div><div class="stat-value">${fmtMoney(stats.my_owed)}</div></div>
         </div>`;
     }
@@ -738,7 +785,7 @@ async function renderDashboard() {
           <tr style="cursor:pointer" onclick="showRequestDetail(${r.id})">
             <td><div class="fw-600">${r.title}</div><div class="text-xs text-muted">${r.vendor||''}</div></td>
             <td>${fmtMoney(r.estimated_cost)}</td>
-            <td class="td-muted">${r.budget_name||'—'}</td>
+            <td class="td-muted">${budgetCell(r)}</td>
             <td class="td-muted">${fmtDate(r.submitted_at)}</td>
             <td>${statusBadge(r.status, r.is_sap)}</td>
           </tr>`).join('')}
@@ -808,7 +855,7 @@ async function renderMyRequests() {
                 ${r.status==='needs_revision'&&r.revision_note?`<div class="text-xs mt-4" style="color:var(--red)">↩ ${r.revision_note}</div>`:''}
               </td>
               <td>${fmtMoney(r.estimated_cost)}</td>
-              <td class="td-muted">${r.budget_name||'—'}</td>
+              <td class="td-muted">${budgetCell(r)}</td>
               <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Company Purchase</span>'}</td>
               <td class="td-muted">${fmtDate(r.submitted_at)}</td>
               <td>${statusBadge(r.status, false)}</td>
@@ -1245,7 +1292,7 @@ async function showRequestDetail(rid) {
         <div><div class="text-xs text-muted">Date</div><div class="fw-600 text-sm mt-4">${fmtDate(r.submitted_at)}</div></div>
         <div><div class="text-xs text-muted">Estimated cost</div><div class="fw-600 text-sm mt-4">${fmtMoney(r.estimated_cost)}</div></div>
         <div><div class="text-xs text-muted">Purchase method</div><div class="fw-600 text-sm mt-4">${r.purchase_method==='online'?'Online':'In-store'}${r.vendor?' — '+r.vendor:''}</div></div>
-        <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div></div>
+        <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div>${r.budget_name?`<div class="mt-2">${budgetLeftLine(r)}</div>`:''}</div>
         <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.is_sap ? 'SAP — reimbursement' : 'Company Purchase Request'}</div></div>
       </div>
       ${r.item_url ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Item link</div><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:13px;color:var(--teal);word-break:break-all">${r.item_url}</a></div>` : ''}
@@ -1393,7 +1440,7 @@ async function renderApprovals() {
           <div class="fw-600" style="font-size:15px">${fmtMoney(r.estimated_cost)}${r.actual_cost&&r.actual_cost!==r.estimated_cost?` <span class="text-xs text-muted">actual ${fmtMoney(r.actual_cost)}</span>`:''}</div>
           ${r.item_url?`<div class="mt-4"><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:11px;color:var(--teal)">View item →</a></div>`:''}
           ${r.sap_reason?`<div class="mt-5 text-xs" style="color:var(--amber);background:var(--amber-bg);padding:4px 7px;border-radius:var(--r-sm)">SAP: ${r.sap_reason}</div>`:''}
-          ${r.budget_name?`<div class="mt-5"><div class="budget-bar-wrap" style="height:3px"><div class="budget-bar-fill ${bp>90?'danger':bp>70?'warn':''}" style="width:${bp}%;height:3px"></div></div><div class="text-xs text-muted mt-1">${fmtMoney(r.budget_spent)}/${fmtMoney(r.budget_total)}</div></div>`:''}
+          ${r.budget_name?`<div class="mt-5"><div class="budget-bar-wrap" style="height:3px"><div class="budget-bar-fill ${bp>90?'danger':bp>70?'warn':''}" style="width:${bp}%;height:3px"></div></div><div class="text-xs text-muted mt-1">${fmtMoney((r.budget_total||0)-(r.budget_spent||0))} left of ${fmtMoney(r.budget_total)}${r.budget_pending?` · <span style="color:var(--amber)">${fmtMoney(r.budget_pending)} pending</span>`:''}</div></div>`:''}
           ${r.receipts&&r.receipts.length>0?`<div class="flex gap-3 mt-5">${r.receipts.map(rc=>`<div class="receipt-thumb" style="width:36px;height:36px" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.outerHTML='<span></span>'"></div>`).join('')}</div>`:''}
           ${approvalTrail(r)}
           ${acting?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
@@ -1464,10 +1511,17 @@ async function quickApprove(rid, action) {
 }
 
 // ── All Requests ──────────────────────────────────────────────────────────────
+let _allReqPreset = '';
+function showRequestsWithStatus(status) {
+  _allReqPreset = status;
+  nav('all-requests');
+}
+
 async function renderAllRequests() {
   try {
     const reqs = await api('GET', '/requests');
-    const statusFilter = document.getElementById('all-req-filter')?.value || '';
+    const statusFilter = _allReqPreset || document.getElementById('all-req-filter')?.value || '';
+    _allReqPreset = '';
     const filtered = statusFilter ? reqs.filter(r => r.status === statusFilter) : reqs;
 
     document.getElementById('content').innerHTML = `
@@ -1478,6 +1532,7 @@ async function renderAllRequests() {
           <option value="pending_treasurer">Awaiting treasurer</option>
           <option value="pending_resident_producer">Awaiting resident producer</option>
           <option value="pending_president">Awaiting president</option>
+          <option value="needs_revision">Sent back for changes</option>
           <option value="approved">Approved</option>
           <option value="denied">Denied</option>
           <option value="reimbursed">Reimbursed</option>
@@ -1493,7 +1548,7 @@ async function renderAllRequests() {
                 <td><div class="fw-600">${r.title}</div><div class="text-xs text-muted">${r.vendor||''}</div></td>
                 <td class="td-muted">${r.submitter_name}</td>
                 <td>${fmtMoney(r.estimated_cost)}</td>
-                <td class="td-muted">${r.budget_name||'—'}</td>
+                <td class="td-muted">${budgetCell(r)}</td>
                 <td>${r.is_sap ? '<span class="badge badge-sap">SAP</span>' : '<span class="text-xs text-muted">Company Purchase</span>'}</td>
                 <td class="td-muted">${fmtDate(r.submitted_at)}</td>
                 <td>${statusBadge(r.status, false)}</td>
