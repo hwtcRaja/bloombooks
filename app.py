@@ -593,6 +593,7 @@ def init_db():
         ("bb_purchase_requests", "production_id",     "INTEGER"),
         ("bb_purchase_requests", "producer_note",     "TEXT"),
         ("bb_purchase_requests", "producer_acted_by", "INTEGER"),
+        ("bb_reimbursements",    "batch_id",          "TEXT"),
         ("bb_purchase_requests", "producer_acted_at", "TEXT"),
         ("bb_purchase_requests", "purchase_method",   "TEXT DEFAULT 'in_store'"),
         ("bb_purchase_requests", "item_url",          "TEXT"),
@@ -1477,6 +1478,29 @@ def notify_reimbursement_paid(user_id, amount, method, req_title):
         email_html('You Have Been Reimbursed!', paid_body))
 
 
+def notify_reimbursement_batch_paid(user_id, items, total, method):
+    """One email for several reimbursements paid in a single transfer."""
+    u = get_user_email(user_id)
+    if not u:
+        return
+    rows = ''.join(
+        f'<tr><td style="padding:4px 0">{i["title"]}</td>'
+        f'<td style="padding:4px 0;text-align:right">${float(i["amount"]):.2f}</td></tr>'
+        for i in items)
+    body = (
+        f'<p>Hi {u["name"].split()[0]}, your reimbursement has been processed as one payment '
+        f'covering {len(items)} requests.</p>'
+        f'<table style="width:100%;border-collapse:collapse;margin:12px 0">{rows}'
+        f'<tr><td style="padding:6px 0;border-top:1px solid #ddd;font-weight:600">Total</td>'
+        f'<td style="padding:6px 0;border-top:1px solid #ddd;text-align:right;font-weight:600">${float(total):.2f}</td></tr>'
+        f'</table>'
+        f'<p style="font-size:13px;color:#666">Method: {method or "—"}</p>'
+        f'<p style="font-size:13px;color:#666">Thank you for your contribution to Horizon West Theater Company!</p>'
+    )
+    send_email(u['email'], f'Reimbursement processed: ${float(total):.2f} ({len(items)} items)',
+        email_html('You Have Been Reimbursed!', body))
+
+
 def notify_welcome(name, email, temp_password, role):
     """Welcome email to newly created user with their login details."""
     role_label = role.replace('_', ' ').title()
@@ -2108,6 +2132,47 @@ def mark_paid(rid):
     req_title = req['title'] if req else 'your purchase'
     notify_reimbursement_paid(rb['user_id'], rb['amount'], method, req_title)
     return jsonify({'ok':True})
+
+@app.route('/api/reimbursements/pay-batch', methods=['POST'])
+def mark_paid_batch():
+    """Record one transfer that covers several pending reimbursements for the
+    same person. Each reimbursement is marked paid; they share a batch_id."""
+    err = require_auth(['treasurer','admin','president'])
+    if err: return err
+    u = current_user()
+    data = request.json or {}
+    ids = [int(i) for i in (data.get('ids') or []) if str(i).isdigit()]
+    if not ids: return jsonify({'error':'Nothing selected'}),400
+    conn = get_db()
+    ph = ','.join(['%s'] * len(ids))
+    rows = [dict(r) for r in conn.execute(
+        f'''SELECT rb.*, pr.title FROM bb_reimbursements rb
+            JOIN bb_purchase_requests pr ON pr.id=rb.request_id
+            WHERE rb.id IN ({ph})''', ids).fetchall()]
+    if len(rows) != len(ids):
+        conn.close(); return jsonify({'error':'Some reimbursements were not found'}),404
+    if any(r['status'] != 'pending' for r in rows):
+        conn.close(); return jsonify({'error':'Some of these were already paid — refresh and try again'}),400
+    if len({r['user_id'] for r in rows}) != 1:
+        conn.close(); return jsonify({'error':'A single payment can only cover one person'}),400
+    method = data.get('method') or ''
+    handle = data.get('handle') or ''
+    extra  = data.get('notes','')
+    total  = round(sum(float(r['amount']) for r in rows), 2)
+    now    = datetime.now().isoformat()
+    batch  = f"B{datetime.now():%Y%m%d%H%M%S}-{rows[0]['user_id']}"
+    summary = f"Paid together: {len(rows)} items, ${total:.2f} total"
+    notes = (f"{method} — {handle}\n" if handle else '') + summary + (f"\n{extra}" if extra else '')
+    for r in rows:
+        conn.execute('UPDATE bb_reimbursements SET status=%s,method=%s,paid_at=%s,notes=%s,batch_id=%s WHERE id=%s',
+                     ('paid', method, now, notes, batch, r['id']))
+        conn.execute("UPDATE bb_purchase_requests SET status='reimbursed',updated_at=%s WHERE id=%s",
+                     (now, r['request_id']))
+    conn.commit(); conn.close()
+    log_action(u['id'],'marked_paid_batch','reimbursement',None,
+               f"{batch}: ids {','.join(map(str,ids))}, ${total:.2f}")
+    notify_reimbursement_batch_paid(rows[0]['user_id'], rows, total, method)
+    return jsonify({'ok':True,'count':len(rows),'total':total,'batch_id':batch})
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 @app.route('/api/training', methods=['GET'])
