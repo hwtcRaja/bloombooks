@@ -1615,7 +1615,7 @@ async function renderReimbursements() {
                 <td class="fw-600">${fmtMoney(r.amount)}</td>
                 <td class="td-muted">${fmtDate(r.created_at)}</td>
                 ${isAdmin ? `<td>
-                  <button class="btn btn-approve btn-sm" onclick="showPayModal(${r.id},'${r.user_name}',${r.amount},'${r.reimb_method||''}','${r.reimb_handle||''}')">Mark paid</button>
+                  <button class="btn btn-approve btn-sm" onclick="showPayModal(${r.id},'${r.user_name.replace(/'/g,"\\'")}',${r.amount},'${r.reimb_method||''}','${(r.reimb_handle||'').replace(/'/g,"\\'")}',${r.profile_reimb_method?1:0})">Mark paid</button>
                 </td>` : ''}
               </tr>`).join('')}`).join('')}
             </tbody>
@@ -1642,7 +1642,16 @@ async function renderReimbursements() {
   }
 }
 
-function showPayModal(rid, name, amount, prefMethod, prefHandle) {
+function saveDefaultBox(id, name, hasDefault) {
+  const first = (name||'').split(' ')[0];
+  return `<label class="flex flex-center gap-8 text-sm mt-4" style="cursor:pointer">
+      <input type="checkbox" id="${id}" ${hasDefault ? '' : 'checked'}>
+      <span>${hasDefault ? `Update ${first}'s saved payment method to this` : `Save as ${first}'s default payment method`}</span>
+    </label>
+    <div class="text-xs text-muted" style="margin-left:24px">${hasDefault ? 'Replaces what’s on their profile.' : `Nothing is saved on ${first}'s profile yet — this pre-fills it for next time.`}</div>`;
+}
+
+function showPayModal(rid, name, amount, prefMethod, prefHandle, hasDefault=0) {
   const methodOpts = ['', ...REIMB_METHODS].map(m =>
     `<option value="${m}" ${prefMethod===m?'selected':''}>${m||'Select method...'}</option>`).join('');
   const html = `
@@ -1667,6 +1676,7 @@ function showPayModal(rid, name, amount, prefMethod, prefHandle) {
         <label class="form-label">Notes (optional)</label>
         <textarea id="pay-notes" class="form-textarea" style="min-height:56px"></textarea>
       </div>
+      ${saveDefaultBox('pay-save-default', name, hasDefault)}
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -1681,7 +1691,8 @@ function groupByPerson(list) {
   const by = {};
   for (const r of list) {
     (by[r.user_id] ||= {user_id: r.user_id, user_name: r.user_name, items: [], total: 0,
-                        reimb_method: r.reimb_method, reimb_handle: r.reimb_handle});
+                        reimb_method: r.reimb_method, reimb_handle: r.reimb_handle,
+                        has_default: !!r.profile_reimb_method});
     by[r.user_id].items.push(r);
     by[r.user_id].total = round2(by[r.user_id].total + r.amount);
   }
@@ -1732,6 +1743,7 @@ function payReimbGroup(uid) {
       </div>
       <div class="form-group"><label class="form-label">Notes (optional)</label>
         <textarea id="bpay-notes" class="form-textarea" style="min-height:56px"></textarea></div>
+      ${saveDefaultBox('bpay-save-default', g.user_name, g.has_default)}
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -1743,8 +1755,9 @@ async function confirmBatchPay(uid) {
   const method = document.getElementById('bpay-method').value;
   const handle = document.getElementById('bpay-handle').value;
   const notes  = document.getElementById('bpay-notes').value;
+  const save_default = document.getElementById('bpay-save-default')?.checked && !!method;
   try {
-    const res = await api('POST', '/reimbursements/pay-batch', {ids: window._batchPayIds, method, handle, notes});
+    const res = await api('POST', '/reimbursements/pay-batch', {ids: window._batchPayIds, method, handle, notes, save_default});
     toast(`Recorded one ${fmtMoney(res.total)} payment covering ${res.count} items.`, 'success');
     closeModal(); refreshBadges(); renderReimbursements();
   } catch(e) { toast(e.message, 'error'); }
@@ -1754,8 +1767,9 @@ async function confirmPay(rid) {
   const method = document.getElementById('pay-method').value;
   const handle = document.getElementById('pay-handle').value;
   const notes  = document.getElementById('pay-notes').value;
+  const save_default = document.getElementById('pay-save-default')?.checked && !!method;
   try {
-    await api('POST', `/reimbursements/${rid}/pay`, {method, handle, notes});
+    await api('POST', `/reimbursements/${rid}/pay`, {method, handle, notes, save_default});
     toast('Payment recorded!', 'success');
     closeModal();
     refreshBadges();
