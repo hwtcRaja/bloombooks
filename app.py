@@ -2087,7 +2087,8 @@ def list_reimbursements():
                                pr.title,pr.estimated_cost,pr.actual_cost,pr.is_emergency,
                                pr.type as request_type,
                                COALESCE(NULLIF(pr.reimb_method,''), u.reimb_method) as reimb_method,
-                               COALESCE(NULLIF(pr.reimb_handle,''), u.reimb_handle) as reimb_handle
+                               COALESCE(NULLIF(pr.reimb_handle,''), u.reimb_handle) as reimb_handle,
+                               u.reimb_method as profile_reimb_method, u.reimb_handle as profile_reimb_handle
                                FROM bb_reimbursements rb
                                JOIN bb_users u ON rb.user_id=u.id
                                JOIN bb_purchase_requests pr ON rb.request_id=pr.id
@@ -2097,13 +2098,24 @@ def list_reimbursements():
                                pr.title,pr.estimated_cost,pr.actual_cost,pr.is_emergency,
                                pr.type as request_type,
                                COALESCE(NULLIF(pr.reimb_method,''), u.reimb_method) as reimb_method,
-                               COALESCE(NULLIF(pr.reimb_handle,''), u.reimb_handle) as reimb_handle
+                               COALESCE(NULLIF(pr.reimb_handle,''), u.reimb_handle) as reimb_handle,
+                               u.reimb_method as profile_reimb_method, u.reimb_handle as profile_reimb_handle
                                FROM bb_reimbursements rb
                                JOIN bb_users u ON rb.user_id=u.id
                                JOIN bb_purchase_requests pr ON rb.request_id=pr.id
                                WHERE rb.user_id=%s ORDER BY rb.created_at DESC''',(u['id'],)).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
+
+def _save_reimb_default(user_id, method, handle):
+    """Treasurer chose to save the method they just paid with as this person's
+    profile default, so it pre-fills next time."""
+    if not method:
+        return
+    conn = get_db()
+    conn.execute('UPDATE bb_users SET reimb_method=%s, reimb_handle=%s WHERE id=%s',
+                 (method, handle or '', user_id))
+    conn.commit(); conn.close()
 
 @app.route('/api/reimbursements/<int:rid>/pay', methods=['POST'])
 def mark_paid(rid):
@@ -2129,6 +2141,9 @@ def mark_paid(rid):
                  (now,rb['request_id']))
     conn.commit(); conn.close()
     log_action(u['id'],'marked_paid','reimbursement',rid)
+    if data.get('save_default'):
+        _save_reimb_default(rb['user_id'], method, handle)
+        log_action(u['id'],'set_reimb_default','user',rb['user_id'],method)
     req_title = req['title'] if req else 'your purchase'
     notify_reimbursement_paid(rb['user_id'], rb['amount'], method, req_title)
     return jsonify({'ok':True})
@@ -2171,6 +2186,9 @@ def mark_paid_batch():
     conn.commit(); conn.close()
     log_action(u['id'],'marked_paid_batch','reimbursement',None,
                f"{batch}: ids {','.join(map(str,ids))}, ${total:.2f}")
+    if data.get('save_default'):
+        _save_reimb_default(rows[0]['user_id'], method, handle)
+        log_action(u['id'],'set_reimb_default','user',rows[0]['user_id'],method)
     notify_reimbursement_batch_paid(rows[0]['user_id'], rows, total, method)
     return jsonify({'ok':True,'count':len(rows),'total':total,'batch_id':batch})
 
