@@ -1595,9 +1595,19 @@ async function renderReimbursements() {
         <div class="fw-600 mb-12" style="font-size:15px">Pending payment</div>
         <div class="table-wrap mb-24">
           <table>
-            <thead><tr><th>Volunteer</th><th>Item</th><th>Type</th><th>Reimbursement Method</th><th>Amount</th><th>Approved</th>${isAdmin ? '<th>Action</th>' : ''}</tr></thead>
-            <tbody>${pending.map(r => `
+            <thead><tr>${isAdmin?'<th style="width:28px"></th>':''}<th>Volunteer</th><th>Item</th><th>Type</th><th>Reimbursement Method</th><th>Amount</th><th>Approved</th>${isAdmin ? '<th>Action</th>' : ''}</tr></thead>
+            <tbody>${groupByPerson(pending).map(g => `
+              ${isAdmin && g.items.length > 1 ? `
+              <tr class="reimb-group" style="background:var(--cream2)">
+                <td><input type="checkbox" checked onchange="toggleReimbGroup(${g.user_id}, this.checked)" title="Select all for ${g.user_name}"></td>
+                <td colspan="4"><span class="fw-600">${g.user_name}</span> <span class="text-xs text-muted">· ${g.items.length} items owed</span></td>
+                <td class="fw-600" id="reimb-sel-total-${g.user_id}">${fmtMoney(g.total)}</td>
+                <td></td>
+                <td><button class="btn btn-primary btn-sm" id="reimb-pay-btn-${g.user_id}" onclick="payReimbGroup(${g.user_id})">Pay all ${fmtMoney(g.total)}</button></td>
+              </tr>` : ''}
+              ${g.items.map(r => `
               <tr>
+                ${isAdmin ? `<td>${g.items.length > 1 ? `<input type="checkbox" class="reimb-cb reimb-cb-${g.user_id}" data-id="${r.id}" data-amount="${r.amount}" checked onchange="updateReimbGroup(${g.user_id})">` : ''}</td>` : ''}
                 <td><div class="fw-600">${r.user_name}</div><div class="text-xs text-muted">${r.user_email}</div></td>
                 <td>${r.title}</td>
                 <td>${r.request_type==='sap' ? '<span class="badge badge-sap" style="font-size:10px">SAP</span>' : '<span class="text-xs text-muted">Pre-Approval</span>'}</td>
@@ -1607,7 +1617,7 @@ async function renderReimbursements() {
                 ${isAdmin ? `<td>
                   <button class="btn btn-approve btn-sm" onclick="showPayModal(${r.id},'${r.user_name}',${r.amount},'${r.reimb_method||''}','${r.reimb_handle||''}')">Mark paid</button>
                 </td>` : ''}
-              </tr>`).join('')}
+              </tr>`).join('')}`).join('')}
             </tbody>
           </table>
         </div>` : `<div class="empty"><h3>No pending reimbursements</h3><p>${isAdmin ? 'All volunteers have been paid.' : 'You have no pending reimbursements.'}</p></div>`}
@@ -1621,7 +1631,7 @@ async function renderReimbursements() {
                 <td>${r.user_name}</td>
                 <td class="td-muted">${r.title}</td>
                 <td>${fmtMoney(r.amount)}</td>
-                <td class="td-muted">${r.method||'—'}</td>
+                <td class="td-muted">${r.method||'—'}${r.batch_id ? ` <span class="badge" style="font-size:10px;background:var(--cream2);color:var(--ink2)" title="${(r.notes||'').split('\n').find(l=>l.startsWith('Paid together'))||''}">Paid together</span>` : ''}</td>
                 <td class="td-muted">${fmtDate(r.paid_at)}</td>
               </tr>`).join('')}
             </tbody>
@@ -1663,6 +1673,81 @@ function showPayModal(rid, name, amount, prefMethod, prefHandle) {
       <button class="btn btn-primary" onclick="confirmPay(${rid})">Confirm payment</button>
     </div>`;
   showModal(html);
+}
+
+// ── Batch reimbursement: one transfer for several items to the same person ──
+let _reimbGroups = {};
+function groupByPerson(list) {
+  const by = {};
+  for (const r of list) {
+    (by[r.user_id] ||= {user_id: r.user_id, user_name: r.user_name, items: [], total: 0,
+                        reimb_method: r.reimb_method, reimb_handle: r.reimb_handle});
+    by[r.user_id].items.push(r);
+    by[r.user_id].total = round2(by[r.user_id].total + r.amount);
+  }
+  _reimbGroups = by;
+  return Object.values(by);
+}
+function selectedReimb(uid) {
+  return [...document.querySelectorAll(`.reimb-cb-${uid}`)].filter(cb => cb.checked)
+    .map(cb => ({id: parseInt(cb.dataset.id), amount: parseFloat(cb.dataset.amount)}));
+}
+function toggleReimbGroup(uid, on) {
+  document.querySelectorAll(`.reimb-cb-${uid}`).forEach(cb => cb.checked = on);
+  updateReimbGroup(uid);
+}
+function updateReimbGroup(uid) {
+  const g = _reimbGroups[uid]; const sel = selectedReimb(uid);
+  const total = round2(sel.reduce((s,x) => s + x.amount, 0));
+  const btn = document.getElementById(`reimb-pay-btn-${uid}`);
+  document.getElementById(`reimb-sel-total-${uid}`).textContent = fmtMoney(total);
+  btn.disabled = sel.length === 0;
+  btn.textContent = sel.length === g.items.length ? `Pay all ${fmtMoney(total)}`
+                  : sel.length ? `Pay ${sel.length} selected · ${fmtMoney(total)}` : 'Select items';
+}
+function payReimbGroup(uid) {
+  const g = _reimbGroups[uid]; const sel = selectedReimb(uid);
+  if (!sel.length) return;
+  const total = round2(sel.reduce((s,x) => s + x.amount, 0));
+  const picked = g.items.filter(r => sel.some(x => x.id === r.id));
+  const prefMethod = g.reimb_method || '', prefHandle = g.reimb_handle || '';
+  const methodOpts = ['', ...REIMB_METHODS].map(m =>
+    `<option value="${m}" ${prefMethod===m?'selected':''}>${m||'Select method...'}</option>`).join('');
+  showModal(`
+    <div class="modal-header"><span class="modal-title">Record one payment</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <p class="text-sm mb-12">One transfer of <strong>${fmtMoney(total)}</strong> to <strong>${g.user_name}</strong> covering:</p>
+      <div class="panel mb-16" style="padding:8px 12px">
+        ${picked.map(r => `<div class="flex text-sm" style="padding:2px 0"><span>${r.title}</span><span style="margin-left:auto">${fmtMoney(r.amount)}</span></div>`).join('')}
+        <div class="flex text-sm fw-600" style="border-top:1px solid var(--border);margin-top:4px;padding-top:4px"><span>Total</span><span style="margin-left:auto">${fmtMoney(total)}</span></div>
+      </div>
+      ${prefMethod ? `<div class="panel mb-16" style="background:var(--teal3);border-color:var(--teal)">
+        <div class="text-xs fw-600 mb-4" style="color:var(--teal)">PREFERRED METHOD</div>
+        <div class="text-sm fw-600">${prefMethod}${prefHandle?' — '+prefHandle:''}</div></div>` : ''}
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Payment method</label>
+          <select id="bpay-method" class="form-select">${methodOpts}</select></div>
+        <div class="form-group"><label class="form-label">Account / reference</label>
+          <input type="text" id="bpay-handle" class="form-input" value="${prefHandle}" placeholder="e.g. @username, check number"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Notes (optional)</label>
+        <textarea id="bpay-notes" class="form-textarea" style="min-height:56px"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmBatchPay(${uid})">Confirm ${fmtMoney(total)} payment</button>
+    </div>`);
+  window._batchPayIds = sel.map(x => x.id);
+}
+async function confirmBatchPay(uid) {
+  const method = document.getElementById('bpay-method').value;
+  const handle = document.getElementById('bpay-handle').value;
+  const notes  = document.getElementById('bpay-notes').value;
+  try {
+    const res = await api('POST', '/reimbursements/pay-batch', {ids: window._batchPayIds, method, handle, notes});
+    toast(`Recorded one ${fmtMoney(res.total)} payment covering ${res.count} items.`, 'success');
+    closeModal(); refreshBadges(); renderReimbursements();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 async function confirmPay(rid) {
