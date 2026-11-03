@@ -170,6 +170,23 @@ tr:hover td{background:var(--cream)}
 .archive-fold>summary::-webkit-details-marker{display:none}
 .archive-fold>summary::before{content:'▸ ';}
 .archive-fold[open]>summary::before{content:'▾ ';}
+.conc-grid-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:8px}
+.conc-grid{width:100%;border-collapse:collapse;font-size:12px}
+.conc-grid th{background:var(--cream2);font-size:11px;font-weight:600;color:var(--ink3);padding:6px 8px;text-align:center;white-space:nowrap;position:sticky;top:0}
+.conc-grid td{padding:5px 8px;border-top:1px solid var(--border);vertical-align:middle}
+.conc-grid .conc-sec td{background:var(--cream);font-size:11px;font-weight:600;color:var(--ink3);padding:6px 8px}
+.conc-grid .conc-item{min-width:170px;max-width:240px}
+.conc-grid .conc-off .conc-item{opacity:.5}
+.conc-cell{text-align:center;min-width:92px;cursor:pointer;border-left:1px solid var(--border)}
+.conc-cell.off,.conc-cell.empty{cursor:default;color:var(--ink3)}
+.conc-cell:not(.off):not(.empty):hover{background:var(--teal3)}
+.conc-cell.best .conc-per{color:var(--teal)}
+.conc-cell.picked{background:var(--teal3);box-shadow:inset 0 0 0 2px var(--teal)}
+.conc-per{font-weight:700;font-size:13px}.conc-per span{font-weight:400;font-size:10px;color:var(--ink3)}
+.conc-pack{font-size:10px;color:var(--ink3)}
+.conc-link{font-size:10px;color:var(--teal)}
+.conc-cost{text-align:right;white-space:nowrap;border-left:1px solid var(--border)}
+.conc-in{font-size:12px;padding:3px 6px}
 .budget-bar-pending{height:100%;background:repeating-linear-gradient(45deg,var(--amber) 0 3px,var(--amber-bg) 3px 6px);opacity:.85}
 .budget-bar-fill{height:100%;border-radius:99px;background:var(--teal);transition:width .4s ease}
 .budget-bar-fill.warn{background:var(--amber)}
@@ -683,7 +700,9 @@ function typeCell(r) {
   const scope = r.production_name
     ? `<span class="badge badge-treasurer" style="font-size:10px" title="Production expense">${r.production_name}</span>`
     : `<span class="badge" style="font-size:10px;background:var(--cream2);color:var(--ink2, var(--ink))" title="Organization expense">Org</span>`;
-  const how = r.is_sap
+  const how = r.is_invoice
+    ? `<span class="badge" style="font-size:10px;background:#E0E7FF;color:#3730A3">Invoice</span>${r.invoice_due_date ? `<div class="text-xs text-muted">due ${fmtDate(r.invoice_due_date+'T12:00:00')}</div>` : ''}`
+    : r.is_sap
     ? '<span class="badge badge-sap" style="font-size:10px">Reimbursement</span>'
     : '<span class="text-xs text-muted">HWTC purchase</span>';
   return `<div>${scope}</div><div class="mt-2">${how}</div>`;
@@ -916,7 +935,7 @@ async function renderNewRequest() {
       <div class="card mb-20">
         <div class="card-header"><span class="card-title">Request type</span></div>
         <div class="card-body">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px">
             <label style="display:block;cursor:pointer">
               <input type="radio" name="req-type" value="pre" checked onchange="toggleSAP(false)" style="display:none">
               <div id="type-pre" style="border:2px solid var(--teal);border-radius:var(--r);padding:14px;background:var(--teal3)">
@@ -929,6 +948,13 @@ async function renderNewRequest() {
               <div id="type-sap" style="border:2px solid var(--border);border-radius:var(--r);padding:14px">
                 <div class="fw-600 text-sm">SAP</div>
                 <div class="text-xs text-muted mt-4">You already bought it within your budget — request reimbursement.</div>
+              </div>
+            </label>
+            <label style="display:block;cursor:pointer">
+              <input type="radio" name="req-type" value="invoice" onchange="toggleSAP('invoice')" style="display:none">
+              <div id="type-invoice" style="border:2px solid var(--border);border-radius:var(--r);padding:14px">
+                <div class="fw-600 text-sm">Invoice</div>
+                <div class="text-xs text-muted mt-4">HWTC approved an order and the vendor sent a bill — pay the vendor from a budget.</div>
               </div>
             </label>
           </div>
@@ -1034,8 +1060,19 @@ async function renderNewRequest() {
               </div>
             </div>
           </div>
+          <div id="invoice-fields" class="hidden">
+            <hr class="divider">
+            <div class="text-xs text-muted fw-600 mb-8">INVOICE DETAILS</div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">Invoice number</label>
+                <input type="text" id="req-invoice-number" class="form-input" placeholder="e.g. INV-10423"></div>
+              <div class="form-group"><label class="form-label">Due date</label>
+                <input type="date" id="req-invoice-due" class="form-input"></div>
+            </div>
+            <div class="form-hint" style="margin-top:-6px;margin-bottom:10px">The vendor goes in “Store / website” above — that’s who gets paid. Put who approved the order in the notes.</div>
+          </div>
           <div id="sap-upload" class="hidden">
-            <label class="form-label">Receipts <span class="req">*</span></label>
+            <label class="form-label" id="sap-upload-label">Receipts <span class="req">*</span></label>
             <div class="form-hint" style="margin:-2px 0 6px">Add every receipt or invoice for this purchase — e.g. an order that shipped in parts. One checkout = one request.</div>
             <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()">
               <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto;opacity:.5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
@@ -1171,17 +1208,26 @@ async function uploadFiles(rid, files) {
   await api('POST', `/requests/${rid}/receipts`, fd, true);
 }
 
-function toggleSAP(isSAP) {
+function toggleSAP(kind) {
+  // kind: false (company purchase), true (SAP), or 'invoice'
+  const isInvoice = kind === 'invoice', isSAP = kind === true;
   document.getElementById('sap-emergency-toggle').classList.toggle('hidden', !isSAP);
   document.getElementById('sap-reimb-field').classList.toggle('hidden', !isSAP);
-  document.getElementById('sap-upload').classList.toggle('hidden', !isSAP);
+  document.getElementById('sap-upload').classList.toggle('hidden', !(isSAP || isInvoice));
+  document.getElementById('invoice-fields').classList.toggle('hidden', !isInvoice);
+  const lbl = document.getElementById('sap-upload-label');
+  if (lbl) lbl.innerHTML = (isInvoice ? 'Invoice' : 'Receipts') + ' <span class="req">*</span>';
+  const inv = document.getElementById('type-invoice');
+  if (inv) { inv.style.border = isInvoice ? '2px solid var(--teal)' : '2px solid var(--border)'; inv.style.background = isInvoice ? 'var(--teal3)' : ''; }
+  const cost = document.querySelector('label[for="req-cost"]') || document.getElementById('req-cost')?.closest('.form-group')?.querySelector('.form-label');
+  if (cost) cost.innerHTML = (isInvoice ? 'Invoice amount' : 'Estimated cost') + ' <span class="req">*</span>';
   if (!isSAP) {
     const cb = document.getElementById('req-is-emergency');
     if (cb) cb.checked = false;
     toggleEmergencyFields(false);
   }
-  document.getElementById('type-pre').style.border = isSAP ? '2px solid var(--border)' : '2px solid var(--teal)';
-  document.getElementById('type-pre').style.background = isSAP ? '' : 'var(--teal3)';
+  document.getElementById('type-pre').style.border = kind ? '2px solid var(--border)' : '2px solid var(--teal)';
+  document.getElementById('type-pre').style.background = kind ? '' : 'var(--teal3)';
   document.getElementById('type-sap').style.border = isSAP ? '2px solid var(--amber)' : '2px solid var(--border)';
   document.getElementById('type-sap').style.background = isSAP ? 'var(--amber-bg)' : '';
 }
@@ -1205,7 +1251,9 @@ async function submitRequest() {
   const cost   = document.getElementById('req-cost').value;
   const budget = document.getElementById('req-budget').value;
   const desc   = document.getElementById('req-desc').value.trim();
-  const isSAP  = document.querySelector('input[name="req-type"]:checked').value === 'sap';
+  const reqKind = document.querySelector('input[name="req-type"]:checked').value;
+  const isSAP  = reqKind === 'sap';
+  const isInvoice = reqKind === 'invoice';
   const isEmergency  = isSAP && (document.getElementById('req-is-emergency')?.checked || false);
   const emergencyReason = isEmergency ? (document.getElementById('req-sap-reason')?.value.trim() || '') : '';
   const authorizedBy    = isEmergency ? (document.getElementById('req-authorized-by')?.value.trim() || '') : '';
@@ -1223,6 +1271,12 @@ async function submitRequest() {
   if (!title || !cost || !budget) {
     errEl.textContent = 'Please fill in all required fields.'; errEl.classList.remove('hidden'); return;
   }
+  if (isInvoice && !vendor) {
+    errEl.textContent = 'Enter the vendor who sent the invoice in “Store / website”.'; errEl.classList.remove('hidden'); return;
+  }
+  if (isInvoice && !fileBins.new.length) {
+    errEl.textContent = 'Please attach the invoice.'; errEl.classList.remove('hidden'); return;
+  }
   if (isSAP && !fileBins.new.length) {
     errEl.textContent = 'Please attach a receipt for this purchase.'; errEl.classList.remove('hidden'); return;
   }
@@ -1236,6 +1290,9 @@ async function submitRequest() {
       budget_id: parseInt(budget),
       production_id: prodId ? parseInt(prodId) : null,
       is_sap: isSAP,
+      type: isInvoice ? 'invoice' : (isSAP ? 'sap' : 'pre_approval'),
+      invoice_number: isInvoice ? (document.getElementById('req-invoice-number')?.value.trim() || '') : '',
+      invoice_due_date: isInvoice ? (document.getElementById('req-invoice-due')?.value || '') : '',
       is_emergency: isEmergency,
       emergency_reason: emergencyReason,
       authorized_by: authorizedBy,
@@ -1244,7 +1301,7 @@ async function submitRequest() {
       purchase_method: method,
       item_url: itemUrl
     });
-    if (isSAP) await uploadFiles(d.id, fileBins.new);
+    if (isSAP || isInvoice) await uploadFiles(d.id, fileBins.new);
     toast('Request submitted! You\'ll hear back by email.', 'success');
     fileBins.new = [];
     nav('my-requests');
@@ -1315,7 +1372,7 @@ async function showRequestDetail(rid) {
         <div><div class="text-xs text-muted">Estimated cost</div><div class="fw-600 text-sm mt-4">${fmtMoney(r.estimated_cost)}</div></div>
         <div><div class="text-xs text-muted">Purchase method</div><div class="fw-600 text-sm mt-4">${r.purchase_method==='online'?'Online':'In-store'}${r.vendor?' — '+r.vendor:''}</div></div>
         <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div>${r.budget_name?`<div class="mt-2">${budgetLeftLine(r)}</div>`:''}</div>
-        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.production_name ? `Production expense — ${r.production_name}` : 'Org expense'}</div><div class="text-xs text-muted">${r.is_sap ? 'Reimbursement (SAP) — already purchased' : 'Company Purchase Request — HWTC pays'}</div></div>
+        <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.production_name ? `Production expense — ${r.production_name}` : 'Org expense'}</div><div class="text-xs text-muted">${r.is_invoice ? `Vendor invoice — pay ${r.vendor||'the vendor'}${r.invoice_number?` · #${r.invoice_number}`:''}${r.invoice_due_date?` · due ${fmtDate(r.invoice_due_date+'T12:00:00')}`:''}` : r.is_sap ? 'Reimbursement (SAP) — already purchased' : 'Company Purchase Request — HWTC pays'}</div></div>
       </div>
       ${r.item_url ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Product / order link</div><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:13px;color:var(--teal);word-break:break-all">${r.item_url}</a></div>` : ''}
       ${r.description ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Description</div><div class="text-sm">${r.description}</div></div>` : ''}
@@ -1451,7 +1508,7 @@ async function renderApprovals() {
         <div class="card-body" style="padding:11px 13px;font-size:13px">
           <div class="flex flex-center gap-6 mb-5">
             ${r.production_name?`<span class="badge badge-treasurer" style="font-size:10px">${r.production_name}</span>`:'<span class="text-xs text-muted">Org</span>'}
-            ${r.is_sap?'<span class="badge badge-sap" style="font-size:10px">SAP</span>':''}
+            ${r.is_sap?'<span class="badge badge-sap" style="font-size:10px">SAP</span>':''}${r.is_invoice?`<span class="badge" style="font-size:10px;background:#E0E7FF;color:#3730A3">Invoice${r.invoice_due_date?` · due ${fmtDate(r.invoice_due_date+'T12:00:00')}`:''}</span>`:''}
             ${r.purchase_method==='online'?'<span style="font-size:10px"></span>':'<span style="font-size:10px"></span>'}
             <span class="text-xs text-muted" style="margin-left:auto">${fmtDate(r.submitted_at)}</span>
           </div>
@@ -1617,14 +1674,21 @@ async function renderReimbursements() {
               ${g.items.map(r => `
               <tr>
                 ${isAdmin ? `<td>${g.items.length > 1 ? `<input type="checkbox" class="reimb-cb reimb-cb-${g.user_id}" data-id="${r.id}" data-amount="${r.amount}" checked onchange="updateReimbGroup(${g.user_id})">` : ''}</td>` : ''}
-                <td><div class="fw-600">${r.user_name}</div><div class="text-xs text-muted">${r.user_email}</div></td>
+                <td>${r.payee_type === 'vendor'
+                  ? `<div class="fw-600">${escHtmlBB(r.vendor||'Vendor')}</div><div class="text-xs text-muted">Vendor · submitted by ${r.user_name}</div>`
+                  : `<div class="fw-600">${r.user_name}</div><div class="text-xs text-muted">${r.user_email}</div>`}</td>
                 <td>${r.title}</td>
-                <td>${r.request_type==='sap' ? '<span class="badge badge-sap" style="font-size:10px">SAP</span>' : '<span class="text-xs text-muted">Pre-Approval</span>'}</td>
-                <td class="text-xs">${r.reimb_method ? `${r.reimb_method}${r.reimb_handle?' — '+r.reimb_handle:''}` : '<span class="text-muted">Not specified</span>'}</td>
+                <td>${r.request_type==='invoice' ? '<span class="badge" style="font-size:10px;background:#E0E7FF;color:#3730A3">Invoice</span>'
+                    : r.request_type==='sap' ? '<span class="badge badge-sap" style="font-size:10px">SAP</span>' : '<span class="text-xs text-muted">Pre-Approval</span>'}</td>
+                <td class="text-xs">${r.payee_type === 'vendor'
+                  ? `Pay vendor${r.invoice_number ? ` · #${escHtmlBB(r.invoice_number)}` : ''}${r.invoice_due_date ? `<div style="color:${new Date(r.invoice_due_date+'T23:59:59') < new Date() ? 'var(--red)' : 'var(--ink3)'}">due ${fmtDate(r.invoice_due_date+'T12:00:00')}</div>` : ''}`
+                  : r.reimb_method ? `${r.reimb_method}${r.reimb_handle?' — '+r.reimb_handle:''}` : '<span class="text-muted">Not specified</span>'}</td>
                 <td class="fw-600">${fmtMoney(r.amount)}</td>
                 <td class="td-muted">${fmtDate(r.created_at)}</td>
                 ${isAdmin ? `<td>
-                  <button class="btn btn-approve btn-sm" onclick="showPayModal(${r.id},'${r.user_name.replace(/'/g,"\\'")}',${r.amount},'${r.reimb_method||''}','${(r.reimb_handle||'').replace(/'/g,"\\'")}',${r.profile_reimb_method?1:0})">Mark paid</button>
+                  <button class="btn btn-approve btn-sm" onclick="${r.payee_type === 'vendor'
+                    ? `showPayModal(${r.id},'${(r.vendor||'the vendor').replace(/'/g,"\\'").replace(/"/g,'&quot;')}',${r.amount},'','',1,true)`
+                    : `showPayModal(${r.id},'${r.user_name.replace(/'/g,"\\'")}',${r.amount},'${r.reimb_method||''}','${(r.reimb_handle||'').replace(/'/g,"\\'")}',${r.profile_reimb_method?1:0})`}">Mark paid</button>
                 </td>` : ''}
               </tr>`).join('')}`).join('')}
             </tbody>
@@ -1660,13 +1724,14 @@ function saveDefaultBox(id, name, hasDefault) {
     <div class="text-xs text-muted" style="margin-left:24px">${hasDefault ? 'Replaces what’s on their profile.' : `Nothing is saved on ${first}'s profile yet — this pre-fills it for next time.`}</div>`;
 }
 
-function showPayModal(rid, name, amount, prefMethod, prefHandle, hasDefault=0) {
-  const methodOpts = ['', ...REIMB_METHODS].map(m =>
+const VENDOR_PAY_METHODS = ['Check','ACH / bank transfer','Credit card','Online payment','Cash'];
+function showPayModal(rid, name, amount, prefMethod, prefHandle, hasDefault=0, isVendor=false) {
+  const methodOpts = ['', ...(isVendor ? VENDOR_PAY_METHODS : REIMB_METHODS)].map(m =>
     `<option value="${m}" ${prefMethod===m?'selected':''}>${m||'Select method...'}</option>`).join('');
   const html = `
-    <div class="modal-header"><span class="modal-title">Mark reimbursement paid</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-header"><span class="modal-title">${isVendor ? 'Record invoice payment' : 'Mark reimbursement paid'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <p class="text-sm mb-16">Confirm payment of <strong>${fmtMoney(amount)}</strong> to <strong>${name}</strong></p>
+      <p class="text-sm mb-16">Confirm payment of <strong>${fmtMoney(amount)}</strong> to <strong>${name}</strong>${isVendor ? ' for this invoice' : ''}</p>
       ${prefMethod ? `<div class="panel mb-16" style="background:var(--teal3);border-color:var(--teal)">
         <div class="text-xs fw-600 mb-4" style="color:var(--teal)">PREFERRED METHOD</div>
         <div class="text-sm fw-600">${prefMethod}${prefHandle?' — '+prefHandle:''}</div>
@@ -1685,7 +1750,7 @@ function showPayModal(rid, name, amount, prefMethod, prefHandle, hasDefault=0) {
         <label class="form-label">Notes (optional)</label>
         <textarea id="pay-notes" class="form-textarea" style="min-height:56px"></textarea>
       </div>
-      ${saveDefaultBox('pay-save-default', name, hasDefault)}
+      ${isVendor ? '' : saveDefaultBox('pay-save-default', name, hasDefault)}
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -1699,11 +1764,13 @@ let _reimbGroups = {};
 function groupByPerson(list) {
   const by = {};
   for (const r of list) {
-    (by[r.user_id] ||= {user_id: r.user_id, user_name: r.user_name, items: [], total: 0,
-                        reimb_method: r.reimb_method, reimb_handle: r.reimb_handle,
-                        has_default: !!r.profile_reimb_method});
-    by[r.user_id].items.push(r);
-    by[r.user_id].total = round2(by[r.user_id].total + r.amount);
+    // Vendor invoices are paid to the vendor, one at a time — never grouped with the submitter's own reimbursements
+    const key = r.payee_type === 'vendor' ? 'v' + r.id : r.user_id;
+    (by[key] ||= {user_id: key, user_name: r.user_name, items: [], total: 0,
+                  reimb_method: r.reimb_method, reimb_handle: r.reimb_handle,
+                  has_default: !!r.profile_reimb_method});
+    by[key].items.push(r);
+    by[key].total = round2(by[key].total + r.amount);
   }
   _reimbGroups = by;
   return Object.values(by);
@@ -2811,43 +2878,54 @@ function renderConcShop() {
   const checked = _concItems.filter(it => concCfg(it.id).on);
   const running = new Set(P.running ? P.running_item_ids : []);
   const ago = n => n == null ? '' : n === 0 ? 'today' : n === 1 ? 'yesterday' : `${n}d ago`;
+  const stores = P.stores && P.stores.length ? P.stores : ['Amazon','Costco','Target','Walmart'];
+  const cols = 4 + stores.length;
+  // One row per item, one column per store; click a price to pick it.
+  const cell = (it, cfg, x, best) => {
+    const picked = cfg.pick && !cfg.pick.manual && cfg.pick.url === x.url;
+    return `<td class="conc-cell ${picked?'picked':''} ${best?'best':''}" ${canEdit && cfg.on ? `onclick="concPickUrl(${it.id}, this.dataset.url)" data-url="${escHtmlBB(x.url)}"` : ''}
+        title="${escHtmlBB(x.store + ' — ' + x.product)}">
+        <div class="conc-per">${best?'★ ':''}${money2(x.per_unit)}<span> ea</span></div>
+        <div class="conc-pack">${money2(x.price)} / ${x.units}</div>
+        <a href="${escHtmlBB(x.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="conc-link">view ↗</a>
+      </td>`;
+  };
   const row = it => {
     const cfg = concCfg(it.id), L = byId[it.id], pr = P.items[String(it.id)];
     const listings = pr?.listings || [];
-    const pickKey = cfg.pick ? (cfg.pick.manual ? 'manual' : cfg.pick.url) : '';
-    let product = '';
-    if (cfg.on) {
-      if (running.has(it.id)) product = `<span class="text-muted">Checking prices…</span>`;
-      else if (!listings.length && !cfg.pick) product = `<span class="text-muted">${pr ? 'No prices found' : 'Not checked yet'}</span> ${canEdit?`· <a href="#" onclick="event.preventDefault();concPickManual(${it.id})">enter a price</a>`:''}`;
-      else {
-        const opts = listings.map((x,k) => `<option value="${escHtmlBB(x.url)}" ${pickKey===x.url?'selected':''}>${k===0?'★ ':''}${x.store} · ${money2(x.price)} for ${x.units} (${money2(x.per_unit)} ea) — ${escHtmlBB(x.product.slice(0,60))}</option>`).join('');
-        product = `<select class="form-select" style="font-size:12px;padding:3px 6px" ${canEdit?'':'disabled'} onchange="concPick(${it.id}, this.value)">
-            <option value="" ${!pickKey?'selected':''}>Choose a product…</option>${opts}
-            <option value="manual" ${pickKey==='manual'?'selected':''}>Enter my own price…</option></select>
-          ${pr ? `<div class="text-muted" style="font-size:11px;margin-top:2px;${pr.stale?'color:var(--amber)':''}">prices checked ${ago(pr.age_days)}</div>` : ''}`;
-      }
-      if (cfg.pick?.manual) product += `
-        <div class="flex gap-8 mt-4" style="font-size:12px">
-          <input class="form-input" style="font-size:12px;padding:3px 6px;width:88px" type="number" step="0.01" min="0" placeholder="Pack $" value="${cfg.pick.price||''}" ${canEdit?'':'disabled'} oninput="concManual(${it.id},'price',this.value)">
-          <input class="form-input" style="font-size:12px;padding:3px 6px;width:70px" type="number" step="1" min="1" placeholder="Count" value="${cfg.pick.units||''}" ${canEdit?'':'disabled'} oninput="concManual(${it.id},'units',this.value)">
-          <input class="form-input" style="font-size:12px;padding:3px 6px" placeholder="Store or link (optional)" value="${escHtmlBB(cfg.pick.url||cfg.pick.store||'')}" ${canEdit?'':'disabled'} onchange="concManual(${it.id},'where',this.value)">
-        </div>`;
-    }
-    const link = cfg.on && cfg.pick?.url && /^https?:/.test(cfg.pick.url) ? `<a href="${escHtmlBB(cfg.pick.url)}" target="_blank" rel="noopener" title="Open product page" style="color:var(--teal)">↗</a>` : '';
-    return `<tr style="${cfg.on?'':'opacity:.55'}">
-      <td style="white-space:nowrap"><label class="flex flex-center gap-8" style="cursor:pointer"><input type="checkbox" ${cfg.on?'checked':''} ${canEdit?'':'disabled'} onchange="concToggle(${it.id}, this.checked)"> ${escHtmlBB(it.name)}</label></td>
-      <td>${cfg.on ? `<input class="form-input" type="number" min="0" step="1" style="width:70px;font-size:12px;padding:3px 6px" value="${L && !L.isAuto ? L.qty : ''}" placeholder="${L ? L.qty : ''}" title="Leave blank to split evenly" ${canEdit?'':'disabled'} onchange="concQty(${it.id}, this.value)">` : ''}</td>
-      <td style="min-width:240px">${product}</td>
-      <td style="text-align:center">${link}</td>
-      <td style="text-align:right;white-space:nowrap">${cfg.on && L?.pick ? `${L.packs} × ${money2(L.pick.price)}` : ''}</td>
-      <td style="text-align:right" class="fw-600">${cfg.on && L?.pick ? money2(L.cost) : ''}</td>
+    const bestUrl = listings.length ? listings[0].url : null;
+    const byStore = Object.fromEntries(listings.map(x => [x.store, x]));
+    const checking = running.has(it.id);
+    const storeCells = stores.map(st => {
+      if (!cfg.on) return `<td class="conc-cell off"></td>`;
+      if (checking) return `<td class="conc-cell empty">…</td>`;
+      const x = byStore[st];
+      return x ? cell(it, cfg, x, x.url === bestUrl) : `<td class="conc-cell empty">${pr ? '—' : ''}</td>`;
+    }).join('');
+    const manual = cfg.pick?.manual;
+    const own = !cfg.on ? `<td class="conc-cell off"></td>` : manual ? `
+      <td class="conc-cell picked" style="min-width:150px">
+        <div class="flex gap-4" style="gap:4px">
+          <input class="form-input conc-in" type="number" step="0.01" min="0" placeholder="Pack $" value="${cfg.pick.price||''}" ${canEdit?'':'disabled'} oninput="concManual(${it.id},'price',this.value)">
+          <input class="form-input conc-in" type="number" step="1" min="1" placeholder="Count" value="${cfg.pick.units||''}" ${canEdit?'':'disabled'} oninput="concManual(${it.id},'units',this.value)">
+        </div>
+        <input class="form-input conc-in mt-4" style="width:100%" placeholder="Store or link" value="${escHtmlBB(cfg.pick.url||cfg.pick.store||'')}" ${canEdit?'':'disabled'} onchange="concManual(${it.id},'where',this.value)">
+      </td>`
+      : `<td class="conc-cell empty">${canEdit ? `<a href="#" onclick="event.preventDefault();concPickManual(${it.id})">+ my price</a>` : ''}</td>`;
+    return `<tr class="${cfg.on?'':'conc-off'}">
+      <td class="conc-item"><label class="flex flex-center gap-8" style="cursor:pointer;align-items:flex-start">
+        <input type="checkbox" style="margin-top:3px" ${cfg.on?'checked':''} ${canEdit?'':'disabled'} onchange="concToggle(${it.id}, this.checked)">
+        <span>${escHtmlBB(it.name)}${cfg.on && pr ? `<div class="text-muted" style="font-size:10px;${pr.stale?'color:var(--amber)':''}">checked ${ago(pr.age_days)}</div>` : ''}${checking ? `<div class="text-muted" style="font-size:10px">checking…</div>` : ''}</span></label></td>
+      <td>${cfg.on ? `<input class="form-input conc-in" type="number" min="0" step="1" style="width:58px" value="${L && !L.isAuto ? L.qty : ''}" placeholder="${L ? L.qty : ''}" title="Leave blank to split evenly" ${canEdit?'':'disabled'} onchange="concQty(${it.id}, this.value)">` : ''}</td>
+      ${storeCells}${own}
+      <td class="conc-cost">${cfg.on && L?.pick ? `<div class="fw-600">${money2(L.cost)}</div><div class="text-muted" style="font-size:10px">${L.packs} × ${money2(L.pick.price)}</div>` : (cfg.on && L?.qty ? `<span style="color:var(--amber);font-size:11px">pick one</span>` : '')}</td>
     </tr>`;
   };
   const section = (cat, label) => {
     const its = _concItems.filter(it => it.category === cat);
     const planned = lines.filter(l => l.cat === cat).reduce((a,l)=>a+l.qty,0);
     const sub = round2(lines.filter(l => l.cat === cat).reduce((a,l)=>a+l.cost,0));
-    return `<tr><td colspan="6" class="text-xs fw-600 text-muted" style="padding-top:10px">${label.toUpperCase()} · ${planned} of ${targets[cat]} planned${sub?` · ${money2(sub)}`:''}${planned && planned !== targets[cat] ? ` <span style="color:var(--amber)">(${planned>targets[cat]?'+':''}${planned-targets[cat]})</span>` : ''}</td></tr>${its.map(row).join('')}`;
+    return `<tr class="conc-sec"><td colspan="${cols}">${label.toUpperCase()} · ${planned} of ${targets[cat]} planned${sub?` · ${money2(sub)}`:''}${planned && planned !== targets[cat] ? ` <span style="color:var(--amber)">(${planned>targets[cat]?'+':''}${planned-targets[cat]})</span>` : ''}</td></tr>${its.map(row).join('')}`;
   };
   const tot = concPlanTotal();
   const needCheck = checked.filter(it => !P.items[String(it.id)] || P.items[String(it.id)].stale).length;
@@ -2861,10 +2939,11 @@ function renderConcShop() {
       ${!P.configured ? `<div class="text-xs text-muted mt-4">Automatic price lookup isn’t set up (an admin can add <code>ANTHROPIC_API_KEY</code> in Railway). You can still enter prices yourself.</div>`
         : `<div class="text-xs text-muted mt-4">Searches ${(P.stores||[]).join(', ')}. ★ marks the lowest price per item; every option links to its store page.${needCheck && !P.running ? ` ${needCheck} checked item${needCheck!==1?'s have':' has'} no recent prices.` : ''}</div>`}
       ${P.last_error && !P.running ? `<div class="text-xs mt-4" style="color:var(--red)">Price check problem: ${escHtmlBB(P.last_error)}</div>` : ''}
-      <div class="table-wrap mt-8"><table class="text-sm" style="width:100%">
-        <thead><tr><th style="text-align:left">Item</th><th style="text-align:left">Qty</th><th style="text-align:left">Product</th><th></th><th style="text-align:right">Packs</th><th style="text-align:right">Cost</th></tr></thead>
+      <div class="conc-grid-wrap mt-8"><table class="conc-grid">
+        <thead><tr><th style="text-align:left">Item</th><th style="text-align:left">Qty</th>${stores.map(st=>`<th>${st}</th>`).join('')}<th>Other</th><th style="text-align:right">Cost</th></tr></thead>
         <tbody>${section('snack','Snacks')}${section('drink','Drinks')}</tbody>
       </table></div>
+      <div class="text-xs text-muted mt-4">Click a price to choose it. ★ is the cheapest per item; “view ↗” opens the store page.</div>
       ${tot ? `<div class="flex mt-8 fw-600"><span>Shopping list total</span><span style="margin-left:auto;font-size:16px">${money2(tot.total)}</span></div>
         ${tot.missing ? `<div class="text-xs" style="color:var(--amber)">${tot.missing} checked item${tot.missing!==1?'s need':' needs'} a product or price before this can set the budget.</div>` : ''}` : ''}
       ${canEdit ? `<details class="archive-fold" style="margin-top:6px" ontoggle="if(this.open)loadConcItems()"><summary>Edit item list</summary><div id="conc-items" class="text-xs mt-4">Loading…</div></details>` : ''}
@@ -2884,6 +2963,11 @@ function concPick(id, url) {
   const x = (_concPrices.items[String(id)]?.listings || []).find(l => l.url === url);
   cfg.pick = x ? {store: x.store, product: x.product, price: x.price, units: x.units, url: x.url} : null;
   concChanged();
+}
+function concPickUrl(id, url) {
+  const cfg = concCfg(id);
+  if (cfg.pick && cfg.pick.url === url && !cfg.pick.manual) { cfg.pick = null; concChanged(); return; }  // click again to unpick
+  concPick(id, url);
 }
 function concPickManual(id) { concCfg(id).pick = {manual: true, price: '', units: '', url: ''}; concChanged(); }
 function concManual(id, field, v) {
