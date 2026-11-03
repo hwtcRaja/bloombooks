@@ -15,6 +15,9 @@ import cloudinary.utils
 import requests as req_lib
 import base64
 import time
+import threading
+import statistics
+from urllib.parse import urlparse
 from cryptography.fernet import Fernet, InvalidToken
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.units import inch
@@ -350,6 +353,37 @@ def init_db():
         linked_at          TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
         updated_at         TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
+
+    # Concessions price lookup: the items we price, and saved lookups
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_concession_items (
+        id         SERIAL PRIMARY KEY,
+        category   TEXT NOT NULL,          -- 'snack' or 'drink'
+        name       TEXT NOT NULL,
+        is_active  INTEGER DEFAULT 1,
+        sort_order INTEGER DEFAULT 0
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_concession_price_lookups (
+        id          SERIAL PRIMARY KEY,
+        status      TEXT DEFAULT 'running', -- running | done | failed
+        started_at  TEXT,
+        finished_at TEXT,
+        started_by  INTEGER REFERENCES bb_users(id),
+        result_json TEXT,
+        error       TEXT
+    )''')
+    c.execute('SELECT COUNT(*) AS n FROM bb_concession_items')
+    if c.fetchone()['n'] == 0:
+        for i, (cat, name) in enumerate([
+            ('snack', 'Full-size candy bar variety pack'),
+            ('snack', 'Chips variety pack (1 oz bags)'),
+            ('snack', 'Fruit snacks / gummies (individual pouches)'),
+            ('snack', 'Microwave or pre-popped popcorn (single bags)'),
+            ('drink', 'Bottled water case (16.9 oz)'),
+            ('drink', 'Soda 12-pack (12 oz cans)'),
+            ('drink', 'Juice pouches (e.g. Capri Sun)'),
+            ('drink', 'Sports drink multipack (e.g. Gatorade)'),
+        ]):
+            c.execute('INSERT INTO bb_concession_items (category,name,sort_order) VALUES (%s,%s,%s)', (cat, name, i))
 
     c.execute('''CREATE TABLE IF NOT EXISTS bb_statements (
         id            SERIAL PRIMARY KEY,
@@ -4058,6 +4092,243 @@ def apply_concessions_estimate(pid):
     log_action(u['id'], 'applied_concessions_estimate', 'production', pid,
                f"{audience} people → ${est['total']:,.2f} (was ${current:,.2f})")
     return jsonify({'ok': True, 'estimate': est, 'budget_id': bid, 'previous': current})
+
+
+# ─── Concessions price lookup (Claude + web search, store sites only) ─────────
+# Finds current pack prices for our usual concessions items at the stores we
+# shop, so "what we pay per snack/drink" isn't a guess. Every price must come
+# with the store page it was found on; prices whose page didn't actually come
+# back from the search are dropped. Runs in the background (it takes a minute
+# or two) and results are kept, so it only needs re-running when prices move.
+# Set on Railway:  ANTHROPIC_API_KEY  (and optionally ANTHROPIC_MODEL)
+CONC_PRICE_STORES = [('Amazon', 'amazon.com'), ('Costco', 'costco.com'),
+                     ('Target', 'target.com'), ('Walmart', 'walmart.com')]
+CONC_PRICE_STALE_DAYS = 7
+CONC_PRICE_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-sonnet-5-5')
+
+def _conc_store_for(url):
+    host = (urlparse(url).hostname or '').lower()
+    for name, dom in CONC_PRICE_STORES:
+        if host == dom or host.endswith('.' + dom):
+            return name
+    return None
+
+def _norm_url(url):
+    pr = urlparse(url or '')
+    return f"{(pr.hostname or '').lower().removeprefix('www.')}{pr.path.rstrip('/')}"
+
+def _conc_price_prompt(items):
+    stores = ', '.join(n for n, _ in CONC_PRICE_STORES)
+    lines = '\n'.join(f'- id {i["id"]} ({i["category"]}): {i["name"]}' for i in items)
+    return (
+        "We run concessions for a community theater and buy supplies in bulk.\n"
+        f"For each item below, search {stores} for a current listing a small theater would\n"
+        "actually buy (a multipack or case, not a single unit and not a pallet). Find up to\n"
+        "one listing per store per item.\n\n"
+        f"Items:\n{lines}\n\n"
+        "Rules:\n"
+        "- Only report a listing if the search results show its current price. Never estimate.\n"
+        "- \"units\" is the number of individual servings the buyer gets (e.g. 30 bags, 24 bottles).\n"
+        "- Use the exact product page URL from the search results.\n"
+        "- Skip a store if you can't find a clear price and count there.\n\n"
+        "When finished, reply with ONLY this JSON, no other text:\n"
+        '{"items":[{"item_id":<id>,"listings":[{"store":"<store>","product":"<product name>",'
+        '"price":<number>,"units":<integer>,"url":"<url>"}]}]}'
+    )
+
+def _call_claude_price_search(items):
+    key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+    headers = {'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'}
+    tools = [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 20,
+              'allowed_domains': [d for _, d in CONC_PRICE_STORES]}]
+    messages = [{'role': 'user', 'content': _conc_price_prompt(items)}]
+    seen_urls, text = set(), ''
+    for _ in range(5):   # web search can pause a long turn; continue it
+        r = req_lib.post('https://api.anthropic.com/v1/messages', headers=headers, timeout=170,
+                         json={'model': CONC_PRICE_MODEL, 'max_tokens': 4096,
+                               'messages': messages, 'tools': tools})
+        if r.status_code != 200:
+            raise RuntimeError(f'Claude API error {r.status_code}: {r.text[:300]}')
+        data = r.json()
+        for b in data.get('content', []):
+            if b.get('type') == 'web_search_tool_result' and isinstance(b.get('content'), list):
+                for res in b['content']:
+                    if res.get('url'):
+                        seen_urls.add(_norm_url(res['url']))
+            if b.get('type') == 'text':
+                text += b.get('text', '')
+                for cit in b.get('citations') or []:
+                    if cit.get('url'):
+                        seen_urls.add(_norm_url(cit['url']))
+        if data.get('stop_reason') == 'pause_turn':
+            messages.append({'role': 'assistant', 'content': data['content']})
+            text = ''
+            continue
+        break
+    m = re.search(r'\{.*\}', text, re.S)
+    if not m:
+        raise RuntimeError('No price data came back — try again in a bit.')
+    return json.loads(m.group(0)), seen_urls
+
+def _conc_summarize(items, raw, seen_urls):
+    by_id = {i['id']: dict(i, listings=[]) for i in items}
+    dropped = 0
+    for it in raw.get('items', []):
+        try:
+            target = by_id.get(int(it.get('item_id') or 0))
+        except (TypeError, ValueError):
+            target = None
+        if not target:
+            continue
+        for L in it.get('listings') or []:
+            try:
+                price, units = float(L.get('price')), int(L.get('units'))
+            except (TypeError, ValueError):
+                dropped += 1; continue
+            url = L.get('url') or ''
+            store = _conc_store_for(url)
+            # Must be one of our stores, and a page the search actually returned
+            if not store or _norm_url(url) not in seen_urls or price <= 0 or units < 1:
+                dropped += 1; continue
+            per = round(price / units, 4)
+            if per > 25:   # not a per-serving concessions price; something went wrong
+                dropped += 1; continue
+            target['listings'].append({'store': store, 'product': (L.get('product') or '')[:160],
+                                       'price': round(price, 2), 'units': units,
+                                       'per_unit': per, 'url': url})
+    out, cat = [], {'snack': [], 'drink': []}
+    for i in by_id.values():
+        pers = [L['per_unit'] for L in i['listings']]
+        i['typical'] = round(statistics.median(pers), 4) if pers else None
+        i['cheapest'] = round(min(pers), 4) if pers else None
+        if pers:
+            cat.setdefault(i['category'], []).append(i)
+        out.append(i)
+    def avg(rows, k):
+        vals = [r[k] for r in rows if r[k] is not None]
+        return round(sum(vals) / len(vals), 2) if vals else None
+    return {'items': out,
+            'snack_avg': avg(cat['snack'], 'typical'), 'drink_avg': avg(cat['drink'], 'typical'),
+            'snack_cheapest_avg': avg(cat['snack'], 'cheapest'), 'drink_cheapest_avg': avg(cat['drink'], 'cheapest'),
+            'stores': [n for n, _ in CONC_PRICE_STORES], 'dropped': dropped, 'model': CONC_PRICE_MODEL}
+
+def _run_price_lookup(lookup_id, items):
+    try:
+        raw, seen = _call_claude_price_search(items)
+        result = _conc_summarize(items, raw, seen)
+        conn = get_db()
+        conn.execute("UPDATE bb_concession_price_lookups SET status='done', finished_at=%s, result_json=%s WHERE id=%s",
+                     (datetime.now().isoformat(), json.dumps(result), lookup_id))
+        conn.commit(); conn.close()
+    except Exception as e:
+        app.logger.warning(f'Concessions price lookup {lookup_id} failed: {e}')
+        conn = get_db()
+        conn.execute("UPDATE bb_concession_price_lookups SET status='failed', finished_at=%s, error=%s WHERE id=%s",
+                     (datetime.now().isoformat(), str(e)[:500], lookup_id))
+        conn.commit(); conn.close()
+
+def _conc_price_user_ok(u):
+    if not u:
+        return False
+    if u['role'] in PRODUCTION_ADMIN_ROLES:
+        return True
+    conn = get_db()
+    r = conn.execute("SELECT 1 FROM bb_production_members WHERE user_id=%s AND member_role='producer' LIMIT 1",
+                     (u['id'],)).fetchone()
+    conn.close()
+    return bool(r)
+
+def _secs_since(iso):
+    try:
+        return (datetime.now() - datetime.fromisoformat(iso)).total_seconds()
+    except Exception:
+        return None
+
+@app.route('/api/concessions/prices', methods=['GET'])
+def get_concession_prices():
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    conn = get_db()
+    latest = conn.execute("""SELECT l.*, us.name AS started_by_name FROM bb_concession_price_lookups l
+                             LEFT JOIN bb_users us ON us.id=l.started_by
+                             WHERE l.status='done' ORDER BY l.id DESC LIMIT 1""").fetchone()
+    newest = conn.execute('SELECT id, status, started_at, error FROM bb_concession_price_lookups ORDER BY id DESC LIMIT 1').fetchone()
+    conn.close()
+    out = {'configured': bool(os.environ.get('ANTHROPIC_API_KEY', '').strip()),
+           'stale_days': CONC_PRICE_STALE_DAYS, 'latest': None, 'running': False, 'last_error': None}
+    if latest:
+        latest = dict(latest)
+        secs = _secs_since(latest['finished_at'])
+        age = int(secs // 86400) if secs is not None else None
+        out['latest'] = {'id': latest['id'], 'finished_at': latest['finished_at'],
+                         'started_by_name': latest.get('started_by_name'),
+                         'result': json.loads(latest['result_json'] or '{}'),
+                         'age_days': age, 'stale': age is None or age >= CONC_PRICE_STALE_DAYS}
+    if newest:
+        newest = dict(newest)
+        secs = _secs_since(newest['started_at'])
+        out['running'] = newest['status'] == 'running' and secs is not None and secs < 600
+        if newest['status'] == 'failed':
+            out['last_error'] = newest['error']
+    return jsonify(out)
+
+@app.route('/api/concessions/prices/refresh', methods=['POST'])
+def refresh_concession_prices():
+    u = current_user()
+    if not _conc_price_user_ok(u): return jsonify({'error': 'Insufficient permissions'}), 403
+    if not os.environ.get('ANTHROPIC_API_KEY', '').strip():
+        return jsonify({'error': "Price lookup isn't set up yet: add ANTHROPIC_API_KEY to BloomBooks in Railway."}), 400
+    conn = get_db()
+    running = conn.execute("""SELECT id, started_at FROM bb_concession_price_lookups
+                              WHERE status='running' ORDER BY id DESC LIMIT 1""").fetchone()
+    if running:
+        secs = _secs_since(running['started_at'])
+        if secs is not None and secs < 600:
+            conn.close(); return jsonify({'ok': True, 'running': True, 'id': running['id']})
+    items = [dict(r) for r in conn.execute(
+        'SELECT id, category, name FROM bb_concession_items WHERE is_active=1 ORDER BY category, sort_order, id').fetchall()]
+    if not items:
+        conn.close(); return jsonify({'error': 'Add at least one item to price first'}), 400
+    conn.execute("INSERT INTO bb_concession_price_lookups (status, started_at, started_by) VALUES ('running', %s, %s)",
+                 (datetime.now().isoformat(), u['id']))
+    lid = conn.execute('SELECT lastval() AS id').fetchone()['id']
+    conn.commit(); conn.close()
+    log_action(u['id'], 'concessions_price_lookup', 'concessions', lid, f'{len(items)} items')
+    threading.Thread(target=_run_price_lookup, args=(lid, items), daemon=True).start()
+    return jsonify({'ok': True, 'running': True, 'id': lid})
+
+@app.route('/api/concessions/items', methods=['GET'])
+def list_concession_items():
+    if not current_user(): return jsonify({'error': 'Not authenticated'}), 401
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute(
+        'SELECT * FROM bb_concession_items WHERE is_active=1 ORDER BY category, sort_order, id').fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+@app.route('/api/concessions/items', methods=['POST'])
+def add_concession_item():
+    u = current_user()
+    if not _conc_price_user_ok(u): return jsonify({'error': 'Insufficient permissions'}), 403
+    d = request.json or {}
+    name, cat = (d.get('name') or '').strip(), d.get('category')
+    if not name or cat not in ('snack', 'drink'):
+        return jsonify({'error': 'Give the item a name and pick snack or drink'}), 400
+    conn = get_db()
+    conn.execute('INSERT INTO bb_concession_items (category, name, sort_order) VALUES (%s,%s,%s)', (cat, name[:120], 999))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'added_concession_item', 'concessions', None, f'{cat}: {name[:120]}')
+    return jsonify({'ok': True})
+
+@app.route('/api/concessions/items/<int:iid>', methods=['DELETE'])
+def remove_concession_item(iid):
+    u = current_user()
+    if not _conc_price_user_ok(u): return jsonify({'error': 'Insufficient permissions'}), 403
+    conn = get_db()
+    conn.execute('UPDATE bb_concession_items SET is_active=0 WHERE id=%s', (iid,))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'removed_concession_item', 'concessions', iid)
+    return jsonify({'ok': True})
 
 @app.route('/api/productions/<int:pid>/suggested-concessions', methods=['GET'])
 def get_suggested_concessions(pid):
