@@ -498,7 +498,7 @@ async function api(method, path, body, isFile) {
   }
   const r = await fetch('/api' + path, opts);
   const data = await r.json();
-  if (!r.ok) throw new Error(data.error || 'Request failed');
+  if (!r.ok) { const err = new Error(data.error || 'Request failed'); err.status = r.status; err.data = data; throw err; }
   return data;
 }
 
@@ -5296,12 +5296,29 @@ function confirmDeleteUser(uid, name) {
   showModal(html);
 }
 
-async function doDeleteUser(uid) {
+async function doDeleteUser(uid, force=false) {
   try {
-    await api('DELETE', `/users/${uid}`);
+    await api('DELETE', `/users/${uid}${force ? '?force=1' : ''}`);
     toast('User deleted.','info');
     closeModal(); renderUsers();
-  } catch(e) { toast(e.message,'error'); }
+  } catch(e) {
+    if (e.status === 409 && e.data?.needs_force) {
+      const fp = e.data.footprint || {};
+      showModal(`
+        <div class="modal-header"><span class="modal-title">Delete their requests too?</span><button class="modal-close" onclick="closeModal()">×</button></div>
+        <div class="modal-body">
+          <p class="text-sm mb-12">${escHtmlBB(e.message)} Deleting this user also deletes those, along with their receipts and reimbursement records. Any approved amounts are taken back off the budgets they were charged to.</p>
+          ${fp.paid_out ? `<div class="text-sm mb-12" style="background:#FEE2E2;border:1px solid #DC2626;border-radius:6px;padding:8px 12px;color:#991B1B"><strong>${fp.paid_out} of their reimbursements were marked paid.</strong> If that was real money, don’t delete — deactivate the user instead so the records stay.</div>` : ''}
+          <p class="text-xs text-muted">This is meant for test accounts. For a real person who’s leaving, deactivate them instead — it keeps the financial history.</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-danger" onclick="doDeleteUser(${uid}, true)">Delete user and their requests</button>
+        </div>`);
+      return;
+    }
+    toast(e.message,'error');
+  }
 }
 
 function showAddUserModal() {
