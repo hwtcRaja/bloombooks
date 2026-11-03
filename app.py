@@ -639,6 +639,9 @@ def init_db():
         ("bb_purchase_requests", "producer_note",     "TEXT"),
         ("bb_purchase_requests", "producer_acted_by", "INTEGER"),
         ("bb_reimbursements",    "batch_id",          "TEXT"),
+        ("bb_reimbursements",    "payee_type",        "TEXT DEFAULT 'submitter'"),
+        ("bb_purchase_requests", "invoice_number",    "TEXT"),
+        ("bb_purchase_requests", "invoice_due_date",  "TEXT"),
         ("bb_purchase_requests", "producer_acted_at", "TEXT"),
         ("bb_purchase_requests", "purchase_method",   "TEXT DEFAULT 'in_store'"),
         ("bb_purchase_requests", "item_url",          "TEXT"),
@@ -1218,7 +1221,8 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
                               estimated_cost, req_type, purchase_method, item_url,
                               production_id, status):
     """Fire notifications when a new request is submitted."""
-    type_label   = 'SAP — reimbursement for something already purchased' if req_type == 'sap' else 'Company Purchase Request'
+    type_label   = {'sap': 'SAP — reimbursement for something already purchased',
+                    'invoice': 'Invoice — a vendor billed HWTC for an approved order'}.get(req_type, 'Company Purchase Request')
     method_label = 'Online' if purchase_method == 'online' else 'In-store'
     amount_str   = f'${float(estimated_cost):.2f}'
     url_line     = f'<p style="margin:8px 0"><a href="{item_url}" style="color:#0f6e56">{item_url}</a></p>' if item_url else ''
@@ -1253,7 +1257,7 @@ def notify_request_submitted(req_id, req_title, submitter_name, submitter_email,
                            'Review in BloomBooks', app_link('request', req_id)))
             notified.add((a['email'] or '').strip().lower())
     else:
-        prefix = 'SAP' if req_type == 'sap' else 'New request'
+        prefix = {'sap': 'SAP', 'invoice': 'Invoice'}.get(req_type, 'New request')
         for a in get_admin_emails():
             send_email(a['email'], f'{prefix}: {req_title}',
                 email_html('New Purchase Request — Review Needed', body, 'Review in BloomBooks', app_link('request', req_id)))
@@ -1480,7 +1484,13 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
 
     elif new_status == 'approved':
         if submitter:
-            if req_type == 'sap':
+            if req_type == 'invoice':
+                approved_body = (
+                    f'<p>The invoice for <strong>{req_title}</strong> ({amount}) has been <strong>approved</strong>.</p>'
+                    '<p>The treasurer will pay the vendor. You don\'t need to do anything else.</p>' + note_html
+                )
+                subject = f'Invoice approved for payment: {req_title}'
+            elif req_type == 'sap':
                 approved_body = (
                     f'<p>Your reimbursement request for <strong>{req_title}</strong> ({amount}) has been <strong>approved</strong>!</p>'
                     '<p>The treasurer will process your reimbursement.</p>' + note_html
@@ -1530,6 +1540,17 @@ def notify_reimbursement_paid(user_id, amount, method, req_title):
     )
     send_email(u['email'], f'Reimbursement processed: ${float(amount):.2f}',
         email_html('You Have Been Reimbursed!', paid_body))
+
+
+def notify_invoice_paid(user_id, amount, method, req_title):
+    """Tell the person who submitted a vendor invoice that it was paid."""
+    u = get_user_email(user_id)
+    if not u:
+        return
+    body = (f'<p>Hi {u["name"].split()[0]}, the vendor invoice for <strong>{req_title}</strong> '
+            f'(${float(amount):.2f}) has been paid{(" by " + method) if method else ""}.</p>'
+            '<p style="font-size:13px;color:#666">No action needed — this is just to let you know it\'s settled.</p>')
+    send_email(u['email'], f'Invoice paid: {req_title}', email_html('Invoice Paid', body))
 
 
 def notify_reimbursement_batch_paid(user_id, items, total, method):
@@ -1864,6 +1885,7 @@ def list_requests():
         # no is_sap column, so the UI's r.is_sap was always undefined and every
         # request displayed as a Company Purchase. Derive it here.
         r['is_sap'] = 1 if r.get('type') == 'sap' else 0
+        r['is_invoice'] = 1 if r.get('type') == 'invoice' else 0
         conn2 = get_db()
         receipts = conn2.execute('SELECT * FROM bb_receipts WHERE request_id=%s',(r['id'],)).fetchall()
         r['receipts'] = [dict(rec) for rec in receipts]
@@ -1896,8 +1918,10 @@ def create_request():
     u = current_user()
     data = request.json
     is_sap   = 1 if data.get('is_sap') else 0
-    req_type = 'sap' if is_sap else 'pre_approval'
-    is_emergency = 1 if data.get('is_emergency') else 0
+    req_type = 'invoice' if data.get('type') == 'invoice' else ('sap' if is_sap else 'pre_approval')
+    if req_type == 'invoice' and not (data.get('vendor') or '').strip():
+        return jsonify({'error': 'Enter the vendor who sent the invoice'}), 400
+    is_emergency = 1 if data.get('is_emergency') and req_type == 'sap' else 0
     purchase_method = data.get('purchase_method', 'in_store')
     item_url = data.get('item_url', '')
     budget_id = data.get('budget_id') or None
@@ -1921,6 +1945,10 @@ def create_request():
     )
     row = conn.execute('SELECT lastval() AS id').fetchone()
     req_id = row['id']
+    if req_type == 'invoice':
+        conn.execute('UPDATE bb_purchase_requests SET invoice_number=%s, invoice_due_date=%s WHERE id=%s',
+                     ((data.get('invoice_number') or '').strip()[:60] or None,
+                      (data.get('invoice_due_date') or '').strip()[:10] or None, req_id))
     conn.commit()
     conn.close()
     log_action(u['id'], 'submitted_request', 'request', req_id, data['title'])
@@ -2031,8 +2059,8 @@ def approve_request(rid):
                               WHERE id=%s''',
                          (new_status, note, u['id'], now, actual, next_step, now, rid))
             conn.execute('UPDATE bb_budgets SET spent=spent+%s WHERE id=%s', (actual, req['budget_id']))
-            conn.execute('INSERT INTO bb_reimbursements (request_id,user_id,amount) VALUES (%s,%s,%s)',
-                         (rid, req['submitted_by'], actual))
+            conn.execute('INSERT INTO bb_reimbursements (request_id,user_id,amount,payee_type) VALUES (%s,%s,%s,%s)',
+                         (rid, req['submitted_by'], actual, 'vendor' if req.get('type') == 'invoice' else 'submitter'))
         else:
             new_status = chain[next_step]
             conn.execute(f'UPDATE bb_purchase_requests SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,approval_step=%s,updated_at=%s WHERE id=%s',
@@ -2132,7 +2160,7 @@ def list_reimbursements():
     if u['role'] in ('admin','treasurer','president'):
         rows = conn.execute('''SELECT rb.*,u.name as user_name,u.email as user_email,
                                pr.title,pr.estimated_cost,pr.actual_cost,pr.is_emergency,
-                               pr.type as request_type,
+                               pr.type as request_type, pr.vendor, pr.invoice_number, pr.invoice_due_date,
                                COALESCE(NULLIF(pr.reimb_method,''), u.reimb_method) as reimb_method,
                                COALESCE(NULLIF(pr.reimb_handle,''), u.reimb_handle) as reimb_handle,
                                u.reimb_method as profile_reimb_method, u.reimb_handle as profile_reimb_handle
@@ -2143,7 +2171,7 @@ def list_reimbursements():
     else:
         rows = conn.execute('''SELECT rb.*,u.name as user_name,u.email as user_email,
                                pr.title,pr.estimated_cost,pr.actual_cost,pr.is_emergency,
-                               pr.type as request_type,
+                               pr.type as request_type, pr.vendor, pr.invoice_number, pr.invoice_due_date,
                                COALESCE(NULLIF(pr.reimb_method,''), u.reimb_method) as reimb_method,
                                COALESCE(NULLIF(pr.reimb_handle,''), u.reimb_handle) as reimb_handle,
                                u.reimb_method as profile_reimb_method, u.reimb_handle as profile_reimb_handle
@@ -2188,10 +2216,13 @@ def mark_paid(rid):
                  (now,rb['request_id']))
     conn.commit(); conn.close()
     log_action(u['id'],'marked_paid','reimbursement',rid)
+    req_title = req['title'] if req else 'your purchase'
+    if rb.get('payee_type') == 'vendor':
+        notify_invoice_paid(rb['user_id'], rb['amount'], method, req_title)
+        return jsonify({'ok':True})
     if data.get('save_default'):
         _save_reimb_default(rb['user_id'], method, handle)
         log_action(u['id'],'set_reimb_default','user',rb['user_id'],method)
-    req_title = req['title'] if req else 'your purchase'
     notify_reimbursement_paid(rb['user_id'], rb['amount'], method, req_title)
     return jsonify({'ok':True})
 
@@ -2217,6 +2248,8 @@ def mark_paid_batch():
         conn.close(); return jsonify({'error':'Some of these were already paid — refresh and try again'}),400
     if len({r['user_id'] for r in rows}) != 1:
         conn.close(); return jsonify({'error':'A single payment can only cover one person'}),400
+    if any(r.get('payee_type') == 'vendor' for r in rows):
+        conn.close(); return jsonify({'error':'Vendor invoices are paid one at a time'}),400
     method = data.get('method') or ''
     handle = data.get('handle') or ''
     extra  = data.get('notes','')
