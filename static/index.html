@@ -2718,7 +2718,7 @@ async function loadConcessionsEstimator(pid, refresh=false) {
   else windowNote = `<span>The show has opened. You can still re-run it to top up.</span>`;
 
   body.innerHTML = `
-    <p class="text-xs text-muted mb-12">Sets the <strong>Concessions</strong> department budget from expected attendance: buy snacks for about <strong>40%</strong> and drinks for about <strong>50%</strong> of the audience. Best run within ${c.window_days} days of opening, when ticket sales give a reliable headcount.</p>
+    <p class="text-xs text-muted mb-12">Tells you how much to buy from expected attendance: snacks for about <strong>40%</strong> of the audience and drinks for about <strong>50%</strong> (450 tickets → 180 snacks, 225 drinks). Add what you usually pay per item and it can set the <strong>Concessions</strong> department budget too. Best run within ${c.window_days} days of opening, when ticket sales give a reliable headcount.</p>
     <div class="form-row">
       <div class="form-group"><label class="form-label">First performance</label>
         <input type="date" id="conc-date" class="form-input" value="${(c.first_performance_date||'').slice(0,10)}" ${dis} onchange="saveConcSettings(${pid}, true)"></div>
@@ -2736,12 +2736,15 @@ async function loadConcessionsEstimator(pid, refresh=false) {
         <input type="number" id="conc-dpct" class="form-input" min="0" max="100" step="1" value="${pct(c.drink_pct)}" oninput="concPreview()" ${dis}></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Cost per snack</label>
+      <div class="form-group"><label class="form-label">What we pay per snack <span class="text-xs text-muted">(avg.)</span></label>
         <input type="number" id="conc-scost" class="form-input" min="0" step="0.01" placeholder="e.g. 0.75" value="${c.snack_unit_cost ?? ''}" oninput="concPreview()" ${dis}>
-        <div class="text-xs text-muted mt-4">What you pay per item, not the sale price</div></div>
-      <div class="form-group"><label class="form-label">Cost per drink</label>
-        <input type="number" id="conc-dcost" class="form-input" min="0" step="0.01" placeholder="e.g. 0.50" value="${c.drink_unit_cost ?? ''}" oninput="concPreview()" ${dis}></div>
+        <div class="text-xs text-muted mt-4">Pack price ÷ items in the pack — e.g. a 24-pack of candy for $18 = $0.75</div></div>
+      <div class="form-group"><label class="form-label">What we pay per drink <span class="text-xs text-muted">(avg.)</span></label>
+        <input type="number" id="conc-dcost" class="form-input" min="0" step="0.01" placeholder="e.g. 0.25" value="${c.drink_unit_cost ?? ''}" oninput="concPreview()" ${dis}>
+        <div class="text-xs text-muted mt-4">e.g. a 24-case of water for $6 = $0.25. Not the price we sell it for.</div></div>
     </div>
+    <div class="text-xs text-muted mb-12" style="margin-top:-4px">Only needed to set a dollar budget — the shopping counts work without them. Remembered for next show.</div>
+    <div id="conc-prices" class="mb-12"></div>
     <div id="conc-preview" class="mb-12"></div>
     ${c.department ? `<div class="text-xs text-muted mb-8">Current Concessions budget: <strong>${fmtMoney(c.department.total_amount)}</strong> · ${fmtMoney(c.department.spent)} spent${c.department.pending?` · ${fmtMoney(c.department.pending)} pending`:''}</div>`
                    : `<div class="text-xs text-muted mb-8">No Concessions department yet — applying will create one.</div>`}
@@ -2755,6 +2758,93 @@ async function loadConcessionsEstimator(pid, refresh=false) {
           title="${!c.budget_approved ? 'The show budget must be approved first' : (!c.window_open ? `Opens ${c.window_days} days before the first performance` : '')}">Set Concessions budget</button>
       </div>` : ''}`;
   concPreview();
+  loadConcPrices();
+}
+
+// ── Current store prices (looked up by the server, with sources) ──────────
+let _concPricePoll = null;
+async function loadConcPrices() {
+  const el = document.getElementById('conc-prices'); if (!el) return;
+  let d;
+  try { d = await api('GET', '/concessions/prices'); } catch(e) { el.innerHTML = ''; return; }
+  clearTimeout(_concPricePoll);
+  if (d.running) _concPricePoll = setTimeout(loadConcPrices, 4000);
+  const canEdit = !!_conc?.can_manage;
+  const L = d.latest, R = L?.result;
+  const money = v => v == null ? '—' : '$' + Number(v).toFixed(2);
+  const ago = n => n == null ? '' : n === 0 ? 'today' : n === 1 ? 'yesterday' : `${n} days ago`;
+  let html = `<div class="panel" style="padding:10px 14px">
+    <div class="flex flex-center" style="gap:8px;flex-wrap:wrap">
+      <div class="text-xs fw-600 text-muted">CURRENT STORE PRICES</div>
+      ${canEdit && d.configured ? `<button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:11px;padding:2px 8px" ${d.running?'disabled':''} onclick="refreshConcPrices()">${d.running ? 'Checking prices…' : (L ? 'Check again' : 'Look up current prices')}</button>` : ''}
+    </div>`;
+  if (!d.configured) {
+    html += `<div class="text-xs text-muted mt-4">Price lookup isn’t set up. An admin can turn it on by adding <code>ANTHROPIC_API_KEY</code> to BloomBooks in Railway.</div>`;
+  } else if (d.running && !L) {
+    html += `<div class="text-xs text-muted mt-4">Searching Amazon, Costco, Target, and Walmart — this takes a minute or two. You can leave this page.</div>`;
+  } else if (!L) {
+    html += `<div class="text-xs text-muted mt-4">Look up what our usual items cost right now at Amazon, Costco, Target, and Walmart. Every price links to the store page it came from.</div>`;
+  }
+  if (L) {
+    html += `
+      <div class="text-xs mt-4 ${L.stale ? '' : 'text-muted'}" style="${L.stale ? 'color:var(--amber)' : ''}">
+        Checked ${fmtDate(L.finished_at)} (${ago(L.age_days)})${L.started_by_name ? ` by ${L.started_by_name}` : ''} · ${(R.stores||[]).join(', ')}${L.stale ? ' — prices may have changed; consider checking again' : ''}
+        ${d.running ? ' · <strong>checking again now…</strong>' : ''}
+      </div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px;align-items:flex-end">
+        <div><div class="fw-600" style="font-size:18px">${money(R.snack_avg)}</div><div class="text-xs text-muted">typical per snack</div></div>
+        <div><div class="fw-600" style="font-size:18px">${money(R.drink_avg)}</div><div class="text-xs text-muted">typical per drink</div></div>
+        <div class="text-xs text-muted">Cheapest found: ${money(R.snack_cheapest_avg)} / ${money(R.drink_cheapest_avg)}</div>
+        ${canEdit && R.snack_avg != null && R.drink_avg != null ? `<button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="useConcPrices(${R.snack_avg},${R.drink_avg})">Use these</button>` : ''}
+      </div>
+      <details class="archive-fold" style="margin-top:8px"><summary>Sources (${R.items.reduce((n,i)=>n+i.listings.length,0)} listings)</summary>
+        <div class="table-wrap mt-4"><table class="text-xs" style="width:100%">
+          <thead><tr><th style="text-align:left">Item</th><th style="text-align:left">Store &amp; product</th><th>Price</th><th>Count</th><th>Per item</th></tr></thead>
+          <tbody>${R.items.map(i => i.listings.length ? i.listings.map((x, k) => `
+            <tr>
+              <td>${k === 0 ? `<span class="fw-600">${i.name}</span><div class="text-muted">${i.category} · typical ${money(i.typical)}</div>` : ''}</td>
+              <td><a href="${x.url}" target="_blank" rel="noopener" style="color:var(--teal)">${x.store}</a> — ${x.product}</td>
+              <td style="text-align:right">${money(x.price)}</td><td style="text-align:right">${x.units}</td><td style="text-align:right">${money(x.per_unit)}</td>
+            </tr>`).join('') : `<tr><td><span class="fw-600">${i.name}</span><div class="text-muted">${i.category}</div></td><td colspan="4" class="text-muted">No price with a source found</td></tr>`).join('')}
+          </tbody></table></div>
+        <div class="text-xs text-muted mt-4">“Typical” is the middle price across stores for each item, averaged over the items. Online prices can differ from shelf prices and change often${R.dropped ? `; ${R.dropped} result${R.dropped!==1?'s were':' was'} left out because its source couldn’t be confirmed` : ''}.</div>
+      </details>`;
+  }
+  if (d.last_error && !d.running) html += `<div class="text-xs mt-4" style="color:var(--red)">Last lookup didn’t finish: ${d.last_error}</div>`;
+  if (canEdit) html += `<details class="archive-fold" style="margin-top:4px" ontoggle="if(this.open)loadConcItems()"><summary>Items we price</summary><div id="conc-items" class="text-xs mt-4">Loading…</div></details>`;
+  html += `</div>`;
+  el.innerHTML = html;
+}
+async function refreshConcPrices() {
+  try { await api('POST', '/concessions/prices/refresh', {}); toast('Checking prices — this takes a minute or two.', 'info'); loadConcPrices(); }
+  catch(e) { toast(e.message, 'error'); }
+}
+function useConcPrices(snack, drink) {
+  document.getElementById('conc-scost').value = snack.toFixed(2);
+  document.getElementById('conc-dcost').value = drink.toFixed(2);
+  concPreview();
+  toast('Prices filled in — Save assumptions to keep them.', 'info');
+}
+async function loadConcItems() {
+  const el = document.getElementById('conc-items'); if (!el) return;
+  const items = await api('GET', '/concessions/items');
+  const row = i => `<div class="flex flex-center gap-8" style="padding:2px 0"><span class="badge" style="font-size:10px;background:var(--cream2);color:var(--ink2)">${i.category}</span><span>${i.name}</span>
+    <button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:10px;padding:0 6px" onclick="removeConcItem(${i.id})">×</button></div>`;
+  el.innerHTML = items.map(row).join('') + `
+    <div class="flex gap-8 mt-8">
+      <select id="conc-new-cat" class="form-select" style="width:auto;font-size:12px"><option value="snack">snack</option><option value="drink">drink</option></select>
+      <input id="conc-new-name" class="form-input" style="font-size:12px" placeholder="e.g. Skittles share size, 24 ct">
+      <button class="btn btn-outline btn-sm" onclick="addConcItem()">Add</button>
+    </div>
+    <div class="text-muted mt-4">Describe what you actually buy. Changes apply to the next price check.</div>`;
+}
+async function addConcItem() {
+  const name = document.getElementById('conc-new-name').value.trim();
+  const category = document.getElementById('conc-new-cat').value;
+  try { await api('POST', '/concessions/items', {name, category}); loadConcItems(); } catch(e) { toast(e.message, 'error'); }
+}
+async function removeConcItem(id) {
+  try { await api('DELETE', `/concessions/items/${id}`); loadConcItems(); } catch(e) { toast(e.message, 'error'); }
 }
 function addDays(iso, n) { const d = new Date(iso.slice(0,10)+'T12:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 function concInputs() {
@@ -2768,14 +2858,19 @@ function concPreview() {
   const su = Math.ceil(i.audience*i.snack_pct), du = Math.ceil(i.audience*i.drink_pct);
   const st = round2(su*i.snack_unit_cost), dt = round2(du*i.drink_unit_cost), tot = round2(st+dt);
   if (!i.audience) { el.innerHTML = ''; return; }
+  const haveCosts = i.snack_unit_cost > 0 && i.drink_unit_cost > 0;
   const after = _conc ? round2(_conc.unallocated + (_conc.department?.total_amount||0) - tot) : 0;
   el.innerHTML = `
-    <div class="panel" style="padding:10px 14px">
-      <div class="flex text-sm"><span>Snacks: ${su} × ${fmtMoney(i.snack_unit_cost)}</span><span style="margin-left:auto">${fmtMoney(st)}</span></div>
-      <div class="flex text-sm"><span>Drinks: ${du} × ${fmtMoney(i.drink_unit_cost)}</span><span style="margin-left:auto">${fmtMoney(dt)}</span></div>
-      <div class="flex text-sm fw-600" style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px"><span>Concessions budget</span><span style="margin-left:auto">${fmtMoney(tot)}</span></div>
-      ${(!i.snack_unit_cost || !i.drink_unit_cost) ? `<div class="text-xs mt-4" style="color:var(--amber)">Enter what you pay per snack and per drink to get a dollar amount.</div>` : ''}
-      ${_conc && after < 0 ? `<div class="text-xs mt-4" style="color:var(--red)">${fmtMoney(-after)} more than the show has left to allocate.</div>` : ''}
+    <div class="panel" style="padding:12px 14px">
+      <div class="text-xs text-muted fw-600 mb-8">SHOPPING LIST FOR ${i.audience} PEOPLE</div>
+      <div style="display:flex;gap:28px;flex-wrap:wrap">
+        <div><div style="font-size:24px;font-weight:700">${su}</div><div class="text-xs text-muted">snacks / candy</div></div>
+        <div><div style="font-size:24px;font-weight:700">${du}</div><div class="text-xs text-muted">drinks</div></div>
+        ${haveCosts ? `<div style="margin-left:auto;text-align:right"><div style="font-size:24px;font-weight:700">${fmtMoney(tot)}</div>
+          <div class="text-xs text-muted">${fmtMoney(st)} snacks + ${fmtMoney(dt)} drinks</div></div>` : ''}
+      </div>
+      ${!haveCosts ? `<div class="text-xs mt-8 text-muted">Add what we pay per item to turn this into a budget amount.</div>` : ''}
+      ${haveCosts && _conc && after < 0 ? `<div class="text-xs mt-8" style="color:var(--red)">${fmtMoney(-after)} more than the show has left to allocate.</div>` : ''}
     </div>`;
 }
 async function saveConcSettings(pid, quiet=false) {
