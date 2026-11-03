@@ -128,7 +128,7 @@ input[type=file]{display:none}
 <div class="tab-bar" id="tab-bar" style="display:none">
   <button class="tab-btn active" id="tab-receipt" onclick="switchTab('receipt')" style="font-size:12px">Receipt</button>
   <button class="tab-btn" id="tab-new" onclick="switchTab('new')" style="font-size:12px">Request</button>
-  <button class="tab-btn" id="tab-statements" onclick="switchTab('statements')" style="font-size:12px">Statements</button>
+  <button class="tab-btn" id="tab-statements" onclick="switchTab('statements')" style="font-size:12px">Expense Reports</button>
 </div>
 
 <div class="content" id="main-content">
@@ -151,6 +151,30 @@ let receiptSelectedId   = null;
 let newMethod = 'in_store';
 let newType   = 'pre_approval';
 let newFile   = null;
+
+// ── Multi-file receipts: one purchase can have several receipts/invoices ──
+const FILE_SLOTS = {
+  r:   {zone: 'r-upload-zone',   list: 'r-preview'},
+  n:   {zone: 'n-upload-zone',   list: 'n-preview'},
+  sit: {zone: 'sit-upload-zone', list: 'sit-file-name'},
+};
+const fileBins = {r: [], n: [], sit: []};
+function addFiles(key, input) {
+  fileBins[key] = [...fileBins[key], ...input.files];
+  input.value = '';
+  renderFileList(key);
+}
+function removeFile(key, i) { fileBins[key].splice(i, 1); renderFileList(key); }
+function renderFileList(key) {
+  const slot = FILE_SLOTS[key], files = fileBins[key];
+  document.getElementById(slot.zone)?.classList.toggle('has-file', files.length > 0);
+  const el = document.getElementById(slot.list); if (!el) return;
+  el.innerHTML = files.map((f, i) => `
+    <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding:8px 10px;background:var(--teal3);border-radius:var(--r-sm);font-size:13px;color:var(--teal)">
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">✓ ${f.name}</span>
+      <button type="button" onclick="removeFile('${key}',${i})" style="border:none;background:none;color:var(--ink3);font-size:18px;line-height:1;cursor:pointer" aria-label="Remove">×</button>
+    </div>`).join('') + (files.length ? `<div style="font-size:12px;color:var(--ink3);margin-top:6px">${files.length} file${files.length!==1?'s':''} · tap above to add more</div>` : '');
+}
 
 // Statement tab state
 let currentStatementId = null;
@@ -190,6 +214,7 @@ function renderTab() {
 // RECEIPT TAB
 // ══════════════════════════════════════════════
 function renderReceiptTab() {
+  fileBins.r = [];
   const u = pageData.user;
   const reqs = pageData.requests;
   const reqCards = reqs.length === 0
@@ -213,11 +238,11 @@ function renderReceiptTab() {
     </div>
     <div class="card"><div class="card-label">Select request</div><div class="card-body" style="padding-top:8px">${reqCards}</div></div>
     <div id="receipt-form" style="display:none">
-      <div class="card"><div class="card-label">Receipt photo</div><div class="card-body">
-        <div class="upload-zone" id="r-upload-zone" onclick="document.getElementById('r-file-input').click()">          <div class="upload-text">Take photo or choose file</div>
-          <div class="upload-sub">JPG, PNG, or PDF</div>
+      <div class="card"><div class="card-label">Receipts</div><div class="card-body">
+        <div class="upload-zone" id="r-upload-zone" onclick="document.getElementById('r-file-input').click()">          <div class="upload-text">Take photo or choose files</div>
+          <div class="upload-sub">JPG, PNG, or PDF · Add every receipt or invoice for this purchase — e.g. an order that shipped in parts.</div>
         </div>
-        <input type="file" id="r-file-input" accept="image/*,application/pdf" onchange="handleReceiptFile(this)">
+        <input type="file" id="r-file-input" accept="image/*,application/pdf" multiple onchange="addFiles('r',this)">
         <div id="r-preview"></div>
       </div></div>
       <div class="card"><div class="card-label">Details</div><div class="card-body">
@@ -265,12 +290,12 @@ async function submitReceipt() {
   const btn    = document.getElementById('r-submit-btn');
   errEl.style.display='none';
   if (!receiptSelectedId){ showRErr('Please select a request.'); return; }
-  if (!receiptSelectedFile){ showRErr('Please attach a receipt photo.'); return; }
+  if (!fileBins.r.length){ showRErr('Please attach at least one receipt.'); return; }
   if (!actual){ showRErr('Please enter the actual amount.'); return; }
   btn.disabled=true; btn.textContent='Submitting...';
   const fd=new FormData();
   fd.append('request_id',receiptSelectedId); fd.append('actual_cost',actual);
-  fd.append('note',note); fd.append('file',receiptSelectedFile);
+  fd.append('note',note); fileBins.r.forEach(f => fd.append('file', f));
   try {
     const r=await fetch(`/api/receipt/${token}/submit`,{method:'POST',body:fd});
     const d=await r.json();
@@ -284,6 +309,7 @@ function showRErr(msg){const e=document.getElementById('r-error');e.textContent=
 // NEW REQUEST TAB
 // ══════════════════════════════════════════════
 function renderNewRequestTab() {
+  fileBins.n = [];
   const u = pageData.user;
   const budgets = pageData.budgets||[];
   const trained = u.role === 'admin' || u.training_complete;
@@ -351,11 +377,12 @@ function renderNewRequestTab() {
         <div class="method-opt" id="nmethod-online" onclick="setNewMethod('online')"><div style="font-size:13px;font-weight:600">Online</div></div>
       </div>
       <div id="n-vendor-field" class="form-group" style="margin-top:10px">
-        <label class="form-label">Store / vendor</label>
-        <input type="text" id="n-vendor" class="form-input" placeholder="e.g. Joann Fabrics"></div>
+        <label class="form-label">Store / website</label>
+        <input type="text" id="n-vendor" class="form-input" placeholder="e.g. Amazon, Target, Joann Fabrics"></div>
       <div id="n-url-field" class="form-group" style="margin-top:10px;display:none">
-        <label class="form-label">Item link <span class="req">*</span></label>
-        <input type="url" id="n-item-url" class="form-input" placeholder="https://..." inputmode="url"></div>
+        <label class="form-label">Product or order link (optional)</label>
+        <input type="url" id="n-item-url" class="form-input" placeholder="https://..." inputmode="url">
+        <div class="form-hint">For a single online item. Ordered several things? Skip this and attach the invoices.</div></div>
     </div></div>
     <div id="n-sap-section" style="display:none">
       <div class="card"><div class="card-label">SAP details</div><div class="card-body">
@@ -383,11 +410,11 @@ function renderNewRequestTab() {
             <input type="text" id="n-reimb-handle" class="form-input" placeholder="Username or info"></div>
         </div>
       </div></div>
-      <div class="card"><div class="card-label">Receipt photo</div><div class="card-body">
-        <div class="upload-zone" id="n-upload-zone" onclick="document.getElementById('n-file-input').click()"><div class="upload-text">Take photo or choose file</div>
-          <div class="upload-sub">JPG, PNG, or PDF</div>
+      <div class="card"><div class="card-label">Receipts</div><div class="card-body">
+        <div class="upload-zone" id="n-upload-zone" onclick="document.getElementById('n-file-input').click()"><div class="upload-text">Take photo or choose files</div>
+          <div class="upload-sub">JPG, PNG, or PDF · Add every receipt or invoice for this purchase — e.g. an order that shipped in parts.</div>
         </div>
-        <input type="file" id="n-file-input" accept="image/*,application/pdf" onchange="handleNewFile(this)">
+        <input type="file" id="n-file-input" accept="image/*,application/pdf" multiple onchange="addFiles('n',this)">
         <div id="n-preview"></div>
       </div></div>
     </div>
@@ -421,7 +448,6 @@ function setNewMethod(method) {
   newMethod=method; const isOnline=method==='online';
   document.getElementById('nmethod-store').classList.toggle('active',!isOnline);
   document.getElementById('nmethod-online').classList.toggle('active',isOnline);
-  document.getElementById('n-vendor-field').style.display=isOnline?'none':'block';
   document.getElementById('n-url-field').style.display=isOnline?'block':'none';
 }
 
@@ -441,7 +467,7 @@ async function submitNewRequest() {
   const cost    = document.getElementById('n-cost')?.value||'';
   const budget  = document.getElementById('n-budget')?.value||'';
   const prodId  = document.getElementById('n-prod')?.value||'';
-  const vendor  = newMethod==='in_store'?(document.getElementById('n-vendor')?.value.trim()||''):'';
+  const vendor  = document.getElementById('n-vendor')?.value.trim()||'';
   const rawUrl  = newMethod==='online'?(document.getElementById('n-item-url')?.value.trim()||''):'';
   const itemUrl = rawUrl&&!rawUrl.match(/^https?:\/\//)?'https://'+rawUrl:rawUrl;
   const desc    = document.getElementById('n-desc')?.value.trim()||'';
@@ -456,8 +482,7 @@ async function submitNewRequest() {
   if (!title) { showNErr('Please describe what you\'re buying.'); return; }
   if (!cost)  { showNErr('Please enter the estimated cost.'); return; }
   if (!budget){ showNErr('Please select a budget or department.'); return; }
-  if (newMethod==='online'&&!itemUrl){ showNErr('Please provide a link to the item.'); return; }
-  if (newType==='sap'&&!newFile){ showNErr('Please attach a receipt for this purchase.'); return; }
+  if (newType==='sap'&&!fileBins.n.length){ showNErr('Please attach a receipt for this purchase.'); return; }
   if (isEmergency&&!authorizedBy){ showNErr('Please specify which Treasurer, President, or Vice President authorized this.'); return; }
   btn.disabled=true; btn.textContent='Submitting...';
   const fd=new FormData();
@@ -468,7 +493,7 @@ async function submitNewRequest() {
   fd.append('authorized_by',authorizedBy); fd.append('reimb_method',reimbMethod);
   fd.append('reimb_handle',reimbHandle);
   if (prodId) fd.append('production_id',prodId);
-  if (newType==='sap'&&newFile) fd.append('file',newFile);
+  if (newType==='sap') fileBins.n.forEach(f => fd.append('file', f));
   try {
     const r=await fetch(`/api/receipt/${token}/new-request`,{method:'POST',body:fd});
     const d=await r.json();
@@ -483,7 +508,7 @@ function showNErr(msg){const e=document.getElementById('n-error');e.textContent=
 // ══════════════════════════════════════════════
 async function renderStatementsTab() {
   const mc = document.getElementById('main-content');
-  mc.innerHTML = '<div class="loading"><div class="spinner"></div>Loading statements...</div>';
+  mc.innerHTML = '<div class="loading"><div class="spinner"></div>Loading expense reports...</div>';
   try {
     const r = await fetch(`/api/receipt/${token}/statements`);
     let statements = [];
@@ -493,10 +518,10 @@ async function renderStatementsTab() {
       mc.innerHTML = `
         <div class="user-greeting">
           <div class="user-av">${pageData.user.name.charAt(0).toUpperCase()}</div>
-          <div><div class="user-name">${pageData.user.name}</div><div class="user-sub">Purchase Statements</div></div>
+          <div><div class="user-name">${pageData.user.name}</div><div class="user-sub">Expense Reports</div></div>
         </div>
-        <div class="card"><div class="card-body" style="text-align:center;padding:24px">          <div class="fw-600 mb-8">Manage statements on desktop</div>
-          <p style="font-size:13px;color:var(--ink3);line-height:1.6">Create and manage purchase statements from the BloomBooks desktop app. Once submitted, you can attach receipts here on mobile.</p>
+        <div class="card"><div class="card-body" style="text-align:center;padding:24px">          <div class="fw-600 mb-8">Manage expense reports on desktop</div>
+          <p style="font-size:13px;color:var(--ink3);line-height:1.6">Create and manage expense reports from the BloomBooks desktop app. Once submitted, you can attach receipts here on mobile.</p>
         </div></div>
         <div class="card"><div class="card-label">Your open requests</div><div class="card-body" style="padding-top:8px">
           ${pageData.requests.length===0
@@ -517,10 +542,10 @@ async function renderStatementsTab() {
       mc.innerHTML = `
         <div class="user-greeting">
           <div class="user-av">${pageData.user.name.charAt(0).toUpperCase()}</div>
-          <div><div class="user-name">Statements</div><div class="user-sub">Group purchases together</div></div>
+          <div><div class="user-name">Expense Reports</div><div class="user-sub">Group purchases together</div></div>
         </div>
-        <button class="btn-primary mb-16" onclick="showMobileNewStatement()">+ New statement</button>
-        <div class="empty-note">No statements yet. Create one to group multiple purchases together.</div>`;
+        <button class="btn-primary mb-16" onclick="showMobileNewStatement()">+ New expense report</button>
+        <div class="empty-note">No expense reports yet. Use one for several separate purchases — different stores, days, or budgets.</div>`;
       return;
     }
 
@@ -530,9 +555,9 @@ async function renderStatementsTab() {
     mc.innerHTML = `
       <div class="user-greeting">
         <div class="user-av">${pageData.user.name.charAt(0).toUpperCase()}</div>
-        <div><div class="user-name">Statements</div><div class="user-sub">${statements.length} statement${statements.length!==1?'s':''}</div></div>
+        <div><div class="user-name">Expense Reports</div><div class="user-sub">${statements.length} expense report${statements.length!==1?'s':''}</div></div>
       </div>
-      <button class="btn-primary mb-16" onclick="showMobileNewStatement()">+ New statement</button>
+      <button class="btn-primary mb-16" onclick="showMobileNewStatement()">+ New expense report</button>
       ${statements.map(s=>{
         const isDraft = s.status==='draft';
         const color   = statusColors[s.status]||'var(--ink3)';
@@ -565,14 +590,14 @@ function showMobileNewStatement() {
   overlay.innerHTML=`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
       <button onclick="this.closest('div[style]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer">←</button>
-      <h2 style="font-size:17px;font-weight:700">New statement</h2>
+      <h2 style="font-size:17px;font-weight:700">New expense report</h2>
     </div>
     <div class="form-group"><label class="form-label">Title <span class="req">*</span></label>
       <input type="text" id="mob-st-title" class="form-input" placeholder="e.g. Spring Musical Costume Purchases"></div>
     <div class="form-group"><label class="form-label">Description (optional)</label>
-      <textarea id="mob-st-desc" class="form-textarea" placeholder="What is this statement for?"></textarea></div>
+      <textarea id="mob-st-desc" class="form-textarea" placeholder="What is this expense report for?"></textarea></div>
     <div id="mob-st-error" class="form-error" style="display:none;margin-bottom:10px"></div>
-    <button class="btn-primary" onclick="createMobileStatement(this)">Create statement</button>`;
+    <button class="btn-primary" onclick="createMobileStatement(this)">Create expense report</button>`;
   document.body.appendChild(overlay);
 }
 
@@ -587,14 +612,15 @@ async function createMobileStatement(btn) {
     const r=await fetch(`/api/receipt/${token}/statements`,{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({title,description:desc})});
     const d=await r.json();
-    if (!r.ok){errEl.textContent=d.error||'Failed';errEl.style.display='block';btn.disabled=false;btn.textContent='Create statement';return;}
+    if (!r.ok){errEl.textContent=d.error||'Failed';errEl.style.display='block';btn.disabled=false;btn.textContent='Create expense report';return;}
     document.querySelector('div[style*="position:fixed"]')?.remove();
-    toast('Statement created!');
+    toast('Expense report created!');
     renderStatementsTab();
-  } catch(e){errEl.textContent='Network error';errEl.style.display='block';btn.disabled=false;btn.textContent='Create statement';}
+  } catch(e){errEl.textContent='Network error';errEl.style.display='block';btn.disabled=false;btn.textContent='Create expense report';}
 }
 
 function showMobileAddItem(sid) {
+  fileBins.sit = [];
   currentStatementId = sid;
   const budgets = pageData.budgets||[];
   let budgetOpts='<option value="">Select budget...</option>';
@@ -606,7 +632,7 @@ function showMobileAddItem(sid) {
   overlay.innerHTML=`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
       <button onclick="this.closest('div[style]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer">←</button>
-      <h2 style="font-size:17px;font-weight:700">Add item to statement</h2>
+      <h2 style="font-size:17px;font-weight:700">Add purchase to report</h2>
     </div>
     <div class="type-toggle" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
       <div class="type-opt active-pre" id="sit-pre" onclick="setSItemType('pre_approval')"><div class="type-opt-title">Company Purchase Request</div></div>
@@ -620,8 +646,8 @@ function showMobileAddItem(sid) {
       <div class="form-group"><label class="form-label">Budget <span class="req">*</span></label>
         <select id="sit-budget" class="form-select">${budgetOpts}</select></div>
     </div>
-    <div class="form-group"><label class="form-label">Vendor</label>
-      <input type="text" id="sit-vendor" class="form-input" placeholder="Store or website"></div>
+    <div class="form-group"><label class="form-label">Store / website</label>
+      <input type="text" id="sit-vendor" class="form-input" placeholder="e.g. Amazon, Target"></div>
     <div id="sit-sap-fields" style="display:none">
       <div class="form-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -641,12 +667,12 @@ function showMobileAddItem(sid) {
         <div class="form-group"><label class="form-label">Account info</label>
           <input type="text" id="sit-reimb-handle" class="form-input" placeholder="Username"></div>
       </div>
-      <div class="form-group"><label class="form-label">Receipt photo <span class="req">*</span></label>
-        <div class="upload-zone" id="sit-upload-zone" onclick="document.getElementById('sit-receipt-file').click()">          <div class="upload-text" style="font-size:13px">Tap to attach receipt</div>
+      <div class="form-group"><label class="form-label">Receipts <span class="req">*</span></label>
+        <div class="upload-zone" id="sit-upload-zone" onclick="document.getElementById('sit-receipt-file').click()">          <div class="upload-text" style="font-size:13px">Tap to attach receipts</div>
+          <div class="upload-sub">Add every receipt or invoice for this purchase — e.g. an order that shipped in parts.</div>
         </div>
-        <input type="file" id="sit-receipt-file" accept="image/*,application/pdf" style="display:none"
-          onchange="document.getElementById('sit-upload-zone').classList.toggle('has-file',!!this.files[0]);document.getElementById('sit-file-name').textContent=this.files[0]?.name||''">
-        <div id="sit-file-name" style="font-size:12px;color:var(--teal);margin-top:5px"></div>
+        <input type="file" id="sit-receipt-file" accept="image/*,application/pdf" multiple style="display:none" onchange="addFiles('sit',this)">
+        <div id="sit-file-name"></div>
       </div>
     </div>
     <div id="sit-error" class="form-error" style="display:none;margin-bottom:10px"></div>
@@ -672,12 +698,12 @@ async function addMobileStatementItem(sid, btn) {
   const reimbM   = document.getElementById('sit-reimb-method')?.value||'';
   const reimbH   = document.getElementById('sit-reimb-handle')?.value.trim()||'';
   const errEl    = document.getElementById('sit-error');
-  const sitFile=document.getElementById('sit-receipt-file')?.files[0];
+  const sitFiles=fileBins.sit;
   errEl.style.display='none';
   if (!title){errEl.textContent='Description is required';errEl.style.display='block';return;}
   if (!cost){errEl.textContent='Amount is required';errEl.style.display='block';return;}
   if (!budget){errEl.textContent='Please select a budget';errEl.style.display='block';return;}
-  if (statementItemType==='sap'&&!sitFile){errEl.textContent='Please attach a receipt for this purchase';errEl.style.display='block';return;}
+  if (statementItemType==='sap'&&!sitFiles.length){errEl.textContent='Please attach a receipt for this purchase';errEl.style.display='block';return;}
   if (isEmergency&&!auth){errEl.textContent='Please specify which Treasurer, President, or Vice President authorized this';errEl.style.display='block';return;}
   btn.disabled=true;btn.textContent='Adding...';
   try {
@@ -686,12 +712,13 @@ async function addMobileStatementItem(sid, btn) {
     fd.append('estimated_cost',cost);fd.append('budget_id',budget);
     fd.append('vendor',vendor);fd.append('is_emergency',isEmergency?'1':'0');fd.append('emergency_reason',sapReason);
     fd.append('authorized_by',auth);fd.append('reimb_method',reimbM);fd.append('reimb_handle',reimbH);
-    if(statementItemType==='sap'&&sitFile)fd.append('file',sitFile);
+    if(statementItemType==='sap')sitFiles.forEach(f=>fd.append('file',f));
     const r=await fetch(`/api/receipt/${token}/statements/${sid}/items`,{method:'POST',body:fd});
     const d=await r.json();
     if (!r.ok){errEl.textContent=d.error||'Failed';errEl.style.display='block';btn.disabled=false;btn.textContent='Add item';return;}
     document.querySelector('div[style*="position:fixed"]')?.remove();
-    toast('Item added!');
+    fileBins.sit=[];
+    toast('Purchase added!');
     renderStatementsTab();
   } catch(e){errEl.textContent='Network error';errEl.style.display='block';btn.disabled=false;btn.textContent='Add item';}
 }
@@ -701,7 +728,7 @@ async function submitMobileStatement(sid) {
     const r=await fetch(`/api/receipt/${token}/statements/${sid}/submit`,{method:'POST'});
     const d=await r.json();
     if (!r.ok){alert(d.error||'Submission failed');return;}
-    toast('Statement submitted!');
+    toast('Expense report submitted!');
     renderStatementsTab();
   } catch(e){alert('Network error — please try again.');}
 }
@@ -732,6 +759,7 @@ function showError(msg) {
 }
 
 function showSuccess(type) {
+  fileBins.r = []; fileBins.n = [];
   const msgs={
     receipt:{icon:'',title:'Receipt submitted!',body:'Your receipt has been attached. The team will review it and process your reimbursement once approved.'},
     new:{icon:'',title:'Request submitted!',body:"Your purchase request is now in the approval queue. You'll get an update by email."},

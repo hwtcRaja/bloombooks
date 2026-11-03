@@ -373,7 +373,7 @@ tr:hover td{background:var(--cream)}
         </button>
         <button class="sb-item" data-page="statements" onclick="nav('statements')">
           <svg class="sb-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
-          Statements
+          Expense Reports
           <span class="sb-badge" id="sb-statements-badge" style="display:none;background:var(--amber)">!</span>
         </button>
         <button class="sb-item" data-page="reimbursements" onclick="nav('reimbursements')">
@@ -596,7 +596,7 @@ function nav(page) {
     reimbursements: 'Reimbursements', approvals: 'Approval Queue', 'all-requests': 'All Requests',
     budgets: 'Budget Tracker', users: 'Users', training: 'Purchasing Training',
     'training-admin': 'Manage Training', productions: 'Productions',
-    statements: 'Purchase Statements', profile: 'My Profile', 'pricing-calc': 'Pricing Calculator',
+    statements: 'Expense Reports', profile: 'My Profile', 'pricing-calc': 'Pricing Calculator',
     contractors: 'Contractors'
   };
   document.getElementById('tb-title').textContent = titles[page] || page;
@@ -887,6 +887,7 @@ async function renderMyRequests() {
 
 // ── New Request ────────────────────────────────────────────────────────────────
 async function renderNewRequest() {
+  fileBins.new = [];
   if (currentUser.role !== 'admin' && !currentUser.training_complete) {
     document.getElementById('content').innerHTML = `
       <div class="training-gate">        <div><h3>Training required before submitting requests</h3>
@@ -967,13 +968,13 @@ async function renderNewRequest() {
             </div>
           </div>
           <div id="vendor-field" class="form-group">
-            <label class="form-label">Store / vendor name</label>
-            <input type="text" id="req-vendor" class="form-input" placeholder="e.g. Home Depot, Joann Fabrics">
+            <label class="form-label">Store / website</label>
+            <input type="text" id="req-vendor" class="form-input" placeholder="e.g. Amazon, Target, Home Depot">
           </div>
           <div id="url-field" class="form-group hidden">
-            <label class="form-label">Link to item <span class="req">*</span></label>
+            <label class="form-label">Product or order link (optional)</label>
             <input type="url" id="req-item-url" class="form-input" placeholder="https://www.amazon.com/...">
-            <div class="form-hint">Paste the direct product URL so approvers can review the item</div>
+            <div class="form-hint">For a single online item, so approvers can see it. Ordered several things? Skip this and attach the invoices.</div>
           </div>
             </div>
           </div>
@@ -1034,12 +1035,13 @@ async function renderNewRequest() {
             </div>
           </div>
           <div id="sap-upload" class="hidden">
-            <label class="form-label">Receipt <span class="req">*</span></label>
+            <label class="form-label">Receipts <span class="req">*</span></label>
+            <div class="form-hint" style="margin:-2px 0 6px">Add every receipt or invoice for this purchase — e.g. an order that shipped in parts. One checkout = one request.</div>
             <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()">
               <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto;opacity:.5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-              <p>Click to upload receipt photo or PDF</p>
+              <p>Click to upload receipt photos or PDFs — select several at once</p>
             </div>
-            <input type="file" id="receipt-file-new" accept="image/*,application/pdf" class="hidden" onchange="handleNewFileSelect(this)">
+            <input type="file" id="receipt-file-new" accept="image/*,application/pdf" multiple class="hidden" onchange="addFiles('new',this)">
             <div id="receipt-preview-new" class="mt-8"></div>
           </div>
           <div id="req-error" class="form-error hidden mt-8"></div>
@@ -1144,12 +1146,29 @@ function populateBudgetDropdown(prodId) {
   }
 }
 
-let newReceiptFile = null;
-function handleNewFileSelect(input) {
-  newReceiptFile = input.files[0];
-  if (!newReceiptFile) return;
-  const prev = document.getElementById('receipt-preview-new');
-  prev.innerHTML = `<div class="flex flex-center gap-8 mt-8"><span class="badge badge-approved">✓ ${newReceiptFile.name}</span></div>`;
+// ── Multi-file receipts: one purchase can have several receipts/invoices ──
+const FILE_LISTS = {new: 'receipt-preview-new', sitem: 'sitem-file-name'};
+const fileBins = {new: [], sitem: []};
+function addFiles(key, input) {
+  fileBins[key] = [...fileBins[key], ...input.files];
+  input.value = '';
+  renderFileList(key);
+}
+function removeFile(key, i) { fileBins[key].splice(i, 1); renderFileList(key); }
+function renderFileList(key) {
+  const el = document.getElementById(FILE_LISTS[key]); if (!el) return;
+  const files = fileBins[key];
+  el.innerHTML = files.map((f, i) => `
+    <div class="flex flex-center gap-8 mt-4">
+      <span class="badge badge-approved" style="max-width:100%;overflow:hidden;text-overflow:ellipsis">✓ ${f.name}</span>
+      <button type="button" class="btn btn-outline btn-sm" style="font-size:11px;padding:1px 7px" onclick="removeFile('${key}',${i})" aria-label="Remove">×</button>
+    </div>`).join('') + (files.length ? `<div class="text-xs text-muted mt-4">${files.length} file${files.length!==1?'s':''} — click above to add more</div>` : '');
+}
+async function uploadFiles(rid, files) {
+  if (!files.length) return;
+  const fd = new FormData();
+  files.forEach(f => fd.append('file', f));
+  await api('POST', `/requests/${rid}/receipts`, fd, true);
 }
 
 function toggleSAP(isSAP) {
@@ -1174,7 +1193,6 @@ function toggleEmergencyFields(isEmergency) {
 
 function togglePurchaseMethod(method) {
   const isOnline = method === 'online';
-  document.getElementById('vendor-field').classList.toggle('hidden', isOnline);
   document.getElementById('url-field').classList.toggle('hidden', !isOnline);
   document.getElementById('method-store').style.border = isOnline ? '2px solid var(--border)' : '2px solid var(--teal)';
   document.getElementById('method-store').style.background = isOnline ? '' : 'var(--teal3)';
@@ -1194,7 +1212,7 @@ async function submitRequest() {
   const reimbMethod  = document.getElementById('req-reimb-method')?.value || '';
   const reimbHandle  = document.getElementById('req-reimb-handle')?.value.trim() || '';
   const method = document.querySelector('input[name="purchase-method"]:checked')?.value || 'in_store';
-  const vendor  = method === 'in_store' ? (document.getElementById('req-vendor')?.value.trim() || '') : '';
+  const vendor  = document.getElementById('req-vendor')?.value.trim() || '';
   const rawUrl  = method === 'online' ? (document.getElementById('req-item-url')?.value.trim() || '') : '';
   const itemUrl = rawUrl && !rawUrl.match(/^https?:\/\//) ? 'https://' + rawUrl : rawUrl;
   const prodEl  = document.getElementById('req-production');
@@ -1205,14 +1223,11 @@ async function submitRequest() {
   if (!title || !cost || !budget) {
     errEl.textContent = 'Please fill in all required fields.'; errEl.classList.remove('hidden'); return;
   }
-  if (isSAP && !newReceiptFile) {
+  if (isSAP && !fileBins.new.length) {
     errEl.textContent = 'Please attach a receipt for this purchase.'; errEl.classList.remove('hidden'); return;
   }
   if (isEmergency && !authorizedBy) {
     errEl.textContent = 'Please specify which Treasurer, President, or Vice President authorized this.'; errEl.classList.remove('hidden'); return;
-  }
-  if (method === 'online' && !itemUrl) {
-    errEl.textContent = 'Please provide a link to the item for online purchases.'; errEl.classList.remove('hidden'); return;
   }
   try {
     const d = await api('POST', '/requests', {
@@ -1229,13 +1244,9 @@ async function submitRequest() {
       purchase_method: method,
       item_url: itemUrl
     });
-    if (isSAP && newReceiptFile) {
-      const fd = new FormData();
-      fd.append('file', newReceiptFile);
-      await api('POST', `/requests/${d.id}/receipts`, fd, true);
-    }
+    if (isSAP) await uploadFiles(d.id, fileBins.new);
     toast('Request submitted! You\'ll hear back by email.', 'success');
-    newReceiptFile = null;
+    fileBins.new = [];
     nav('my-requests');
     refreshBadges();
   } catch(e) {
@@ -1269,8 +1280,8 @@ async function showRequestDetail(rid) {
 
   const uploadHtml = (r.status !== 'denied') ? `
     <div class="mt-16">
-      <button class="btn btn-outline btn-sm" onclick="document.getElementById('receipt-upload-modal').click()">+ Add receipt</button>
-      <input type="file" id="receipt-upload-modal" accept="image/*,application/pdf" class="hidden" onchange="uploadReceiptForRequest(${r.id}, this)">
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('receipt-upload-modal').click()">+ Add receipts</button>
+      <input type="file" id="receipt-upload-modal" accept="image/*,application/pdf" multiple class="hidden" onchange="uploadReceiptForRequest(${r.id}, this)">
     </div>` : '';
 
   const approvalHtml = canApproveNow ? `
@@ -1306,7 +1317,7 @@ async function showRequestDetail(rid) {
         <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div>${r.budget_name?`<div class="mt-2">${budgetLeftLine(r)}</div>`:''}</div>
         <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.production_name ? `Production expense — ${r.production_name}` : 'Org expense'}</div><div class="text-xs text-muted">${r.is_sap ? 'Reimbursement (SAP) — already purchased' : 'Company Purchase Request — HWTC pays'}</div></div>
       </div>
-      ${r.item_url ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Item link</div><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:13px;color:var(--teal);word-break:break-all">${r.item_url}</a></div>` : ''}
+      ${r.item_url ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Product / order link</div><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:13px;color:var(--teal);word-break:break-all">${r.item_url}</a></div>` : ''}
       ${r.description ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Description</div><div class="text-sm">${r.description}</div></div>` : ''}
       ${r.is_emergency ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Emergency authorization</div><div class="text-sm" style="color:var(--amber)">${r.emergency_reason||''}${r.authorized_by?' — authorized by '+r.authorized_by:''}</div></div>` : ''}
       ${r.producer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Producer note</div><div class="text-sm">${r.producer_note}</div></div>` : ''}
@@ -1357,13 +1368,11 @@ async function doDeleteRequest(rid) {
 }
 
 async function uploadReceiptForRequest(rid, input) {
-  const file = input.files[0];
-  if (!file) return;
-  const fd = new FormData();
-  fd.append('file', file);
+  const files = [...input.files];
+  if (!files.length) return;
   try {
-    await api('POST', `/requests/${rid}/receipts`, fd, true);
-    toast('Receipt uploaded!', 'success');
+    await uploadFiles(rid, files);
+    toast(files.length > 1 ? `${files.length} receipts uploaded!` : 'Receipt uploaded!', 'success');
     closeModal();
     refreshBadges();
   } catch(e) {
@@ -1447,7 +1456,7 @@ async function renderApprovals() {
             <span class="text-xs text-muted" style="margin-left:auto">${fmtDate(r.submitted_at)}</span>
           </div>
           <div class="fw-600 mb-1" style="line-height:1.3">${r.title}</div>
-          <div class="text-xs text-muted mb-5">${r.submitter_name}${r.budget_name?' · '+r.budget_name:''}</div>
+          <div class="text-xs text-muted mb-5">${r.submitter_name}${r.vendor?' · '+r.vendor:''}${r.budget_name?' · '+r.budget_name:''}${(r.receipts||[]).length>1?` · ${r.receipts.length} receipts`:''}</div>
           <div class="fw-600" style="font-size:15px">${fmtMoney(r.estimated_cost)}${r.actual_cost&&r.actual_cost!==r.estimated_cost?` <span class="text-xs text-muted">actual ${fmtMoney(r.actual_cost)}</span>`:''}</div>
           ${r.item_url?`<div class="mt-4"><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:11px;color:var(--teal)">View item →</a></div>`:''}
           ${r.sap_reason?`<div class="mt-5 text-xs" style="color:var(--amber);background:var(--amber-bg);padding:4px 7px;border-radius:var(--r-sm)">SAP: ${r.sap_reason}</div>`:''}
@@ -2659,6 +2668,11 @@ async function renderBudgetApprovalTab() {
               <button class="btn btn-outline btn-sm" onclick="loadSuggestedAllocations(${p.id})">Use suggested split</button>
               <button class="btn btn-outline btn-sm" onclick="addAllocRow()">+ Add line</button>
               <button class="btn btn-outline btn-sm" onclick="distributeRemainingAllocation()">Distribute leftover among departments</button>
+              <button class="btn btn-outline btn-sm" onclick="addConcessionsPlaceholder()">+ Concessions placeholder</button>
+            </div>
+            <div class="text-xs mb-12" style="background:var(--amber-bg);border:1px solid var(--amber);border-radius:6px;padding:8px 12px;color:var(--ink2)">
+              <strong>Selling concessions?</strong> Add a <strong>Concessions</strong> line now ($0 is fine) and leave some of the budget unallocated for it.
+              The real amount comes from the <strong>Concessions estimator</strong> below, which opens 10 days before the first performance, when ticket sales give a reliable headcount.
             </div>
             <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
               <div style="flex:1;min-width:280px">
@@ -2668,11 +2682,123 @@ async function renderBudgetApprovalTab() {
               <div id="ba-alloc-chart" style="flex-shrink:0"></div>
             </div>
             <button class="btn btn-primary btn-sm mt-8" onclick="submitAllocations(${p.id})">Create department budgets</button>`}
-      </div></div>`;
+      </div></div>
 
+    <div class="card mt-16" id="conc-card"><div class="card-header"><span class="card-title">Concessions estimator</span></div>
+      <div class="card-body" id="conc-body"><div class="text-xs text-muted">Loading…</div></div></div>`;
+
+  loadConcessionsEstimator(p.id);
   if (approved) { _allocRows = []; renderAllocRows(); }
   else if (status==='draft' || status==='sent_back' || status==='pending_approval') { loadSuggestedTotalBudgetHint(p.id); }
   if (!locked && status!=='pending_approval') loadSuggestedConcessionsHint(p.id);
+}
+
+
+// ── Concessions estimator ────────────────────────────────────────────────────
+// Rule of thumb: snacks for ~40% of the audience, drinks for ~50%. Opens
+// 10 days before the first performance, when ticket sales are a real headcount.
+let _conc = null;
+function addConcessionsPlaceholder() {
+  if (_allocRows.some(r => (r.name||'').trim().toLowerCase() === 'concessions')) { toast('Concessions is already in the list.', 'info'); return; }
+  _allocRows.push({name: 'Concessions', amount: 0});
+  renderAllocRows();
+}
+async function loadConcessionsEstimator(pid, refresh=false) {
+  const body = document.getElementById('conc-body'); if (!body) return;
+  try { _conc = await api('GET', `/productions/${pid}/concessions-estimate${refresh?'?refresh=1':''}`); }
+  catch(e) { body.innerHTML = `<div class="text-xs text-muted">${e.message}</div>`; return; }
+  const c = _conc, rc = c.rolecall;
+  const rcAudience = rc ? rc.tickets_sold + rc.comps : null;
+  const pct = v => Math.round((v||0)*100);
+  const dis = c.can_manage ? '' : 'disabled';
+  let windowNote;
+  if (!c.first_performance_date) windowNote = `<span>Set the first performance date to schedule the estimator.</span>`;
+  else if (c.days_until > c.window_days) windowNote = `<span>Opens on <strong>${fmtDate(addDays(c.first_performance_date, -c.window_days)+'T12:00:00')}</strong> — ${c.days_until - c.window_days} day${c.days_until-c.window_days!==1?'s':''} from now. You can set it up now; running it waits for a reliable ticket count.</span>`;
+  else if (c.days_until >= 0) windowNote = `<span style="color:var(--teal)"><strong>Open</strong> — ${c.days_until === 0 ? 'opening is today' : `${c.days_until} day${c.days_until!==1?'s':''} until opening`}.</span>`;
+  else windowNote = `<span>The show has opened. You can still re-run it to top up.</span>`;
+
+  body.innerHTML = `
+    <p class="text-xs text-muted mb-12">Sets the <strong>Concessions</strong> department budget from expected attendance: buy snacks for about <strong>40%</strong> and drinks for about <strong>50%</strong> of the audience. Best run within ${c.window_days} days of opening, when ticket sales give a reliable headcount.</p>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">First performance</label>
+        <input type="date" id="conc-date" class="form-input" value="${(c.first_performance_date||'').slice(0,10)}" ${dis} onchange="saveConcSettings(${pid}, true)"></div>
+      <div class="form-group"><label class="form-label">&nbsp;</label><div class="text-xs" style="padding-top:8px">${windowNote}</div></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Expected audience</label>
+        <input type="number" id="conc-aud" class="form-input" min="0" step="1" value="${rcAudience ?? (c.last_estimate?.audience||'')}" oninput="concPreview()" ${dis}>
+        <div class="text-xs text-muted mt-4">${rc
+          ? `RoleCall: ${rc.tickets_sold} sold + ${rc.comps} comps${rc.as_of?` · as of ${rc.as_of}`:''} · <a href="#" onclick="event.preventDefault();loadConcessionsEstimator(${pid}, true)">Refresh</a>`
+          : 'Not linked to RoleCall ticketing — enter the headcount.'}</div></div>
+      <div class="form-group"><label class="form-label">Snacks for % of audience</label>
+        <input type="number" id="conc-spct" class="form-input" min="0" max="100" step="1" value="${pct(c.snack_pct)}" oninput="concPreview()" ${dis}></div>
+      <div class="form-group"><label class="form-label">Drinks for % of audience</label>
+        <input type="number" id="conc-dpct" class="form-input" min="0" max="100" step="1" value="${pct(c.drink_pct)}" oninput="concPreview()" ${dis}></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Cost per snack</label>
+        <input type="number" id="conc-scost" class="form-input" min="0" step="0.01" placeholder="e.g. 0.75" value="${c.snack_unit_cost ?? ''}" oninput="concPreview()" ${dis}>
+        <div class="text-xs text-muted mt-4">What you pay per item, not the sale price</div></div>
+      <div class="form-group"><label class="form-label">Cost per drink</label>
+        <input type="number" id="conc-dcost" class="form-input" min="0" step="0.01" placeholder="e.g. 0.50" value="${c.drink_unit_cost ?? ''}" oninput="concPreview()" ${dis}></div>
+    </div>
+    <div id="conc-preview" class="mb-12"></div>
+    ${c.department ? `<div class="text-xs text-muted mb-8">Current Concessions budget: <strong>${fmtMoney(c.department.total_amount)}</strong> · ${fmtMoney(c.department.spent)} spent${c.department.pending?` · ${fmtMoney(c.department.pending)} pending`:''}</div>`
+                   : `<div class="text-xs text-muted mb-8">No Concessions department yet — applying will create one.</div>`}
+    <div class="text-xs text-muted mb-8">Unallocated in this show's budget: <strong>${fmtMoney(c.unallocated)}</strong></div>
+    ${c.last_estimated_at ? `<div class="text-xs text-muted mb-8">Last applied ${fmtDate(c.last_estimated_at)}: ${c.last_estimate.audience} people → ${fmtMoney(c.last_estimate.total)}</div>` : ''}
+    ${c.can_manage ? `
+      <div class="flex" style="gap:8px;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" onclick="saveConcSettings(${pid})">Save assumptions</button>
+        <button class="btn btn-primary btn-sm" id="conc-apply" onclick="applyConcEstimate(${pid})"
+          ${!c.window_open || !c.budget_approved ? 'disabled' : ''}
+          title="${!c.budget_approved ? 'The show budget must be approved first' : (!c.window_open ? `Opens ${c.window_days} days before the first performance` : '')}">Set Concessions budget</button>
+      </div>` : ''}`;
+  concPreview();
+}
+function addDays(iso, n) { const d = new Date(iso.slice(0,10)+'T12:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
+function concInputs() {
+  const v = id => parseFloat(document.getElementById(id)?.value);
+  return { audience: Math.max(0, Math.round(v('conc-aud')||0)), snack_pct: (v('conc-spct')||0)/100, drink_pct: (v('conc-dpct')||0)/100,
+           snack_unit_cost: v('conc-scost')||0, drink_unit_cost: v('conc-dcost')||0 };
+}
+function concPreview() {
+  const el = document.getElementById('conc-preview'); if (!el) return;
+  const i = concInputs();
+  const su = Math.ceil(i.audience*i.snack_pct), du = Math.ceil(i.audience*i.drink_pct);
+  const st = round2(su*i.snack_unit_cost), dt = round2(du*i.drink_unit_cost), tot = round2(st+dt);
+  if (!i.audience) { el.innerHTML = ''; return; }
+  const after = _conc ? round2(_conc.unallocated + (_conc.department?.total_amount||0) - tot) : 0;
+  el.innerHTML = `
+    <div class="panel" style="padding:10px 14px">
+      <div class="flex text-sm"><span>Snacks: ${su} × ${fmtMoney(i.snack_unit_cost)}</span><span style="margin-left:auto">${fmtMoney(st)}</span></div>
+      <div class="flex text-sm"><span>Drinks: ${du} × ${fmtMoney(i.drink_unit_cost)}</span><span style="margin-left:auto">${fmtMoney(dt)}</span></div>
+      <div class="flex text-sm fw-600" style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px"><span>Concessions budget</span><span style="margin-left:auto">${fmtMoney(tot)}</span></div>
+      ${(!i.snack_unit_cost || !i.drink_unit_cost) ? `<div class="text-xs mt-4" style="color:var(--amber)">Enter what you pay per snack and per drink to get a dollar amount.</div>` : ''}
+      ${_conc && after < 0 ? `<div class="text-xs mt-4" style="color:var(--red)">${fmtMoney(-after)} more than the show has left to allocate.</div>` : ''}
+    </div>`;
+}
+async function saveConcSettings(pid, quiet=false) {
+  const i = concInputs();
+  try {
+    await api('PUT', `/productions/${pid}/concessions-estimate`, {
+      first_performance_date: document.getElementById('conc-date').value || null,
+      snack_pct: i.snack_pct, drink_pct: i.drink_pct,
+      snack_unit_cost: i.snack_unit_cost || null, drink_unit_cost: i.drink_unit_cost || null });
+    if (!quiet) toast('Concessions assumptions saved.', 'success');
+    loadConcessionsEstimator(pid);
+  } catch(e) { toast(e.message, 'error'); }
+}
+async function applyConcEstimate(pid) {
+  const i = concInputs();
+  const rc = _conc?.rolecall;
+  const source = rc && i.audience === rc.tickets_sold + rc.comps ? 'rolecall' : 'manual';
+  try {
+    const res = await api('POST', `/productions/${pid}/concessions-estimate/apply`, {...i, audience_source: source});
+    toast(`Concessions budget set to ${fmtMoney(res.estimate.total)}${res.previous ? ` (was ${fmtMoney(res.previous)})` : ''}.`, 'success');
+    await loadBudgets();
+    openProductionDetail(pid);
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 async function loadSuggestedConcessionsHint(pid) {
@@ -3731,7 +3857,7 @@ const REIMB_HANDLE_LABELS = {
 
 async function renderStatements() {
   document.getElementById('tb-actions').innerHTML =
-    `<button class="btn btn-primary btn-sm" onclick="showNewStatementModal()">+ New statement</button>`;
+    `<button class="btn btn-primary btn-sm" onclick="showNewStatementModal()">+ New expense report</button>`;
   try {
     const [statements, prods] = await Promise.all([
       api('GET', '/statements'),
@@ -3746,9 +3872,9 @@ async function renderStatements() {
     };
     if (statements.length === 0) {
       document.getElementById('content').innerHTML = `
-        <div class="empty"><h3>No statements yet</h3>
-        <p>Create a statement to group multiple purchases together and submit them all at once.</p>
-        <button class="btn btn-primary mt-16" onclick="showNewStatementModal()">Create first statement</button></div>`;
+        <div class="empty"><h3>No expense reports yet</h3>
+        <p>Several separate purchases — different stores, days, or budgets — submitted together. One checkout with several receipts? Use a single request instead and attach them all.</p>
+        <button class="btn btn-primary mt-16" onclick="showNewStatementModal()">Create first expense report</button></div>`;
       return;
     }
     document.getElementById('content').innerHTML = statements.map(s => {
@@ -3774,7 +3900,7 @@ async function renderStatements() {
           </div>
         </div>
         <div class="card-body">
-          ${s.items.length === 0 ? `<div class="text-xs text-muted">No items yet — add items to this statement.</div>` :
+          ${s.items.length === 0 ? `<div class="text-xs text-muted">No items yet — add each purchase to this report.</div>` :
             s.items.map(item => {
               const [iBadgeCls, iBadgeLabel] = statusBadgeMap[item.status] || ['badge-pending', item.status];
               return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
@@ -3793,8 +3919,8 @@ async function renderStatements() {
             }).join('')}
           <div class="flex gap-8 mt-12 flex-wrap">
             ${isDraft?`
-              <button class="btn btn-outline btn-sm" onclick="showAddStatementItemModal(${s.id})">+ Add item</button>
-              <button class="btn btn-primary btn-sm" onclick="submitStatement(${s.id})" ${s.items.length===0?'disabled':''}>Submit statement →</button>
+              <button class="btn btn-outline btn-sm" onclick="showAddStatementItemModal(${s.id})">+ Add purchase</button>
+              <button class="btn btn-primary btn-sm" onclick="submitStatement(${s.id})" ${s.items.length===0?'disabled':''}>Submit expense report →</button>
               <button class="btn btn-danger btn-sm" onclick="deleteStatement(${s.id})">Delete draft</button>` : ''}
             ${s.status==='needs_revision'||needsRevision?`
               <button class="btn btn-outline btn-sm" onclick="showResubmitStatementModal(${s.id})">Fix &amp; resubmit</button>`:''
@@ -3810,18 +3936,18 @@ async function renderStatements() {
 
 function showNewStatementModal() {
   const html = `
-    <div class="modal-header"><span class="modal-title">New purchase statement</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-header"><span class="modal-title">New expense report</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <p class="text-sm text-muted mb-16">A statement lets you group multiple purchases together and submit them all at once — useful for a whole production process.</p>
-      <div class="form-group"><label class="form-label">Statement title <span class="req">*</span></label>
+      <p class="text-sm text-muted mb-16">Several separate purchases — different stores, days, or budgets — submitted together. One checkout with several receipts? Use a single request instead and attach them all.</p>
+      <div class="form-group"><label class="form-label">Report title <span class="req">*</span></label>
         <input type="text" id="st-title" class="form-input" placeholder="e.g. Spring Musical Costume Purchases"></div>
       <div class="form-group"><label class="form-label">Description</label>
-        <textarea id="st-desc" class="form-textarea" placeholder="What is this statement for?"></textarea></div>
+        <textarea id="st-desc" class="form-textarea" placeholder="What is this expense report for?"></textarea></div>
       <div id="st-error" class="form-error hidden"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="createStatement()">Create statement</button>
+      <button class="btn btn-primary" onclick="createStatement()">Create expense report</button>
     </div>`;
   showModal(html);
 }
@@ -3834,18 +3960,20 @@ async function createStatement() {
   if (!title) { errEl.textContent='Title is required'; errEl.classList.remove('hidden'); return; }
   try {
     await api('POST', '/statements', {title, description:desc});
-    toast('Statement created! Now add your items.','success');
+    toast('Expense report created! Now add each purchase.','success');
     closeModal();
     renderStatements();
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
 }
 
 function showAddStatementItemModal(sid) {
+  fileBins.sitem = [];
   const html = buildItemFormHTML(sid, null);
   showModal(html, 'large');
 }
 
 function editStatementItem(sid, item) {
+  fileBins.sitem = [];
   const html = buildItemFormHTML(sid, item);
   showModal(html, 'large');
 }
@@ -3856,7 +3984,7 @@ function buildItemFormHTML(sid, item) {
   const methodOpts = REIMB_METHODS.map(m =>
     `<option value="${m}" ${item?.reimb_method===m?'selected':''}>${m}</option>`).join('');
   return `
-    <div class="modal-header"><span class="modal-title">${isEdit?'Edit item':'Add item to statement'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-header"><span class="modal-title">${isEdit?'Edit item':'Add purchase to report'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       <div class="type-toggle" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
         <div class="type-opt ${!isSAP?'active-pre':''}" id="sitem-pre" onclick="setItemType('pre_approval')">
@@ -3870,8 +3998,8 @@ function buildItemFormHTML(sid, item) {
       <div class="form-row">
         <div class="form-group"><label class="form-label">Amount <span class="req">*</span></label>
           <input type="number" id="sitem-cost" class="form-input" value="${item?.estimated_cost||''}" placeholder="0.00" step="0.01"></div>
-        <div class="form-group"><label class="form-label">Vendor / store</label>
-          <input type="text" id="sitem-vendor" class="form-input" value="${item?.vendor||''}" placeholder="e.g. Joann Fabrics"></div>
+        <div class="form-group"><label class="form-label">Store / website</label>
+          <input type="text" id="sitem-vendor" class="form-input" value="${item?.vendor||''}" placeholder="e.g. Amazon, Target"></div>
       </div>
       <div class="form-group">
         <label class="form-label">Purchase method</label>
@@ -3882,8 +4010,9 @@ function buildItemFormHTML(sid, item) {
       </div>
       <input type="hidden" id="sitem-method" value="${item?.purchase_method||'in_store'}">
       <div id="sitem-url-field" class="form-group ${item?.purchase_method==='online'?'':'hidden'}">
-        <label class="form-label">Item link</label>
-        <input type="url" id="sitem-url" class="form-input" value="${item?.item_url||''}" placeholder="https://..."></div>
+        <label class="form-label">Product or order link (optional)</label>
+        <input type="url" id="sitem-url" class="form-input" value="${item?.item_url||''}" placeholder="https://...">
+        <div class="form-hint">For a single online item. Ordered several things? Skip this and attach the invoices.</div></div>
       <div id="sitem-sap-fields" class="${isSAP?'':'hidden'}">
         <div class="form-group">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -3899,14 +4028,14 @@ function buildItemFormHTML(sid, item) {
             <div class="form-hint">Emergency purchases must be authorized by the Treasurer, President, or Vice President</div></div>
         </div>
         <div class="form-group">
-          <label class="form-label">Receipt photo <span class="req">*</span></label>
+          <label class="form-label">Receipts <span class="req">*</span></label>
+          <div class="form-hint" style="margin:-2px 0 6px">Add every receipt or invoice for this purchase — e.g. an order that shipped in parts.</div>
           <div class="upload-area" onclick="document.getElementById('sitem-receipt-file').click()" style="padding:14px;text-align:center;cursor:pointer">
             <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto 4px;display:block;opacity:.4"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-            <span class="text-xs text-muted">Click to attach receipt photo or PDF</span>
+            <span class="text-xs text-muted">Click to attach receipt photos or PDFs — select several at once</span>
           </div>
-          <input type="file" id="sitem-receipt-file" accept="image/*,application/pdf" class="hidden"
-            onchange="document.getElementById('sitem-file-name').textContent=this.files[0]?.name||''">
-          <div id="sitem-file-name" class="text-xs mt-4" style="color:var(--teal)"></div>
+          <input type="file" id="sitem-receipt-file" accept="image/*,application/pdf" multiple class="hidden" onchange="addFiles('sitem',this)">
+          <div id="sitem-file-name"></div>
         </div>
       </div>
       <hr class="divider">
@@ -3979,7 +4108,7 @@ function getItemFormData() {
     authorized_by:  isEmergency ? (document.getElementById('sitem-auth')?.value.trim()||'') : '',
     reimb_method:   document.getElementById('sitem-reimb-method').value,
     reimb_handle:   document.getElementById('sitem-reimb-handle').value.trim(),
-    _file:          document.getElementById('sitem-receipt-file')?.files[0]||null,
+    _files:         [...fileBins.sitem],
   };
 }
 
@@ -3989,18 +4118,14 @@ async function saveStatementItem(sid) {
   errEl.classList.add('hidden');
   if (!data.title) { errEl.textContent='Description is required'; errEl.classList.remove('hidden'); return; }
   if (!data.estimated_cost) { errEl.textContent='Amount is required'; errEl.classList.remove('hidden'); return; }
-  if (data.type==='sap'&&!data._file) { errEl.textContent='Please attach a receipt for this purchase'; errEl.classList.remove('hidden'); return; }
+  if (data.type==='sap'&&!data._files.length) { errEl.textContent='Please attach a receipt for this purchase'; errEl.classList.remove('hidden'); return; }
   if (data.is_emergency&&!data.authorized_by) { errEl.textContent='Please specify which Treasurer, President, or Vice President authorized this'; errEl.classList.remove('hidden'); return; }
   try {
-    const {_file, ...payload} = data;
+    const {_files, ...payload} = data;
     const res = await api('POST', `/statements/${sid}/items`, payload);
-    // Upload receipt if provided
-    if (_file && res.request_id) {
-      const fd = new FormData();
-      fd.append('file', _file);
-      await api('POST', `/requests/${res.request_id}/receipts`, fd, true);
-    }
-    toast('Item added!','success');
+    if (_files.length && res.request_id) await uploadFiles(res.request_id, _files);
+    fileBins.sitem = [];
+    toast('Purchase added!','success');
     closeModal();
     renderStatements();
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
@@ -4009,7 +4134,10 @@ async function saveStatementItem(sid) {
 async function saveItemEdit(sid, rid) {
   const data = getItemFormData();
   try {
-    await api('PATCH', `/statements/${sid}/items/${rid}`, data);
+    const {_files, ...payload} = data;
+    await api('PATCH', `/statements/${sid}/items/${rid}`, payload);
+    if (_files.length) await uploadFiles(rid, _files);
+    fileBins.sitem = [];
     toast('Item updated!','success');
     closeModal();
     renderStatements();
@@ -4027,7 +4155,7 @@ async function deleteStatementItem(sid, rid) {
 async function submitStatement(sid) {
   try {
     await api('POST', `/statements/${sid}/submit`);
-    toast('Statement submitted! Items are now in the approval queue.','success');
+    toast('Expense report submitted! Each purchase is now in the approval queue.','success');
     renderStatements();
     refreshBadges();
   } catch(e) { toast(e.message,'error'); }
@@ -4036,7 +4164,7 @@ async function submitStatement(sid) {
 async function deleteStatement(sid) {
   try {
     await api('DELETE', `/statements/${sid}`);
-    toast('Statement deleted.','info');
+    toast('Expense report deleted.','info');
     renderStatements();
   } catch(e) { toast(e.message,'error'); }
 }
