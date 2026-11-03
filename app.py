@@ -112,6 +112,9 @@ class DBWrapper:
     def commit(self):
         self._conn.commit()
 
+    def rollback(self):
+        self._conn.rollback()
+
     def close(self):
         self._conn.close()
 
@@ -4815,19 +4818,80 @@ def send_member_receipt_link(pid, uid):
         return jsonify({'error': err or 'Failed to send'}), 500
     return jsonify({'ok': True, 'phone': phone})
 
+# Tables whose rows simply belong to the user and go away with them. Every
+# other reference to bb_users (audit log, "created by", "approved by", ...)
+# is kept and just loses the name, so history stays intact.
+USER_OWNED_TABLES = {'bb_production_members', 'bb_budget_members', 'bb_training_completions'}
+
+def _user_fk_columns(conn):
+    """Every foreign-key column that points at bb_users, read from Postgres
+    itself so new tables are covered automatically."""
+    rows = conn.execute("""SELECT c.conrelid::regclass::text AS tbl, a.attname AS col, NOT a.attnotnull AS nullable
+                           FROM pg_constraint c
+                           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                           WHERE c.contype = 'f' AND c.confrelid = 'bb_users'::regclass""").fetchall()
+    return [dict(r) for r in rows]
+
+def _user_footprint(conn, uid):
+    one = lambda q: conn.execute(q, (uid,)).fetchone()['n']
+    return {
+        'requests':       one('SELECT COUNT(*) AS n FROM bb_purchase_requests WHERE submitted_by=%s'),
+        'paid_out':       one("SELECT COUNT(*) AS n FROM bb_reimbursements WHERE user_id=%s AND status='paid'"),
+        'expense_reports': one('SELECT COUNT(*) AS n FROM bb_statements WHERE created_by=%s'),
+    }
+
 @app.route('/api/users/<int:uid>', methods=['DELETE'])
 def delete_user(uid):
+    """Delete a user. If they have purchase requests or expense reports, the
+    first call returns 409 with a summary; calling again with ?force=1 deletes
+    those too (reversing any budget spend), which is what you want for test
+    accounts. Everything else that mentions them is kept, minus the name."""
     err = require_auth(['admin','treasurer','president'])
     if err: return err
     u = current_user()
     if u['id'] == uid:
         return jsonify({'error': 'You cannot delete your own account'}), 400
+    force = request.args.get('force') == '1'
     conn = get_db()
-    conn.execute('DELETE FROM bb_production_members WHERE user_id=%s', (uid,))
-    conn.execute('DELETE FROM bb_budget_members WHERE user_id=%s', (uid,))
-    conn.execute('DELETE FROM bb_users WHERE id=%s', (uid,))
-    conn.commit(); conn.close()
-    log_action(u['id'], 'deleted_user', 'user', uid)
+    target = conn.execute('SELECT id, name FROM bb_users WHERE id=%s', (uid,)).fetchone()
+    if not target:
+        conn.close(); return jsonify({'error': 'User not found'}), 404
+    fp = _user_footprint(conn, uid)
+    if (fp['requests'] or fp['expense_reports']) and not force:
+        conn.close()
+        parts = []
+        if fp['requests']: parts.append(f"{fp['requests']} purchase request{'s' if fp['requests'] != 1 else ''}")
+        if fp['expense_reports']: parts.append(f"{fp['expense_reports']} expense report{'s' if fp['expense_reports'] != 1 else ''}")
+        return jsonify({'error': f"{target['name']} has {' and '.join(parts)}.", 'footprint': fp, 'needs_force': True}), 409
+    try:
+        # 1. Their requests (test data): undo budget spend, then remove the request and what hangs off it
+        for req in [dict(r) for r in conn.execute('SELECT * FROM bb_purchase_requests WHERE submitted_by=%s', (uid,)).fetchall()]:
+            if req['status'] in ('approved', 'reimbursed') and req.get('budget_id') and req.get('actual_cost'):
+                conn.execute('UPDATE bb_budgets SET spent=GREATEST(0,spent-%s) WHERE id=%s', (req['actual_cost'], req['budget_id']))
+            conn.execute('DELETE FROM bb_receipts WHERE request_id=%s', (req['id'],))
+            conn.execute('DELETE FROM bb_reimbursements WHERE request_id=%s', (req['id'],))
+            conn.execute('UPDATE bb_contractor_payments SET request_id=NULL WHERE request_id=%s', (req['id'],))
+            conn.execute('DELETE FROM bb_statement_items WHERE request_id=%s', (req['id'],))
+            conn.execute('DELETE FROM bb_purchase_requests WHERE id=%s', (req['id'],))
+        for st in conn.execute('SELECT id FROM bb_statements WHERE created_by=%s', (uid,)).fetchall():
+            conn.execute('DELETE FROM bb_statement_items WHERE statement_id=%s', (st['id'],))
+            conn.execute('DELETE FROM bb_statements WHERE id=%s', (st['id'],))
+        # 2. Every other reference: owned rows go, the rest keep their history without the name
+        for fk in _user_fk_columns(conn):
+            tbl, col = fk['tbl'], fk['col']
+            if tbl in USER_OWNED_TABLES or not fk['nullable']:
+                conn.execute(f'DELETE FROM {tbl} WHERE {col}=%s', (uid,))
+            else:
+                conn.execute(f'UPDATE {tbl} SET {col}=NULL WHERE {col}=%s', (uid,))
+        conn.execute('DELETE FROM bb_users WHERE id=%s', (uid,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); conn.close()
+        app.logger.error(f'delete_user {uid} failed: {e}')
+        return jsonify({'error': f'Could not delete {target["name"]}: {str(e).splitlines()[0][:200]}'}), 500
+    conn.close()
+    log_action(u['id'], 'deleted_user', 'user', None,
+               f"{target['name']} (#{uid})" + (f" with {fp['requests']} requests, {fp['expense_reports']} expense reports" if force else ''))
     return jsonify({'ok': True})
 
 @app.route('/api/users/<int:uid>/receipt-token/regenerate', methods=['POST'])
