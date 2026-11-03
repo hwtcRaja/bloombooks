@@ -2860,7 +2860,7 @@ function renderConcShop() {
       </div>
       ${!P.configured ? `<div class="text-xs text-muted mt-4">Automatic price lookup isn’t set up (an admin can add <code>ANTHROPIC_API_KEY</code> in Railway). You can still enter prices yourself.</div>`
         : `<div class="text-xs text-muted mt-4">Searches ${(P.stores||[]).join(', ')}. ★ marks the lowest price per item; every option links to its store page.${needCheck && !P.running ? ` ${needCheck} checked item${needCheck!==1?'s have':' has'} no recent prices.` : ''}</div>`}
-      ${P.last_error && !P.running ? `<div class="text-xs mt-4" style="color:var(--red)">Last price check didn’t finish: ${P.last_error}</div>` : ''}
+      ${P.last_error && !P.running ? `<div class="text-xs mt-4" style="color:var(--red)">Price check problem: ${escHtmlBB(P.last_error)}</div>` : ''}
       <div class="table-wrap mt-8"><table class="text-sm" style="width:100%">
         <thead><tr><th style="text-align:left">Item</th><th style="text-align:left">Qty</th><th style="text-align:left">Product</th><th></th><th style="text-align:right">Packs</th><th style="text-align:right">Cost</th></tr></thead>
         <tbody>${section('snack','Snacks')}${section('drink','Drinks')}</tbody>
