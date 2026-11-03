@@ -2712,7 +2712,7 @@ async function loadConcessionsEstimator(pid, refresh=false) {
   const pct = v => Math.round((v||0)*100);
   const dis = c.can_manage ? '' : 'disabled';
   let windowNote;
-  if (!c.first_performance_date) windowNote = `<span>Set the first performance date to schedule the estimator.</span>`;
+  if (!c.first_performance_date) windowNote = `<span>${c.rolecall_linked ? 'No performances in RoleCall ticketing yet — they’ll show up here once tickets are set up, or enter the date.' : 'Set the first performance date to schedule the estimator.'}</span>`;
   else if (c.days_until > c.window_days) windowNote = `<span>Opens on <strong>${fmtDate(addDays(c.first_performance_date, -c.window_days)+'T12:00:00')}</strong> — ${c.days_until - c.window_days} day${c.days_until-c.window_days!==1?'s':''} from now. You can set it up now; running it waits for a reliable ticket count.</span>`;
   else if (c.days_until >= 0) windowNote = `<span style="color:var(--teal)"><strong>Open</strong> — ${c.days_until === 0 ? 'opening is today' : `${c.days_until} day${c.days_until!==1?'s':''} until opening`}.</span>`;
   else windowNote = `<span>The show has opened. You can still re-run it to top up.</span>`;
@@ -2721,7 +2721,7 @@ async function loadConcessionsEstimator(pid, refresh=false) {
     <p class="text-xs text-muted mb-12">Tells you how much to buy from expected attendance: snacks for about <strong>40%</strong> of the audience and drinks for about <strong>50%</strong> (450 tickets → 180 snacks, 225 drinks). Add what you usually pay per item and it can set the <strong>Concessions</strong> department budget too. Best run within ${c.window_days} days of opening, when ticket sales give a reliable headcount.</p>
     <div class="form-row">
       <div class="form-group"><label class="form-label">First performance</label>
-        <input type="date" id="conc-date" class="form-input" value="${(c.first_performance_date||'').slice(0,10)}" ${dis} onchange="saveConcSettings(${pid}, true)"></div>
+        ${concDateField(c, pid, dis)}</div>
       <div class="form-group"><label class="form-label">&nbsp;</label><div class="text-xs" style="padding-top:8px">${windowNote}</div></div>
     </div>
     <div class="form-row">
@@ -2735,7 +2735,11 @@ async function loadConcessionsEstimator(pid, refresh=false) {
       <div class="form-group"><label class="form-label">Drinks for % of audience</label>
         <input type="number" id="conc-dpct" class="form-input" min="0" max="100" step="1" value="${pct(c.drink_pct)}" oninput="concPreview()" ${dis}></div>
     </div>
-    <div class="form-row">
+    <div id="conc-preview" class="mb-12"></div>
+    <div id="conc-shop" class="mb-12"></div>
+    <details class="archive-fold mb-12" ${c.plan && Object.values(c.plan.items||{}).some(x=>x.on) ? '' : (c.snack_unit_cost!=null ? 'open' : '')}>
+      <summary>Quick estimate without a shopping list</summary>
+    <div class="form-row mt-8">
       <div class="form-group"><label class="form-label">What we pay per snack <span class="text-xs text-muted">(avg.)</span></label>
         <input type="number" id="conc-scost" class="form-input" min="0" step="0.01" placeholder="e.g. 0.75" value="${c.snack_unit_cost ?? ''}" oninput="concPreview()" ${dis}>
         <div class="text-xs text-muted mt-4">Pack price ÷ items in the pack — e.g. a 24-pack of candy for $18 = $0.75</div></div>
@@ -2743,108 +2747,202 @@ async function loadConcessionsEstimator(pid, refresh=false) {
         <input type="number" id="conc-dcost" class="form-input" min="0" step="0.01" placeholder="e.g. 0.25" value="${c.drink_unit_cost ?? ''}" oninput="concPreview()" ${dis}>
         <div class="text-xs text-muted mt-4">e.g. a 24-case of water for $6 = $0.25. Not the price we sell it for.</div></div>
     </div>
-    <div class="text-xs text-muted mb-12" style="margin-top:-4px">Only needed to set a dollar budget — the shopping counts work without them. Remembered for next show.</div>
-    <div id="conc-prices" class="mb-12"></div>
-    <div id="conc-preview" class="mb-12"></div>
+    <div class="text-xs text-muted" style="margin-top:-4px">Used only when no items are checked above. Remembered for next show.</div>
+    </details>
     ${c.department ? `<div class="text-xs text-muted mb-8">Current Concessions budget: <strong>${fmtMoney(c.department.total_amount)}</strong> · ${fmtMoney(c.department.spent)} spent${c.department.pending?` · ${fmtMoney(c.department.pending)} pending`:''}</div>`
                    : `<div class="text-xs text-muted mb-8">No Concessions department yet — applying will create one.</div>`}
     <div class="text-xs text-muted mb-8">Unallocated in this show's budget: <strong>${fmtMoney(c.unallocated)}</strong></div>
     ${c.last_estimated_at ? `<div class="text-xs text-muted mb-8">Last applied ${fmtDate(c.last_estimated_at)}: ${c.last_estimate.audience} people → ${fmtMoney(c.last_estimate.total)}</div>` : ''}
     ${c.can_manage ? `
       <div class="flex" style="gap:8px;flex-wrap:wrap">
-        <button class="btn btn-outline btn-sm" onclick="saveConcSettings(${pid})">Save assumptions</button>
+        <button class="btn btn-outline btn-sm" onclick="saveConcSettings(${pid})">Save</button>
         <button class="btn btn-primary btn-sm" id="conc-apply" onclick="applyConcEstimate(${pid})"
           ${!c.window_open || !c.budget_approved ? 'disabled' : ''}
           title="${!c.budget_approved ? 'The show budget must be approved first' : (!c.window_open ? `Opens ${c.window_days} days before the first performance` : '')}">Set Concessions budget</button>
       </div>` : ''}`;
+  _concPlan = c.plan && c.plan.items ? c.plan : {items: {}};
   concPreview();
-  loadConcPrices();
+  loadConcShop();
 }
 
-// ── Current store prices (looked up by the server, with sources) ──────────
-let _concPricePoll = null;
-async function loadConcPrices() {
-  const el = document.getElementById('conc-prices'); if (!el) return;
-  let d;
-  try { d = await api('GET', '/concessions/prices'); } catch(e) { el.innerHTML = ''; return; }
-  clearTimeout(_concPricePoll);
-  if (d.running) _concPricePoll = setTimeout(loadConcPrices, 4000);
-  const canEdit = !!_conc?.can_manage;
-  const L = d.latest, R = L?.result;
-  const money = v => v == null ? '—' : '$' + Number(v).toFixed(2);
-  const ago = n => n == null ? '' : n === 0 ? 'today' : n === 1 ? 'yesterday' : `${n} days ago`;
-  let html = `<div class="panel" style="padding:10px 14px">
-    <div class="flex flex-center" style="gap:8px;flex-wrap:wrap">
-      <div class="text-xs fw-600 text-muted">CURRENT STORE PRICES</div>
-      ${canEdit && d.configured ? `<button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:11px;padding:2px 8px" ${d.running?'disabled':''} onclick="refreshConcPrices()">${d.running ? 'Checking prices…' : (L ? 'Check again' : 'Look up current prices')}</button>` : ''}
+// ── Shopping list: check items, find best prices, pick products ──────────
+// The plan is saved per show: which items are checked, quantity overrides,
+// and the product picked for each (from the price lookup, or typed in).
+let _concItems = [], _concPrices = {items: {}}, _concPlan = {items: {}}, _concPoll = null, _concSaveT = null;
+const money2 = v => v == null ? '—' : '$' + Number(v).toFixed(2);
+async function loadConcShop() {
+  try {
+    [_concItems, _concPrices] = await Promise.all([api('GET', '/concessions/items'), api('GET', '/concessions/prices')]);
+  } catch(e) { return; }
+  clearTimeout(_concPoll);
+  if (_concPrices.running) _concPoll = setTimeout(loadConcShop, 4000);
+  renderConcShop();
+}
+function concCfg(id) { return (_concPlan.items[id] ||= {on: false}); }
+function concLines() {
+  const i = concInputs();
+  const targets = {snack: Math.ceil(i.audience*i.snack_pct), drink: Math.ceil(i.audience*i.drink_pct)};
+  const lines = [];
+  for (const cat of ['snack','drink']) {
+    const ids = _concItems.filter(it => it.category === cat && concCfg(it.id).on).map(it => it.id);
+    const fixed = ids.filter(id => concCfg(id).qty != null && concCfg(id).qty !== '').reduce((a,id) => a + (+concCfg(id).qty||0), 0);
+    const auto = ids.filter(id => concCfg(id).qty == null || concCfg(id).qty === '');
+    const left = Math.max(0, targets[cat] - fixed);
+    for (const id of ids) {
+      const cfg = concCfg(id), isAuto = auto.includes(id);
+      const qty = isAuto ? Math.floor(left/auto.length) + (auto.indexOf(id) < left % auto.length ? 1 : 0) : Math.max(0, +cfg.qty||0);
+      const pk = cfg.pick && +cfg.pick.price > 0 && +cfg.pick.units > 0 ? cfg.pick : null;
+      const packs = pk && qty > 0 ? Math.ceil(qty / +pk.units) : 0;
+      lines.push({id, cat, qty, isAuto, pick: pk, packs, cost: pk ? round2(packs * +pk.price) : 0});
+    }
+  }
+  return {lines, targets};
+}
+function concPlanTotal() {
+  const {lines} = concLines();
+  if (!lines.length) return null;
+  return {total: round2(lines.reduce((a,l)=>a+l.cost,0)), missing: lines.filter(l => l.qty > 0 && !l.pick).length, lines};
+}
+function renderConcShop() {
+  const el = document.getElementById('conc-shop'); if (!el) return;
+  const canEdit = !!_conc?.can_manage, P = _concPrices;
+  const {lines, targets} = concLines();
+  const byId = Object.fromEntries(lines.map(l => [l.id, l]));
+  const checked = _concItems.filter(it => concCfg(it.id).on);
+  const running = new Set(P.running ? P.running_item_ids : []);
+  const ago = n => n == null ? '' : n === 0 ? 'today' : n === 1 ? 'yesterday' : `${n}d ago`;
+  const row = it => {
+    const cfg = concCfg(it.id), L = byId[it.id], pr = P.items[String(it.id)];
+    const listings = pr?.listings || [];
+    const pickKey = cfg.pick ? (cfg.pick.manual ? 'manual' : cfg.pick.url) : '';
+    let product = '';
+    if (cfg.on) {
+      if (running.has(it.id)) product = `<span class="text-muted">Checking prices…</span>`;
+      else if (!listings.length && !cfg.pick) product = `<span class="text-muted">${pr ? 'No prices found' : 'Not checked yet'}</span> ${canEdit?`· <a href="#" onclick="event.preventDefault();concPickManual(${it.id})">enter a price</a>`:''}`;
+      else {
+        const opts = listings.map((x,k) => `<option value="${escHtmlBB(x.url)}" ${pickKey===x.url?'selected':''}>${k===0?'★ ':''}${x.store} · ${money2(x.price)} for ${x.units} (${money2(x.per_unit)} ea) — ${escHtmlBB(x.product.slice(0,60))}</option>`).join('');
+        product = `<select class="form-select" style="font-size:12px;padding:3px 6px" ${canEdit?'':'disabled'} onchange="concPick(${it.id}, this.value)">
+            <option value="" ${!pickKey?'selected':''}>Choose a product…</option>${opts}
+            <option value="manual" ${pickKey==='manual'?'selected':''}>Enter my own price…</option></select>
+          ${pr ? `<div class="text-muted" style="font-size:11px;margin-top:2px;${pr.stale?'color:var(--amber)':''}">prices checked ${ago(pr.age_days)}</div>` : ''}`;
+      }
+      if (cfg.pick?.manual) product += `
+        <div class="flex gap-8 mt-4" style="font-size:12px">
+          <input class="form-input" style="font-size:12px;padding:3px 6px;width:88px" type="number" step="0.01" min="0" placeholder="Pack $" value="${cfg.pick.price||''}" ${canEdit?'':'disabled'} oninput="concManual(${it.id},'price',this.value)">
+          <input class="form-input" style="font-size:12px;padding:3px 6px;width:70px" type="number" step="1" min="1" placeholder="Count" value="${cfg.pick.units||''}" ${canEdit?'':'disabled'} oninput="concManual(${it.id},'units',this.value)">
+          <input class="form-input" style="font-size:12px;padding:3px 6px" placeholder="Store or link (optional)" value="${escHtmlBB(cfg.pick.url||cfg.pick.store||'')}" ${canEdit?'':'disabled'} onchange="concManual(${it.id},'where',this.value)">
+        </div>`;
+    }
+    const link = cfg.on && cfg.pick?.url && /^https?:/.test(cfg.pick.url) ? `<a href="${escHtmlBB(cfg.pick.url)}" target="_blank" rel="noopener" title="Open product page" style="color:var(--teal)">↗</a>` : '';
+    return `<tr style="${cfg.on?'':'opacity:.55'}">
+      <td style="white-space:nowrap"><label class="flex flex-center gap-8" style="cursor:pointer"><input type="checkbox" ${cfg.on?'checked':''} ${canEdit?'':'disabled'} onchange="concToggle(${it.id}, this.checked)"> ${escHtmlBB(it.name)}</label></td>
+      <td>${cfg.on ? `<input class="form-input" type="number" min="0" step="1" style="width:70px;font-size:12px;padding:3px 6px" value="${L && !L.isAuto ? L.qty : ''}" placeholder="${L ? L.qty : ''}" title="Leave blank to split evenly" ${canEdit?'':'disabled'} onchange="concQty(${it.id}, this.value)">` : ''}</td>
+      <td style="min-width:240px">${product}</td>
+      <td style="text-align:center">${link}</td>
+      <td style="text-align:right;white-space:nowrap">${cfg.on && L?.pick ? `${L.packs} × ${money2(L.pick.price)}` : ''}</td>
+      <td style="text-align:right" class="fw-600">${cfg.on && L?.pick ? money2(L.cost) : ''}</td>
+    </tr>`;
+  };
+  const section = (cat, label) => {
+    const its = _concItems.filter(it => it.category === cat);
+    const planned = lines.filter(l => l.cat === cat).reduce((a,l)=>a+l.qty,0);
+    const sub = round2(lines.filter(l => l.cat === cat).reduce((a,l)=>a+l.cost,0));
+    return `<tr><td colspan="6" class="text-xs fw-600 text-muted" style="padding-top:10px">${label.toUpperCase()} · ${planned} of ${targets[cat]} planned${sub?` · ${money2(sub)}`:''}${planned && planned !== targets[cat] ? ` <span style="color:var(--amber)">(${planned>targets[cat]?'+':''}${planned-targets[cat]})</span>` : ''}</td></tr>${its.map(row).join('')}`;
+  };
+  const tot = concPlanTotal();
+  const needCheck = checked.filter(it => !P.items[String(it.id)] || P.items[String(it.id)].stale).length;
+  el.innerHTML = `
+    <div class="panel" style="padding:10px 14px">
+      <div class="flex flex-center" style="gap:8px;flex-wrap:wrap">
+        <div class="text-xs fw-600 text-muted">WHAT WE’RE BUYING</div>
+        <div class="text-xs text-muted">Check the items to shop for. Quantities split each count evenly unless you type one.</div>
+        ${canEdit && P.configured ? `<button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:11px;padding:2px 8px" ${P.running||!checked.length?'disabled':''} onclick="concFindPrices()">${P.running ? 'Checking prices…' : `Find best prices${checked.length?` (${checked.length} item${checked.length!==1?'s':''})`:''}`}</button>` : ''}
+      </div>
+      ${!P.configured ? `<div class="text-xs text-muted mt-4">Automatic price lookup isn’t set up (an admin can add <code>ANTHROPIC_API_KEY</code> in Railway). You can still enter prices yourself.</div>`
+        : `<div class="text-xs text-muted mt-4">Searches ${(P.stores||[]).join(', ')}. ★ marks the lowest price per item; every option links to its store page.${needCheck && !P.running ? ` ${needCheck} checked item${needCheck!==1?'s have':' has'} no recent prices.` : ''}</div>`}
+      ${P.last_error && !P.running ? `<div class="text-xs mt-4" style="color:var(--red)">Last price check didn’t finish: ${P.last_error}</div>` : ''}
+      <div class="table-wrap mt-8"><table class="text-sm" style="width:100%">
+        <thead><tr><th style="text-align:left">Item</th><th style="text-align:left">Qty</th><th style="text-align:left">Product</th><th></th><th style="text-align:right">Packs</th><th style="text-align:right">Cost</th></tr></thead>
+        <tbody>${section('snack','Snacks')}${section('drink','Drinks')}</tbody>
+      </table></div>
+      ${tot ? `<div class="flex mt-8 fw-600"><span>Shopping list total</span><span style="margin-left:auto;font-size:16px">${money2(tot.total)}</span></div>
+        ${tot.missing ? `<div class="text-xs" style="color:var(--amber)">${tot.missing} checked item${tot.missing!==1?'s need':' needs'} a product or price before this can set the budget.</div>` : ''}` : ''}
+      ${canEdit ? `<details class="archive-fold" style="margin-top:6px" ontoggle="if(this.open)loadConcItems()"><summary>Edit item list</summary><div id="conc-items" class="text-xs mt-4">Loading…</div></details>` : ''}
     </div>`;
-  if (!d.configured) {
-    html += `<div class="text-xs text-muted mt-4">Price lookup isn’t set up. An admin can turn it on by adding <code>ANTHROPIC_API_KEY</code> to BloomBooks in Railway.</div>`;
-  } else if (d.running && !L) {
-    html += `<div class="text-xs text-muted mt-4">Searching Amazon, Costco, Target, and Walmart — this takes a minute or two. You can leave this page.</div>`;
-  } else if (!L) {
-    html += `<div class="text-xs text-muted mt-4">Look up what our usual items cost right now at Amazon, Costco, Target, and Walmart. Every price links to the store page it came from.</div>`;
-  }
-  if (L) {
-    html += `
-      <div class="text-xs mt-4 ${L.stale ? '' : 'text-muted'}" style="${L.stale ? 'color:var(--amber)' : ''}">
-        Checked ${fmtDate(L.finished_at)} (${ago(L.age_days)})${L.started_by_name ? ` by ${L.started_by_name}` : ''} · ${(R.stores||[]).join(', ')}${L.stale ? ' — prices may have changed; consider checking again' : ''}
-        ${d.running ? ' · <strong>checking again now…</strong>' : ''}
-      </div>
-      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px;align-items:flex-end">
-        <div><div class="fw-600" style="font-size:18px">${money(R.snack_avg)}</div><div class="text-xs text-muted">typical per snack</div></div>
-        <div><div class="fw-600" style="font-size:18px">${money(R.drink_avg)}</div><div class="text-xs text-muted">typical per drink</div></div>
-        <div class="text-xs text-muted">Cheapest found: ${money(R.snack_cheapest_avg)} / ${money(R.drink_cheapest_avg)}</div>
-        ${canEdit && R.snack_avg != null && R.drink_avg != null ? `<button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="useConcPrices(${R.snack_avg},${R.drink_avg})">Use these</button>` : ''}
-      </div>
-      <details class="archive-fold" style="margin-top:8px"><summary>Sources (${R.items.reduce((n,i)=>n+i.listings.length,0)} listings)</summary>
-        <div class="table-wrap mt-4"><table class="text-xs" style="width:100%">
-          <thead><tr><th style="text-align:left">Item</th><th style="text-align:left">Store &amp; product</th><th>Price</th><th>Count</th><th>Per item</th></tr></thead>
-          <tbody>${R.items.map(i => i.listings.length ? i.listings.map((x, k) => `
-            <tr>
-              <td>${k === 0 ? `<span class="fw-600">${i.name}</span><div class="text-muted">${i.category} · typical ${money(i.typical)}</div>` : ''}</td>
-              <td><a href="${x.url}" target="_blank" rel="noopener" style="color:var(--teal)">${x.store}</a> — ${x.product}</td>
-              <td style="text-align:right">${money(x.price)}</td><td style="text-align:right">${x.units}</td><td style="text-align:right">${money(x.per_unit)}</td>
-            </tr>`).join('') : `<tr><td><span class="fw-600">${i.name}</span><div class="text-muted">${i.category}</div></td><td colspan="4" class="text-muted">No price with a source found</td></tr>`).join('')}
-          </tbody></table></div>
-        <div class="text-xs text-muted mt-4">“Typical” is the middle price across stores for each item, averaged over the items. Online prices can differ from shelf prices and change often${R.dropped ? `; ${R.dropped} result${R.dropped!==1?'s were':' was'} left out because its source couldn’t be confirmed` : ''}.</div>
-      </details>`;
-  }
-  if (d.last_error && !d.running) html += `<div class="text-xs mt-4" style="color:var(--red)">Last lookup didn’t finish: ${d.last_error}</div>`;
-  if (canEdit) html += `<details class="archive-fold" style="margin-top:4px" ontoggle="if(this.open)loadConcItems()"><summary>Items we price</summary><div id="conc-items" class="text-xs mt-4">Loading…</div></details>`;
-  html += `</div>`;
-  el.innerHTML = html;
+  concPreview(true);
 }
-async function refreshConcPrices() {
-  try { await api('POST', '/concessions/prices/refresh', {}); toast('Checking prices — this takes a minute or two.', 'info'); loadConcPrices(); }
-  catch(e) { toast(e.message, 'error'); }
+function concChanged() { renderConcShop(); clearTimeout(_concSaveT); _concSaveT = setTimeout(concSavePlan, 800); }
+async function concSavePlan() {
+  if (!_conc?.can_manage || !_currentProd) return;
+  try { await api('PUT', `/productions/${_currentProd.id}/concessions-estimate`, {plan: _concPlan}); } catch(e) { /* retried on next change */ }
 }
-function useConcPrices(snack, drink) {
-  document.getElementById('conc-scost').value = snack.toFixed(2);
-  document.getElementById('conc-dcost').value = drink.toFixed(2);
-  concPreview();
-  toast('Prices filled in — Save assumptions to keep them.', 'info');
+function concToggle(id, on) { concCfg(id).on = on; concChanged(); }
+function concQty(id, v) { concCfg(id).qty = v === '' ? null : Math.max(0, parseInt(v)||0); concChanged(); }
+function concPick(id, url) {
+  const cfg = concCfg(id);
+  if (url === 'manual') return concPickManual(id);
+  const x = (_concPrices.items[String(id)]?.listings || []).find(l => l.url === url);
+  cfg.pick = x ? {store: x.store, product: x.product, price: x.price, units: x.units, url: x.url} : null;
+  concChanged();
+}
+function concPickManual(id) { concCfg(id).pick = {manual: true, price: '', units: '', url: ''}; concChanged(); }
+function concManual(id, field, v) {
+  const pk = concCfg(id).pick ||= {manual: true};
+  if (field === 'where') { if (/^https?:/.test(v)) { pk.url = v; pk.store = ''; } else { pk.store = v; pk.url = ''; } }
+  else pk[field] = v;
+  clearTimeout(_concSaveT); _concSaveT = setTimeout(() => { concSavePlan(); renderConcShop(); }, 900);
+  concPreview(true);
+}
+async function concFindPrices() {
+  const ids = _concItems.filter(it => concCfg(it.id).on).map(it => it.id);
+  try {
+    await concSavePlan();
+    await api('POST', '/concessions/prices/refresh', {item_ids: ids});
+    toast('Finding prices — this takes a minute or two. You can leave this page.', 'info');
+    loadConcShop();
+  } catch(e) { toast(e.message, 'error'); }
 }
 async function loadConcItems() {
   const el = document.getElementById('conc-items'); if (!el) return;
   const items = await api('GET', '/concessions/items');
-  const row = i => `<div class="flex flex-center gap-8" style="padding:2px 0"><span class="badge" style="font-size:10px;background:var(--cream2);color:var(--ink2)">${i.category}</span><span>${i.name}</span>
+  const row = i => `<div class="flex flex-center gap-8" style="padding:2px 0"><span class="badge" style="font-size:10px;background:var(--cream2);color:var(--ink2)">${i.category}</span><span>${escHtmlBB(i.name)}</span>
     <button class="btn btn-outline btn-sm" style="margin-left:auto;font-size:10px;padding:0 6px" onclick="removeConcItem(${i.id})">×</button></div>`;
   el.innerHTML = items.map(row).join('') + `
     <div class="flex gap-8 mt-8">
       <select id="conc-new-cat" class="form-select" style="width:auto;font-size:12px"><option value="snack">snack</option><option value="drink">drink</option></select>
-      <input id="conc-new-name" class="form-input" style="font-size:12px" placeholder="e.g. Skittles share size, 24 ct">
+      <input id="conc-new-name" class="form-input" style="font-size:12px" placeholder="e.g. Reese’s cups, Dr Pepper">
       <button class="btn btn-outline btn-sm" onclick="addConcItem()">Add</button>
     </div>
-    <div class="text-muted mt-4">Describe what you actually buy. Changes apply to the next price check.</div>`;
+    <div class="text-muted mt-4">This list is shared by every show. Be as specific as you like — brand and size help the price search.</div>`;
 }
 async function addConcItem() {
   const name = document.getElementById('conc-new-name').value.trim();
   const category = document.getElementById('conc-new-cat').value;
-  try { await api('POST', '/concessions/items', {name, category}); loadConcItems(); } catch(e) { toast(e.message, 'error'); }
+  try { await api('POST', '/concessions/items', {name, category}); await loadConcShop(); loadConcItems(); } catch(e) { toast(e.message, 'error'); }
 }
 async function removeConcItem(id) {
-  try { await api('DELETE', `/concessions/items/${id}`); loadConcItems(); } catch(e) { toast(e.message, 'error'); }
+  try { await api('DELETE', `/concessions/items/${id}`); delete _concPlan.items[id]; await loadConcShop(); loadConcItems(); concSavePlan(); } catch(e) { toast(e.message, 'error'); }
+}
+function concDateField(c, pid, dis) {
+  const rc = c.rolecall_performance_dates || [];
+  const nPerf = rc.length ? ` (${rc.length} performance${rc.length!==1?'s':''})` : '';
+  if (c.first_performance_source === 'rolecall' && !window._concOverride) {
+    return `<div class="form-input" style="background:var(--cream);display:flex;align-items:center;gap:8px">
+        ${fmtDate(c.first_performance_date + 'T12:00:00')} <span class="text-xs text-muted">from RoleCall${nPerf}</span>
+        ${c.can_manage ? `<a href="#" class="text-xs" style="margin-left:auto" onclick="event.preventDefault();window._concOverride=true;loadConcessionsEstimator(${pid})">Override</a>` : ''}
+      </div>`;
+  }
+  const differs = rc.length && c.manual_first_performance_date && rc[0] !== c.manual_first_performance_date.slice(0,10);
+  return `<input type="date" id="conc-date" class="form-input" value="${(c.manual_first_performance_date||c.first_performance_date||'').slice(0,10)}" ${dis} onchange="saveConcSettings(${pid}, true)">
+    ${differs ? `<div class="text-xs mt-4" style="color:var(--amber)">RoleCall’s first performance is ${fmtDate(rc[0]+'T12:00:00')}. ${c.can_manage ? `<a href="#" onclick="event.preventDefault();useRoleCallPerfDate(${pid})">Use RoleCall’s date</a>` : ''}</div>`
+      : (c.manual_first_performance_date && rc.length ? `<div class="text-xs mt-4"><a href="#" onclick="event.preventDefault();useRoleCallPerfDate(${pid})">Go back to RoleCall’s date</a></div>` : '')}`;
+}
+async function useRoleCallPerfDate(pid) {
+  try {
+    await api('PUT', `/productions/${pid}/concessions-estimate`, {first_performance_date: null});
+    window._concOverride = false;
+    loadConcessionsEstimator(pid);
+  } catch(e) { toast(e.message, 'error'); }
 }
 function addDays(iso, n) { const d = new Date(iso.slice(0,10)+'T12:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 function concInputs() {
@@ -2852,35 +2950,41 @@ function concInputs() {
   return { audience: Math.max(0, Math.round(v('conc-aud')||0)), snack_pct: (v('conc-spct')||0)/100, drink_pct: (v('conc-dpct')||0)/100,
            snack_unit_cost: v('conc-scost')||0, drink_unit_cost: v('conc-dcost')||0 };
 }
-function concPreview() {
+function concPreview(fromShop=false) {
+  if (!fromShop && document.getElementById('conc-shop') && _concItems.length) { renderConcShop(); return; }
   const el = document.getElementById('conc-preview'); if (!el) return;
   const i = concInputs();
+  const plan = concPlanTotal();
   const su = Math.ceil(i.audience*i.snack_pct), du = Math.ceil(i.audience*i.drink_pct);
   const st = round2(su*i.snack_unit_cost), dt = round2(du*i.drink_unit_cost), tot = round2(st+dt);
   if (!i.audience) { el.innerHTML = ''; return; }
-  const haveCosts = i.snack_unit_cost > 0 && i.drink_unit_cost > 0;
-  const after = _conc ? round2(_conc.unallocated + (_conc.department?.total_amount||0) - tot) : 0;
+  const usePlan = !!plan;
+  const haveCosts = usePlan ? !plan.missing : (i.snack_unit_cost > 0 && i.drink_unit_cost > 0);
+  const budget = usePlan ? plan.total : tot;
+  const after = _conc ? round2(_conc.unallocated + (_conc.department?.total_amount||0) - budget) : 0;
   el.innerHTML = `
     <div class="panel" style="padding:12px 14px">
       <div class="text-xs text-muted fw-600 mb-8">SHOPPING LIST FOR ${i.audience} PEOPLE</div>
       <div style="display:flex;gap:28px;flex-wrap:wrap">
         <div><div style="font-size:24px;font-weight:700">${su}</div><div class="text-xs text-muted">snacks / candy</div></div>
         <div><div style="font-size:24px;font-weight:700">${du}</div><div class="text-xs text-muted">drinks</div></div>
-        ${haveCosts ? `<div style="margin-left:auto;text-align:right"><div style="font-size:24px;font-weight:700">${fmtMoney(tot)}</div>
-          <div class="text-xs text-muted">${fmtMoney(st)} snacks + ${fmtMoney(dt)} drinks</div></div>` : ''}
+        ${haveCosts ? `<div style="margin-left:auto;text-align:right"><div style="font-size:24px;font-weight:700">${fmtMoney(budget)}</div>
+          <div class="text-xs text-muted">${usePlan ? 'from the shopping list below' : `${fmtMoney(st)} snacks + ${fmtMoney(dt)} drinks`}</div></div>` : ''}
       </div>
-      ${!haveCosts ? `<div class="text-xs mt-8 text-muted">Add what we pay per item to turn this into a budget amount.</div>` : ''}
+      ${!haveCosts ? `<div class="text-xs mt-8 text-muted">${usePlan ? 'Pick a product for each checked item below to get the budget amount.' : 'Check items below and pick products to get a budget amount.'}</div>` : ''}
       ${haveCosts && _conc && after < 0 ? `<div class="text-xs mt-8" style="color:var(--red)">${fmtMoney(-after)} more than the show has left to allocate.</div>` : ''}
     </div>`;
 }
 async function saveConcSettings(pid, quiet=false) {
   const i = concInputs();
   try {
-    await api('PUT', `/productions/${pid}/concessions-estimate`, {
-      first_performance_date: document.getElementById('conc-date').value || null,
-      snack_pct: i.snack_pct, drink_pct: i.drink_pct,
-      snack_unit_cost: i.snack_unit_cost || null, drink_unit_cost: i.drink_unit_cost || null });
-    if (!quiet) toast('Concessions assumptions saved.', 'success');
+    const payload = { snack_pct: i.snack_pct, drink_pct: i.drink_pct, plan: _concPlan,
+      snack_unit_cost: i.snack_unit_cost || null, drink_unit_cost: i.drink_unit_cost || null };
+    const dateEl = document.getElementById('conc-date');
+    if (dateEl) payload.first_performance_date = dateEl.value || null;
+    await api('PUT', `/productions/${pid}/concessions-estimate`, payload);
+    window._concOverride = false;
+    if (!quiet) toast('Concessions plan saved.', 'success');
     loadConcessionsEstimator(pid);
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -2889,7 +2993,7 @@ async function applyConcEstimate(pid) {
   const rc = _conc?.rolecall;
   const source = rc && i.audience === rc.tickets_sold + rc.comps ? 'rolecall' : 'manual';
   try {
-    const res = await api('POST', `/productions/${pid}/concessions-estimate/apply`, {...i, audience_source: source});
+    const res = await api('POST', `/productions/${pid}/concessions-estimate/apply`, {...i, plan: _concPlan, audience_source: source});
     toast(`Concessions budget set to ${fmtMoney(res.estimate.total)}${res.previous ? ` (was ${fmtMoney(res.previous)})` : ''}.`, 'success');
     await loadBudgets();
     openProductionDetail(pid);
