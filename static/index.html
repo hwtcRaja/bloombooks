@@ -170,22 +170,23 @@ tr:hover td{background:var(--cream)}
 .archive-fold>summary::-webkit-details-marker{display:none}
 .archive-fold>summary::before{content:'▸ ';}
 .archive-fold[open]>summary::before{content:'▾ ';}
+#prod-tab-content.wide > *:not(#conc-card){max-width:800px}
 .conc-grid-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:8px}
 .conc-grid{width:100%;border-collapse:collapse;font-size:12px}
 .conc-grid th{background:var(--cream2);font-size:11px;font-weight:600;color:var(--ink3);padding:6px 8px;text-align:center;white-space:nowrap;position:sticky;top:0}
-.conc-grid td{padding:5px 8px;border-top:1px solid var(--border);vertical-align:middle}
+.conc-grid td{padding:8px 10px;border-top:1px solid var(--border);vertical-align:middle}
 .conc-grid .conc-sec td{background:var(--cream);font-size:11px;font-weight:600;color:var(--ink3);padding:6px 8px}
-.conc-grid .conc-item{min-width:170px;max-width:240px}
+.conc-grid .conc-item{min-width:230px}
 .conc-grid .conc-off .conc-item{opacity:.5}
-.conc-cell{text-align:center;min-width:92px;cursor:pointer;border-left:1px solid var(--border)}
+.conc-cell{text-align:center;min-width:112px;cursor:pointer;border-left:1px solid var(--border)}
 .conc-cell.off,.conc-cell.empty{cursor:default;color:var(--ink3)}
 .conc-cell:not(.off):not(.empty):hover{background:var(--teal3)}
 .conc-cell.best .conc-per{color:var(--teal)}
 .conc-cell.picked{background:var(--teal3);box-shadow:inset 0 0 0 2px var(--teal)}
-.conc-per{font-weight:700;font-size:13px}.conc-per span{font-weight:400;font-size:10px;color:var(--ink3)}
+.conc-per{font-weight:700;font-size:14px}.conc-per span{font-weight:400;font-size:10px;color:var(--ink3)}
 .conc-pack{font-size:10px;color:var(--ink3)}
 .conc-link{font-size:10px;color:var(--teal)}
-.conc-cost{text-align:right;white-space:nowrap;border-left:1px solid var(--border)}
+.conc-cost{text-align:right;white-space:nowrap;border-left:1px solid var(--border);min-width:96px}
 .conc-in{font-size:12px;padding:3px 6px}
 .budget-bar-pending{height:100%;background:repeating-linear-gradient(45deg,var(--amber) 0 3px,var(--amber-bg) 3px 6px);opacity:.85}
 .budget-bar-fill{height:100%;border-radius:99px;background:var(--teal);transition:width .4s ease}
@@ -2423,7 +2424,7 @@ function renderProductionDetail() {
   document.getElementById('tb-title').textContent = p.name;
   document.getElementById('tb-actions').innerHTML = `<button class="btn btn-outline btn-sm" onclick="nav('productions')">← All productions</button>`;
   document.getElementById('content').innerHTML = `
-    <div style="max-width:800px">
+    <div id="prod-wrap" style="max-width:800px">
       <div class="flex flex-center gap-12 mb-12">
         <div>
           <span class="badge ${p.status==='active'?'badge-approved':'badge-denied'}">${p.status}</span>
@@ -2457,6 +2458,11 @@ function switchProdTab(tab) {
 
 function renderProdTab() {
   const p = _currentProd;
+  // The Budget tab gets extra width so the concessions price grid isn't cramped;
+  // every other card on it stays at the normal reading width.
+  const wrap = document.getElementById('prod-wrap');
+  if (wrap) wrap.style.maxWidth = _prodTab === 'budget' ? '1280px' : '800px';
+  document.getElementById('prod-tab-content')?.classList.toggle('wide', _prodTab === 'budget');
   const canManage = ['admin','treasurer','president','resident_producer'].includes(currentUser.role) || p.i_am_producer || p.i_am_resident_producer;
   const tc = document.getElementById('prod-tab-content');
 
