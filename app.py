@@ -1840,6 +1840,9 @@ def list_requests():
     owned_budget_ids = [r['budget_id'] for r in owned_budget_rows]
 
     base = '''SELECT r.*,
+                (SELECT si.statement_id FROM bb_statement_items si WHERE si.request_id=r.id LIMIT 1) AS statement_id,
+                (SELECT st.title FROM bb_statement_items si JOIN bb_statements st ON st.id=si.statement_id
+                  WHERE si.request_id=r.id LIMIT 1) AS statement_title,
                 sub.name as submitter_name, sub.email as submitter_email,
                 b.name as budget_name, b.area as budget_area,
                 b.total_amount as budget_total, b.spent as budget_spent,
@@ -2012,6 +2015,35 @@ def _actor_authorized_for_stage(u, stage, production_id):
         return u['role'] == 'president'
     return False
 
+def _apply_request_action(conn, u, req, chain, step, action, note, actual=None):
+    """Approve or deny one request at its current stage (caller has already
+    checked the stage and the user's authority). Writes only — the caller
+    commits and sends notifications. Returns the new status."""
+    rid, stage = req['id'], req['status']
+    now = datetime.now().isoformat()
+    note_col, by_col, at_col = _stage_columns(stage)
+    if action == 'deny':
+        new_status = 'denied'
+        conn.execute(f'UPDATE bb_purchase_requests SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,updated_at=%s WHERE id=%s',
+                     (new_status, note, u['id'], now, now, rid))
+        return new_status
+    next_step = step + 1
+    if next_step >= len(chain):
+        new_status = 'approved'
+        actual = float(actual if actual not in (None, '') else (req.get('actual_cost') or req['estimated_cost']))
+        conn.execute(f'''UPDATE bb_purchase_requests
+                          SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,actual_cost=%s,approval_step=%s,updated_at=%s
+                          WHERE id=%s''',
+                     (new_status, note, u['id'], now, actual, next_step, now, rid))
+        conn.execute('UPDATE bb_budgets SET spent=spent+%s WHERE id=%s', (actual, req['budget_id']))
+        conn.execute('INSERT INTO bb_reimbursements (request_id,user_id,amount,payee_type) VALUES (%s,%s,%s,%s)',
+                     (rid, req['submitted_by'], actual, 'vendor' if req.get('type') == 'invoice' else 'submitter'))
+    else:
+        new_status = chain[next_step]
+        conn.execute(f'UPDATE bb_purchase_requests SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,approval_step=%s,updated_at=%s WHERE id=%s',
+                     (new_status, note, u['id'], now, next_step, now, rid))
+    return new_status
+
 @app.route('/api/requests/<int:rid>/approve', methods=['POST'])
 def approve_request(rid):
     u = current_user()
@@ -2043,31 +2075,11 @@ def approve_request(rid):
         conn.close()
         return jsonify({'error': 'You are not permitted to act on this request at its current stage'}), 403
 
-    note_col, by_col, at_col = _stage_columns(stage)
-
-    if action == 'deny':
-        new_status = 'denied'
-        conn.execute(f'UPDATE bb_purchase_requests SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,updated_at=%s WHERE id=%s',
-                     (new_status, note, u['id'], now, now, rid))
-    elif action == 'approve':
-        next_step = step + 1
-        if next_step >= len(chain):
-            new_status = 'approved'
-            actual = float(data.get('actual_cost', req['estimated_cost']))
-            conn.execute(f'''UPDATE bb_purchase_requests
-                              SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,actual_cost=%s,approval_step=%s,updated_at=%s
-                              WHERE id=%s''',
-                         (new_status, note, u['id'], now, actual, next_step, now, rid))
-            conn.execute('UPDATE bb_budgets SET spent=spent+%s WHERE id=%s', (actual, req['budget_id']))
-            conn.execute('INSERT INTO bb_reimbursements (request_id,user_id,amount,payee_type) VALUES (%s,%s,%s,%s)',
-                         (rid, req['submitted_by'], actual, 'vendor' if req.get('type') == 'invoice' else 'submitter'))
-        else:
-            new_status = chain[next_step]
-            conn.execute(f'UPDATE bb_purchase_requests SET status=%s,{note_col}=%s,{by_col}=%s,{at_col}=%s,approval_step=%s,updated_at=%s WHERE id=%s',
-                         (new_status, note, u['id'], now, next_step, now, rid))
-    else:
+    if action not in ('approve', 'deny'):
         conn.close()
         return jsonify({'error': "Action must be 'approve' or 'deny'"}), 400
+    actual = data.get('actual_cost', req['estimated_cost'])
+    new_status = _apply_request_action(conn, u, req, chain, step, action, note, actual)
 
     conn.commit()
     conn.close()
@@ -2083,6 +2095,91 @@ def approve_request(rid):
         req_type=req.get('type')
     )
     return jsonify({'ok': True, 'new_status': new_status})
+
+STAGE_NAMES = {'pending_producer': 'Producer', 'pending_resident_producer': 'Resident Producer',
+               'pending_treasurer': 'Treasurer', 'pending_president': 'President'}
+
+def notify_bulk_actions(done, acted_by, note, report_title, actor_email=''):
+    """One email per person for a batch of approvals on an expense report:
+    the submitter gets a summary, each next-stage approver gets one list."""
+    note_html = f'<p style="color:#666;font-size:13px"><em>Note: {note}</em></p>' if note else ''
+    def rows(items):
+        return ''.join(f'<tr><td style="padding:3px 0">{i["title"]}</td>'
+                       f'<td style="padding:3px 0;text-align:right">${float(i["amount"]):,.2f}</td></tr>' for i in items)
+    # submitter summary
+    by_sub = {}
+    for d in done:
+        by_sub.setdefault(d['submitted_by'], []).append(d)
+    for sid, items in by_sub.items():
+        sub = get_user_email(sid)
+        if not sub: continue
+        approved = [i for i in items if i['new_status'] == 'approved']
+        moving = [i for i in items if i['new_status'].startswith('pending_')]
+        denied = [i for i in items if i['new_status'] == 'denied']
+        parts = []
+        if approved: parts.append(f'<p><strong>Fully approved</strong> ({len(approved)}):</p><table style="width:100%">{rows(approved)}</table>')
+        if moving:
+            nxt = sorted({STAGE_NAMES.get(i['new_status'], '') for i in moving})
+            parts.append(f'<p><strong>Approved, next stop {", ".join(nxt)}</strong> ({len(moving)}):</p><table style="width:100%">{rows(moving)}</table>')
+        if denied: parts.append(f'<p><strong>Not approved</strong> ({len(denied)}):</p><table style="width:100%">{rows(denied)}</table>')
+        body = f'<p><strong>{acted_by}</strong> reviewed {len(items)} item{"s" if len(items) != 1 else ""} on your expense report <strong>{report_title}</strong>.</p>' + ''.join(parts) + note_html
+        send_email(sub['email'], f'Expense report reviewed: {report_title}',
+                   email_html('Expense Report Reviewed', body, 'View in BloomBooks', app_link('my-requests')))
+    # next approvers: one email each
+    by_person = {}
+    for d in done:
+        if not d['new_status'].startswith('pending_'): continue
+        for a in _stage_action_recipients(d['new_status'], d.get('production_id')):
+            key = (a.get('email') or '').strip().lower()
+            if not key or key == (actor_email or '').strip().lower(): continue
+            by_person.setdefault(key, {'email': a['email'], 'items': []})['items'].append(d)
+    for person in by_person.values():
+        items = person['items']
+        total = sum(float(i['amount']) for i in items)
+        body = (f'<p><strong>{acted_by}</strong> approved {len(items)} item{"s" if len(items) != 1 else ""} '
+                f'from the expense report <strong>{report_title}</strong> (${total:,.2f}). Your review is needed.</p>'
+                f'<table style="width:100%">{rows(items)}</table>{note_html}')
+        send_email(person['email'], f'Expense report needs your review: {report_title} ({len(items)} items)',
+                   email_html('Expense Report — Review Needed', body, 'Review in BloomBooks', app_link('approvals')))
+
+@app.route('/api/statements/<int:sid>/act', methods=['POST'])
+def act_on_statement(sid):
+    """Approve (or deny) several items of one expense report at once — each
+    still at its own stage, with the same checks as approving one by one.
+    Items the user can't act on right now are skipped and reported."""
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    data = request.json or {}
+    action, note = data.get('action', 'approve'), (data.get('note') or '').strip()
+    if action not in ('approve', 'deny'):
+        return jsonify({'error': "Action must be 'approve' or 'deny'"}), 400
+    want = {int(x) for x in (data.get('request_ids') or []) if str(x).isdigit()}
+    conn = get_db()
+    st = conn.execute('SELECT * FROM bb_statements WHERE id=%s', (sid,)).fetchone()
+    if not st: conn.close(); return jsonify({'error': 'Expense report not found'}), 404
+    reqs = [dict(r) for r in conn.execute('''SELECT r.* FROM bb_statement_items si
+                                             JOIN bb_purchase_requests r ON r.id=si.request_id
+                                             WHERE si.statement_id=%s ORDER BY r.id''', (sid,)).fetchall()]
+    if want:
+        reqs = [r for r in reqs if r['id'] in want]
+    done, skipped = [], []
+    for req in reqs:
+        chain = json.loads(req.get('approval_chain') or '[]') or build_approval_chain(req.get('production_id'))
+        step = req.get('approval_step') or 0
+        if step >= len(chain) or chain[step] != req['status'] or not _actor_authorized_for_stage(u, req['status'], req.get('production_id')):
+            skipped.append(req['title']); continue
+        new_status = _apply_request_action(conn, u, req, chain, step, action, note)
+        done.append({'id': req['id'], 'title': req['title'], 'new_status': new_status,
+                     'submitted_by': req['submitted_by'], 'production_id': req.get('production_id'),
+                     'amount': req.get('actual_cost') or req['estimated_cost']})
+    if not done:
+        conn.close(); return jsonify({'error': 'None of these items are waiting on you right now', 'skipped': skipped}), 400
+    conn.commit(); conn.close()
+    for d in done:
+        log_action(u['id'], f'{action}d_request', 'request', d['id'], f'status→{d["new_status"]} (expense report {sid})')
+    notify_bulk_actions(done, u['name'], note, dict(st)['title'], u.get('email', ''))
+    return jsonify({'ok': True, 'count': len(done), 'skipped': skipped,
+                    'total': round(sum(float(d['amount']) for d in done), 2)})
 
 @app.route('/api/debug/test-email', methods=['POST'])
 def test_email():
