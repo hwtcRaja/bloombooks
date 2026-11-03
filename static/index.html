@@ -682,6 +682,63 @@ async function loadBudgets() {
   } catch(e) {}
 }
 
+// ── Dashboard budget overview ────────────────────────────────────────────────
+// One line for the organization and one per current show, each the sum of its
+// real budgets (a category's total comes from its sub-budgets, never counted
+// twice), then the specific budgets that are close to running out.
+function dashboardBudgetOverview(budgets) {
+  const live = budgets.filter(b => b.is_active && !['closed','archived'].includes(b.production_status));
+  const hasKids = new Set(live.filter(b => b.parent_id).map(b => b.parent_id));
+  const leaves = live.filter(b => !hasKids.has(b.id));          // the budgets money is actually charged to
+  const sum = (list) => list.reduce((a, b) => ({
+    total: a.total + (+b.total_amount||0), spent: a.spent + (+b.spent||0), pending: a.pending + (+b.pending||0)
+  }), {total: 0, spent: 0, pending: 0});
+  const groups = [];
+  const org = leaves.filter(b => !b.production_id);
+  if (org.length) groups.push({name: 'Organization', sub: `${org.length} budget${org.length!==1?'s':''}`, ...sum(org), go: `nav('budgets')`});
+  const byShow = {};
+  for (const b of leaves.filter(b => b.production_id)) (byShow[b.production_id] ||= {name: b.production_name || 'Production', items: []}).items.push(b);
+  for (const [pid, g] of Object.entries(byShow).sort((a,b) => a[1].name.localeCompare(b[1].name)))
+    groups.push({name: g.name, sub: `${g.items.length} department${g.items.length!==1?'s':''}`, ...sum(g.items), go: `nav('productions');openProductionDetail(${pid})`});
+  const line = (g) => {
+    const left = g.total - g.spent;
+    const pct = g.total > 0 ? Math.min(100, g.spent / g.total * 100) : 0;
+    const cls = pct > 90 ? 'danger' : pct > 70 ? 'warn' : '';
+    return `<div class="mb-16" style="cursor:pointer" onclick="${g.go}">
+      <div class="flex flex-center gap-8 mb-4">
+        <div><span class="fw-600 text-sm">${escHtmlBB(g.name)}</span> <span class="text-xs text-muted">· ${g.sub}</span></div>
+        <div style="margin-left:auto;text-align:right">
+          <span class="fw-600 text-sm" style="color:${left<0?'var(--red)':'var(--ink)'}">${fmtMoney(left)} left</span>
+          <span class="text-xs text-muted"> of ${fmtMoney(g.total)}</span>
+        </div>
+      </div>
+      <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div>${pendingSeg({total_amount: g.total, spent: g.spent, pending: g.pending})}</div>
+      <div class="text-xs text-muted mt-4">${fmtMoney(g.spent)} spent${g.pending > 0 ? ` · <span style="color:var(--amber)">${fmtMoney(g.pending)} pending approval</span>` : ''}</div>
+    </div>`;
+  };
+  // Budgets that are (or would be, once pending items are approved) 90%+ used
+  const tight = leaves.filter(b => +b.total_amount > 0 && (+b.spent + (+b.pending||0)) / +b.total_amount >= 0.9)
+    .sort((a, b) => ((+b.spent + (+b.pending||0)) / +b.total_amount) - ((+a.spent + (+a.pending||0)) / +a.total_amount))
+    .slice(0, 5);
+  return `
+    <div class="card mt-24">
+      <div class="card-header"><span class="card-title">Budget overview</span><button class="btn btn-outline btn-sm" onclick="nav('budgets')">View all</button></div>
+      <div class="card-body">
+        ${groups.length ? groups.map(line).join('') : '<div class="text-xs text-muted">No active budgets yet.</div>'}
+        ${tight.length ? `
+          <div class="text-xs fw-600 text-muted mt-8 mb-8">RUNNING LOW</div>
+          ${tight.map(b => {
+            const left = +b.total_amount - +b.spent, after = left - (+b.pending||0);
+            return `<div class="flex flex-center gap-8 text-sm" style="padding:4px 0;border-top:1px solid var(--border)">
+              <span>${escHtmlBB(b.name)}<span class="text-xs text-muted"> · ${b.production_name ? escHtmlBB(b.production_name) : 'Org'}</span></span>
+              <span style="margin-left:auto;color:${after<0?'var(--red)':'var(--amber)'}" class="text-xs fw-600">${after < 0 ? `${fmtMoney(-after)} over if pending is approved` : `${fmtMoney(after)} left after pending`}</span>
+            </div>`;
+          }).join('')}` : ''}
+        <div class="text-xs text-muted mt-8">Closed and archived shows aren’t included. Click a line to open it.</div>
+      </div>
+    </div>`;
+}
+
 // ── Budget cell for request rows: name + what's left on that allocation ─────
 function budgetCell(r) {
   if (!r.budget_name) return '<span class="td-muted">—</span>';
@@ -823,25 +880,9 @@ async function renderDashboard() {
         </tbody></table></div>`;
 
     let budgetHtml = '';
-    if (isAdmin && allBudgets.length > 0) {
-      const active = allBudgets.filter(b => b.is_active).slice(0,4);
-      budgetHtml = `
-        <div class="card mt-24">
-          <div class="card-header"><span class="card-title">Budget overview</span><button class="btn btn-outline btn-sm" onclick="nav('budgets')">View all</button></div>
-          <div class="card-body">
-            ${active.map(b => {
-              const pct = b.total_amount > 0 ? Math.min(100, (b.spent/b.total_amount)*100) : 0;
-              const cls = pct>90?'danger':pct>70?'warn':'';
-              return `<div class="mb-16">
-                <div class="flex flex-center gap-8 mb-4">
-                  <span class="fw-600 text-sm">${b.name}</span>
-                  <span class="text-xs text-muted" style="margin-left:auto">${fmtMoney(b.spent)} / ${fmtMoney(b.total_amount)}${b.pending>0?` · <span style="color:var(--amber)">${fmtMoney(b.pending)} pending</span>`:''}</span>
-                </div>
-                <div class="budget-bar-wrap"><div class="budget-bar-fill ${cls}" style="width:${pct}%"></div>${pendingSeg(b)}</div>
-              </div>`;
-            }).join('')}
-          </div>
-        </div>`;
+    if (isAdmin) {
+      await loadBudgets();   // fresh numbers, not whatever was loaded at sign-in
+      budgetHtml = dashboardBudgetOverview(allBudgets);
     }
 
     document.getElementById('content').innerHTML = `
