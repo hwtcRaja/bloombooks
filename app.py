@@ -368,20 +368,31 @@ def init_db():
         started_at  TEXT,
         finished_at TEXT,
         started_by  INTEGER REFERENCES bb_users(id),
+        item_ids    TEXT,
         result_json TEXT,
         error       TEXT
+    )''')
+    # Latest listings per item — each lookup adds a row per item it searched,
+    # so items can be re-checked on their own and every show reuses them.
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_concession_item_prices (
+        id            SERIAL PRIMARY KEY,
+        item_id       INTEGER REFERENCES bb_concession_items(id),
+        lookup_id     INTEGER REFERENCES bb_concession_price_lookups(id),
+        checked_at    TEXT,
+        listings_json TEXT
     )''')
     c.execute('SELECT COUNT(*) AS n FROM bb_concession_items')
     if c.fetchone()['n'] == 0:
         for i, (cat, name) in enumerate([
-            ('snack', 'Full-size candy bar variety pack'),
-            ('snack', 'Chips variety pack (1 oz bags)'),
-            ('snack', 'Fruit snacks / gummies (individual pouches)'),
-            ('snack', 'Microwave or pre-popped popcorn (single bags)'),
-            ('drink', 'Bottled water case (16.9 oz)'),
-            ('drink', 'Soda 12-pack (12 oz cans)'),
-            ('drink', 'Juice pouches (e.g. Capri Sun)'),
-            ('drink', 'Sports drink multipack (e.g. Gatorade)'),
+            ('snack', 'Nerds'),
+            ('snack', 'Skittles'),
+            ('snack', 'Sour Patch Kids'),
+            ('snack', 'Chocolate bars (variety)'),
+            ('snack', 'Chips (variety, 1 oz bags)'),
+            ('drink', 'Bottled water (16.9 oz)'),
+            ('drink', 'Coke (12 oz cans)'),
+            ('drink', 'Sprite (12 oz cans)'),
+            ('drink', 'Capri Sun'),
         ]):
             c.execute('INSERT INTO bb_concession_items (category,name,sort_order) VALUES (%s,%s,%s)', (cat, name, i))
 
@@ -662,6 +673,8 @@ def init_db():
         ("bb_productions",       "conc_drink_unit_cost",       "REAL"),
         ("bb_productions",       "conc_estimate_json",         "TEXT"),
         ("bb_productions",       "conc_estimated_at",          "TEXT"),
+        ("bb_productions",       "conc_plan_json",             "TEXT"),
+        ("bb_concession_price_lookups", "item_ids",            "TEXT"),
         ("bb_productions",       "est_enrollment",              "REAL DEFAULT 0"),
         ("bb_productions",       "rehearsals_per_week",        "REAL DEFAULT 0"),
         ("bb_productions",       "rehearsal_weeks",            "REAL DEFAULT 0"),
@@ -3978,6 +3991,42 @@ def _conc_first_performance(conn, p, fresh=False):
         return rc_dates[0], 'rolecall', rc_dates
     return None, None, rc_dates
 
+def _conc_plan_lines(plan, items_by_id, audience, snack_pct, drink_pct):
+    """Turn a show's shopping plan into lines: how many of each checked item
+    to buy (the category's count split evenly unless a quantity was typed),
+    the listing picked for it, packs needed, and cost."""
+    chosen = {}
+    for sid, cfg in ((plan or {}).get('items') or {}).items():
+        try: iid = int(sid)
+        except (TypeError, ValueError): continue
+        if cfg.get('on') and iid in items_by_id:
+            chosen[iid] = cfg
+    targets = {'snack': math.ceil(audience * snack_pct), 'drink': math.ceil(audience * drink_pct)}
+    lines = []
+    for cat in ('snack', 'drink'):
+        ids = sorted([i for i in chosen if items_by_id[i]['category'] == cat],
+                     key=lambda i: (items_by_id[i].get('sort_order') or 0, i))
+        fixed = sum(int(chosen[i]['qty']) for i in ids if chosen[i].get('qty') not in (None, ''))
+        auto = [i for i in ids if chosen[i].get('qty') in (None, '')]
+        left = max(0, targets[cat] - fixed)
+        for n, iid in enumerate(ids):
+            cfg = chosen[iid]
+            if cfg.get('qty') not in (None, ''):
+                qty = max(0, int(cfg['qty']))
+            else:
+                k = auto.index(iid)
+                qty = left // len(auto) + (1 if k < left % len(auto) else 0)
+            pick = cfg.get('pick') or {}
+            try:
+                price, units = float(pick.get('price') or 0), int(pick.get('units') or 0)
+            except (TypeError, ValueError):
+                price, units = 0, 0
+            packs = math.ceil(qty / units) if units > 0 and qty > 0 else 0
+            lines.append({'item_id': iid, 'name': items_by_id[iid]['name'], 'category': cat, 'qty': qty,
+                          'auto_qty': cfg.get('qty') in (None, ''), 'pick': pick if units > 0 and price > 0 else None,
+                          'packs': packs, 'cost': round(packs * price, 2)})
+    return lines, targets
+
 def _conc_calc(audience, snack_pct, drink_pct, snack_cost, drink_cost):
     snack_units = math.ceil(audience * snack_pct)
     drink_units = math.ceil(audience * drink_pct)
@@ -4032,6 +4081,7 @@ def get_concessions_estimate(pid):
         'snack_unit_cost': p.get('conc_snack_unit_cost') if p.get('conc_snack_unit_cost') is not None else last.get('conc_snack_unit_cost'),
         'drink_unit_cost': p.get('conc_drink_unit_cost') if p.get('conc_drink_unit_cost') is not None else last.get('conc_drink_unit_cost'),
         'last_estimate': json.loads(p['conc_estimate_json']) if p.get('conc_estimate_json') else None,
+        'plan': json.loads(p['conc_plan_json']) if p.get('conc_plan_json') else None,
         'last_estimated_at': p.get('conc_estimated_at'),
         'department': dept,
         'unallocated': unallocated,
@@ -4052,6 +4102,8 @@ def save_concessions_settings(pid):
         if fp and _conc_days_until(fp) is None:
             return jsonify({'error': 'Use a valid date'}), 400
         fields.append('first_performance_date=%s'); vals.append(fp)
+    if 'plan' in d:
+        fields.append('conc_plan_json=%s'); vals.append(json.dumps(d['plan'] or {}))
     for k in ('snack_pct', 'drink_pct', 'snack_unit_cost', 'drink_unit_cost'):
         if k in d and d[k] not in (None, ''):
             try: v = float(d[k])
@@ -4094,9 +4146,25 @@ def apply_concessions_estimate(pid):
         conn.close(); return jsonify({'error': 'Check the numbers and try again'}), 400
     if audience <= 0:
         conn.close(); return jsonify({'error': 'Enter how many people are expected'}), 400
-    if snack_cost <= 0 or drink_cost <= 0:
-        conn.close(); return jsonify({'error': 'Enter a cost per snack and per drink'}), 400
-    est = _conc_calc(audience, snack_pct, drink_pct, snack_cost, drink_cost)
+    plan = d.get('plan')
+    if plan and any((c or {}).get('on') for c in (plan.get('items') or {}).values()):
+        # Shopping list: cost = packs of each picked product
+        items_by_id = {r['id']: dict(r) for r in conn.execute('SELECT * FROM bb_concession_items').fetchall()}
+        lines, targets = _conc_plan_lines(plan, items_by_id, audience, snack_pct, drink_pct)
+        missing = [l['name'] for l in lines if l['qty'] > 0 and not l['pick']]
+        if missing:
+            conn.close(); return jsonify({'error': 'Pick a product (or enter a price) for: ' + ', '.join(missing)}), 400
+        snack_total = round(sum(l['cost'] for l in lines if l['category'] == 'snack'), 2)
+        drink_total = round(sum(l['cost'] for l in lines if l['category'] == 'drink'), 2)
+        est = {'mode': 'shopping_list', 'audience': audience, 'snack_pct': snack_pct, 'drink_pct': drink_pct,
+               'snack_units': targets['snack'], 'drink_units': targets['drink'], 'lines': lines,
+               'snack_total': snack_total, 'drink_total': drink_total, 'total': round(snack_total + drink_total, 2)}
+        conn.execute('UPDATE bb_productions SET conc_plan_json=%s WHERE id=%s', (json.dumps(plan), pid))
+    else:
+        if snack_cost <= 0 or drink_cost <= 0:
+            conn.close(); return jsonify({'error': 'Check items to shop for, or enter a cost per snack and per drink'}), 400
+        est = _conc_calc(audience, snack_pct, drink_pct, snack_cost, drink_cost)
+        est['mode'] = 'averages'
     est['audience_source'] = d.get('audience_source') or 'manual'
 
     dept = conn.execute('''SELECT * FROM bb_budgets WHERE production_id=%s AND is_active=1
@@ -4125,7 +4193,7 @@ def apply_concessions_estimate(pid):
         bid = conn.execute('SELECT lastval() AS id').fetchone()['id']
     conn.execute('''UPDATE bb_productions SET conc_snack_pct=%s, conc_drink_pct=%s, conc_snack_unit_cost=%s,
                     conc_drink_unit_cost=%s, conc_estimate_json=%s, conc_estimated_at=%s WHERE id=%s''',
-                 (snack_pct, drink_pct, snack_cost, drink_cost, json.dumps(est), now, pid))
+                 (snack_pct, drink_pct, snack_cost or None, drink_cost or None, json.dumps(est), now, pid))
     conn.commit(); conn.close()
     log_action(u['id'], 'applied_concessions_estimate', 'production', pid,
                f"{audience} people → ${est['total']:,.2f} (was ${current:,.2f})")
@@ -4160,9 +4228,9 @@ def _conc_price_prompt(items):
     lines = '\n'.join(f'- id {i["id"]} ({i["category"]}): {i["name"]}' for i in items)
     return (
         "We run concessions for a community theater and buy supplies in bulk.\n"
-        f"For each item below, search {stores} for a current listing a small theater would\n"
-        "actually buy (a multipack or case, not a single unit and not a pallet). Find up to\n"
-        "one listing per store per item.\n\n"
+        f"For each item below, search {stores} for the best-value listing a small theater would\n"
+        "actually buy (a multipack or case, not a single unit and not a pallet): the lowest\n"
+        "price per individual item at that store. Find up to one listing per store per item.\n\n"
         f"Items:\n{lines}\n\n"
         "Rules:\n"
         "- Only report a listing if the search results show its current price. Never estimate.\n"
@@ -4254,9 +4322,14 @@ def _run_price_lookup(lookup_id, items):
     try:
         raw, seen = _call_claude_price_search(items)
         result = _conc_summarize(items, raw, seen)
+        now = datetime.now().isoformat()
         conn = get_db()
+        for it in result['items']:
+            listings = sorted(it['listings'], key=lambda L: L['per_unit'])
+            conn.execute('INSERT INTO bb_concession_item_prices (item_id, lookup_id, checked_at, listings_json) VALUES (%s,%s,%s,%s)',
+                         (it['id'], lookup_id, now, json.dumps(listings)))
         conn.execute("UPDATE bb_concession_price_lookups SET status='done', finished_at=%s, result_json=%s WHERE id=%s",
-                     (datetime.now().isoformat(), json.dumps(result), lookup_id))
+                     (now, json.dumps(result), lookup_id))
         conn.commit(); conn.close()
     except Exception as e:
         app.logger.warning(f'Concessions price lookup {lookup_id} failed: {e}')
@@ -4284,28 +4357,31 @@ def _secs_since(iso):
 
 @app.route('/api/concessions/prices', methods=['GET'])
 def get_concession_prices():
+    """Latest listings for each item (cheapest per item first), plus whether a
+    lookup is running and for which items."""
     u = current_user()
     if not u: return jsonify({'error': 'Not authenticated'}), 401
     conn = get_db()
-    latest = conn.execute("""SELECT l.*, us.name AS started_by_name FROM bb_concession_price_lookups l
-                             LEFT JOIN bb_users us ON us.id=l.started_by
-                             WHERE l.status='done' ORDER BY l.id DESC LIMIT 1""").fetchone()
-    newest = conn.execute('SELECT id, status, started_at, error FROM bb_concession_price_lookups ORDER BY id DESC LIMIT 1').fetchone()
+    rows = conn.execute("""SELECT DISTINCT ON (item_id) item_id, checked_at, listings_json
+                           FROM bb_concession_item_prices ORDER BY item_id, id DESC""").fetchall()
+    newest = conn.execute('SELECT id, status, started_at, item_ids, error FROM bb_concession_price_lookups ORDER BY id DESC LIMIT 1').fetchone()
     conn.close()
-    out = {'configured': bool(os.environ.get('ANTHROPIC_API_KEY', '').strip()),
-           'stale_days': CONC_PRICE_STALE_DAYS, 'latest': None, 'running': False, 'last_error': None}
-    if latest:
-        latest = dict(latest)
-        secs = _secs_since(latest['finished_at'])
+    items = {}
+    for r in rows:
+        secs = _secs_since(r['checked_at'])
         age = int(secs // 86400) if secs is not None else None
-        out['latest'] = {'id': latest['id'], 'finished_at': latest['finished_at'],
-                         'started_by_name': latest.get('started_by_name'),
-                         'result': json.loads(latest['result_json'] or '{}'),
-                         'age_days': age, 'stale': age is None or age >= CONC_PRICE_STALE_DAYS}
+        items[str(r['item_id'])] = {'checked_at': r['checked_at'], 'age_days': age,
+                                    'stale': age is None or age >= CONC_PRICE_STALE_DAYS,
+                                    'listings': json.loads(r['listings_json'] or '[]')}
+    out = {'configured': bool(os.environ.get('ANTHROPIC_API_KEY', '').strip()),
+           'stale_days': CONC_PRICE_STALE_DAYS, 'stores': [n for n, _ in CONC_PRICE_STORES],
+           'items': items, 'running': False, 'running_item_ids': [], 'last_error': None}
     if newest:
         newest = dict(newest)
         secs = _secs_since(newest['started_at'])
         out['running'] = newest['status'] == 'running' and secs is not None and secs < 600
+        if out['running']:
+            out['running_item_ids'] = json.loads(newest.get('item_ids') or '[]')
         if newest['status'] == 'failed':
             out['last_error'] = newest['error']
     return jsonify(out)
@@ -4323,12 +4399,15 @@ def refresh_concession_prices():
         secs = _secs_since(running['started_at'])
         if secs is not None and secs < 600:
             conn.close(); return jsonify({'ok': True, 'running': True, 'id': running['id']})
+    want = {int(x) for x in ((request.json or {}).get('item_ids') or []) if str(x).isdigit()}
     items = [dict(r) for r in conn.execute(
         'SELECT id, category, name FROM bb_concession_items WHERE is_active=1 ORDER BY category, sort_order, id').fetchall()]
+    if want:
+        items = [i for i in items if i['id'] in want]
     if not items:
-        conn.close(); return jsonify({'error': 'Add at least one item to price first'}), 400
-    conn.execute("INSERT INTO bb_concession_price_lookups (status, started_at, started_by) VALUES ('running', %s, %s)",
-                 (datetime.now().isoformat(), u['id']))
+        conn.close(); return jsonify({'error': 'Check at least one item to shop for first'}), 400
+    conn.execute("INSERT INTO bb_concession_price_lookups (status, started_at, started_by, item_ids) VALUES ('running', %s, %s, %s)",
+                 (datetime.now().isoformat(), u['id'], json.dumps([i['id'] for i in items])))
     lid = conn.execute('SELECT lastval() AS id').fetchone()['id']
     conn.commit(); conn.close()
     log_action(u['id'], 'concessions_price_lookup', 'concessions', lid, f'{len(items)} items')
