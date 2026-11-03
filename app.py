@@ -621,6 +621,13 @@ def init_db():
         ("bb_productions",       "venue_rate",                 "REAL DEFAULT 0"),
         ("bb_productions",       "est_ticket_sales",           "REAL DEFAULT 0"),
         ("bb_productions",       "est_concessions",            "REAL DEFAULT 0"),
+        ("bb_productions",       "first_performance_date",     "TEXT"),
+        ("bb_productions",       "conc_snack_pct",             "REAL"),
+        ("bb_productions",       "conc_drink_pct",             "REAL"),
+        ("bb_productions",       "conc_snack_unit_cost",       "REAL"),
+        ("bb_productions",       "conc_drink_unit_cost",       "REAL"),
+        ("bb_productions",       "conc_estimate_json",         "TEXT"),
+        ("bb_productions",       "conc_estimated_at",          "TEXT"),
         ("bb_productions",       "est_enrollment",              "REAL DEFAULT 0"),
         ("bb_productions",       "rehearsals_per_week",        "REAL DEFAULT 0"),
         ("bb_productions",       "rehearsal_weeks",            "REAL DEFAULT 0"),
@@ -1346,7 +1353,7 @@ def notify_statement_submitted(statement_title, items, default_production_id,
         return f'<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:14px">{head}{body}</table>'
 
     n = len(rows)
-    intro = (f'<p><strong>{submitter_name}</strong> submitted the statement '
+    intro = (f'<p><strong>{submitter_name}</strong> submitted the expense report '
              f'<strong>{statement_title}</strong> with {n} item{"s" if n != 1 else ""} '
              f'(${total:.2f} total).</p>')
 
@@ -1363,21 +1370,21 @@ def notify_statement_submitted(statement_title, items, default_production_id,
                      + _table(slot['fyi'], True))
         if slot['action']:
             k = len(slot['action'])
-            subject = f'Statement needs your review: {statement_title} ({k} item{"s" if k != 1 else ""})'
-            title, cta = 'New Statement — Review Needed', 'Review in BloomBooks'
+            subject = f'Expense report needs your review: {statement_title} ({k} item{"s" if k != 1 else ""})'
+            title, cta = 'New Expense Report — Review Needed', 'Review in BloomBooks'
         else:
-            subject = f'FYI — statement submitted: {statement_title}'
-            title, cta = 'New Statement Submitted (FYI)', 'View in BloomBooks'
+            subject = f'FYI — expense report submitted: {statement_title}'
+            title, cta = 'New Expense Report Submitted (FYI)', 'View in BloomBooks'
         send_email(slot['email'], subject, email_html(title, html, cta, app_link('approvals' if slot['action'] else 'all-requests')))
 
     # One confirmation to the submitter
     first = (submitter_name or '').split()[0] if submitter_name else 'there'
-    confirm = (f'<p>Hi {first}, your statement <strong>{statement_title}</strong> has been submitted '
+    confirm = (f'<p>Hi {first}, your expense report <strong>{statement_title}</strong> has been submitted '
                f'and its items are in the approval queue.</p>'
                + _table(rows, True)
                + '<p style="font-size:13px;color:#666">You will receive updates by email as each item moves through approval.</p>')
-    send_email(submitter_email, f'Statement received: {statement_title}',
-        email_html('Your Statement Was Received', confirm, 'View in BloomBooks', app_link('statements')))
+    send_email(submitter_email, f'Expense report received: {statement_title}',
+        email_html('Your Expense Report Was Received', confirm, 'View in BloomBooks', app_link('statements')))
 
 
 def notify_request_status_change(req_id, req_title, submitter_id, new_status,
@@ -2034,48 +2041,41 @@ def debug_config():
     })
 
 # ─── Receipts ─────────────────────────────────────────────────────────────────
+def save_uploaded_receipts(conn, req_id):
+    """Save every file sent under the 'file' field (one purchase can have
+    several receipts/invoices, e.g. an order that shipped in parts).
+    Returns the list of saved URLs. Caller commits."""
+    files = [f for f in request.files.getlist('file') if f and f.filename]
+    if not files or not cloudinary.config().cloud_name:
+        return []
+    urls = []
+    for f in files:
+        try:
+            result = cloudinary.uploader.upload(f, folder='bloombooks/receipts', resource_type='auto')
+            conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
+                         (req_id, result['secure_url'], result['public_id']))
+            urls.append(result['secure_url'])
+        except Exception as e:
+            print(f"[RECEIPT ERROR] {f.filename}: {type(e).__name__}: {e}")
+    return urls
+
 @app.route('/api/requests/<int:rid>/receipts', methods=['POST'])
 def upload_receipt(rid):
     err = require_auth()
     if err: return err
     u = current_user()
-
-    if 'file' not in request.files:
-        print(f"[RECEIPT] No file in request.files. Keys: {list(request.files.keys())}")
+    if not [f for f in request.files.getlist('file') if f and f.filename]:
         return jsonify({'error': 'No file provided'}), 400
-
-    file = request.files['file']
-    print(f"[RECEIPT] File received: {file.filename}, content_type: {file.content_type}")
-
     if not cloudinary.config().cloud_name:
-        print(f"[RECEIPT] Cloudinary not configured")
         return jsonify({'error': 'Cloudinary not configured.'}), 500
+    conn = get_db()
+    urls = save_uploaded_receipts(conn, rid)
+    conn.commit(); conn.close()
+    if not urls:
+        return jsonify({'error': 'Upload failed — please try again'}), 500
+    log_action(u['id'], 'uploaded_receipt', 'request', rid, f'{len(urls)} file(s)')
+    return jsonify({'ok': True, 'image_url': urls[0], 'image_urls': urls, 'count': len(urls)})
 
-    try:
-        print(f"[RECEIPT] Uploading to Cloudinary...")
-        result = cloudinary.uploader.upload(
-            file,
-            folder='bloombooks/receipts',
-            resource_type='auto'
-        )
-        image_url = result['secure_url']
-        public_id = result['public_id']
-        print(f"[RECEIPT] Cloudinary upload OK: {image_url}")
-
-        conn = get_db()
-        conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
-                     (rid, image_url, public_id))
-        conn.commit()
-        conn.close()
-        print(f"[RECEIPT] Saved to DB for request {rid}")
-
-        log_action(u['id'], 'uploaded_receipt', 'request', rid)
-        return jsonify({'ok': True, 'image_url': image_url})
-    except Exception as e:
-        print(f"[RECEIPT ERROR] {type(e).__name__}: {e}")
-        return jsonify({'error': str(e)}), 500
-
-# ─── Reimbursements ───────────────────────────────────────────────────────────
 @app.route('/api/reimbursements', methods=['GET'])
 def list_reimbursements():
     err = require_auth()
@@ -2829,7 +2829,7 @@ def delete_statement(sid):
     if s['created_by'] != u['id'] and u['role'] not in ('admin','treasurer','president'):
         conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     if s['status'] not in ('draft',):
-        conn.close(); return jsonify({'error':'Only draft statements can be deleted'}),400
+        conn.close(); return jsonify({'error':'Only draft expense reports can be deleted'}),400
     # Delete linked requests too
     items = conn.execute('SELECT request_id FROM bb_statement_items WHERE statement_id=%s',(sid,)).fetchall()
     for item in items:
@@ -2852,7 +2852,7 @@ def add_statement_item(sid):
     if s['created_by'] != u['id']:
         conn.close(); return jsonify({'error':'Insufficient permissions'}),403
     if s['status'] != 'draft':
-        conn.close(); return jsonify({'error':'Statement already submitted'}),400
+        conn.close(); return jsonify({'error':'Expense report already submitted'}),400
     data = request.json
     if not data.get('title') or not data.get('estimated_cost'):
         conn.close(); return jsonify({'error':'Title and estimated cost are required'}),400
@@ -3880,6 +3880,185 @@ def _is_rising_stars_category(category):
     c = category.strip().lower()
     return c == 'rs' or 'rising' in c
 
+# ─── Concessions purchasing estimator ─────────────────────────────────────────
+# Rule of thumb: buy snacks for ~40% of the audience and drinks for ~50%.
+# Audience = tickets sold (+ comps) from RoleCall. Only meaningful close to
+# opening, so the estimate can't be applied until CONC_WINDOW_DAYS before the
+# first performance — earlier, ticket counts are too low to buy from.
+CONC_WINDOW_DAYS     = 10
+CONC_DEFAULT_SNACK   = 0.40
+CONC_DEFAULT_DRINK   = 0.50
+CONC_DEPARTMENT_NAME = 'Concessions'
+
+def _conc_can_manage(u, pid):
+    return u and (u['role'] in PRODUCTION_ADMIN_ROLES or is_producer_of(u['id'], pid))
+
+def _conc_days_until(first_perf):
+    if not first_perf:
+        return None
+    try:
+        d = datetime.strptime(str(first_perf)[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return None
+    return (d - date.today()).days
+
+def _conc_rolecall_audience(conn, pid, fresh=False):
+    """Tickets sold + comps from RoleCall, or None if not linked/unavailable."""
+    link = get_rolecall_link(conn, pid)
+    if not link:
+        return None
+    fin = fetch_rolecall_financials(link['rc_production_id'], fresh=fresh)
+    if not fin:
+        return None
+    ct = fin.get('counts') or {}
+    sold, comps = int(ct.get('tickets_sold') or 0), int(ct.get('comps') or 0)
+    return {'tickets_sold': sold, 'comps': comps, 'as_of': (fin.get('as_of') or '')[:16].replace('T', ' ')}
+
+def _conc_calc(audience, snack_pct, drink_pct, snack_cost, drink_cost):
+    snack_units = math.ceil(audience * snack_pct)
+    drink_units = math.ceil(audience * drink_pct)
+    snack_total = round(snack_units * snack_cost, 2)
+    drink_total = round(drink_units * drink_cost, 2)
+    return {'audience': audience, 'snack_pct': snack_pct, 'drink_pct': drink_pct,
+            'snack_unit_cost': snack_cost, 'drink_unit_cost': drink_cost,
+            'snack_units': snack_units, 'drink_units': drink_units,
+            'snack_total': snack_total, 'drink_total': drink_total,
+            'total': round(snack_total + drink_total, 2)}
+
+@app.route('/api/productions/<int:pid>/concessions-estimate', methods=['GET'])
+def get_concessions_estimate(pid):
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    conn = get_db()
+    p = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not p: conn.close(); return jsonify({'error': 'Not found'}), 404
+    p = dict(p)
+    # Unit costs default to whatever the most recent other show used
+    last = conn.execute('''SELECT conc_snack_unit_cost, conc_drink_unit_cost FROM bb_productions
+                           WHERE id!=%s AND conc_snack_unit_cost IS NOT NULL
+                           ORDER BY conc_estimated_at DESC NULLS LAST, id DESC LIMIT 1''', (pid,)).fetchone()
+    last = dict(last) if last else {}
+    dept = conn.execute('''SELECT id, total_amount, spent FROM bb_budgets
+                           WHERE production_id=%s AND is_active=1 AND LOWER(name)=LOWER(%s) LIMIT 1''',
+                        (pid, CONC_DEPARTMENT_NAME)).fetchone()
+    dept = dict(dept) if dept else None
+    if dept:
+        dept['pending'] = pending_by_budget(conn).get(dept['id'], 0)
+    alloc = conn.execute('SELECT COALESCE(SUM(total_amount),0) AS t FROM bb_budgets WHERE production_id=%s AND is_active=1',
+                         (pid,)).fetchone()['t']
+    unallocated = round((p.get('total_budget') or 0) - (p.get('hard_costs_total') or 0) - float(alloc or 0), 2)
+    aud = _conc_rolecall_audience(conn, pid, fresh=request.args.get('refresh') == '1')
+    conn.close()
+    days = _conc_days_until(p.get('first_performance_date'))
+    return jsonify({
+        'first_performance_date': p.get('first_performance_date'),
+        'days_until': days,
+        'window_days': CONC_WINDOW_DAYS,
+        'window_open': days is not None and days <= CONC_WINDOW_DAYS,
+        'rolecall': aud,
+        'snack_pct': p.get('conc_snack_pct') if p.get('conc_snack_pct') is not None else CONC_DEFAULT_SNACK,
+        'drink_pct': p.get('conc_drink_pct') if p.get('conc_drink_pct') is not None else CONC_DEFAULT_DRINK,
+        'snack_unit_cost': p.get('conc_snack_unit_cost') if p.get('conc_snack_unit_cost') is not None else last.get('conc_snack_unit_cost'),
+        'drink_unit_cost': p.get('conc_drink_unit_cost') if p.get('conc_drink_unit_cost') is not None else last.get('conc_drink_unit_cost'),
+        'last_estimate': json.loads(p['conc_estimate_json']) if p.get('conc_estimate_json') else None,
+        'last_estimated_at': p.get('conc_estimated_at'),
+        'department': dept,
+        'unallocated': unallocated,
+        'budget_approved': bool(p.get('board_approved')),
+        'can_manage': _conc_can_manage(u, pid),
+    })
+
+@app.route('/api/productions/<int:pid>/concessions-estimate', methods=['PUT'])
+def save_concessions_settings(pid):
+    """Save the first performance date and the estimator's assumptions.
+    Allowed any time — only applying the estimate is held to the window."""
+    u = current_user()
+    if not _conc_can_manage(u, pid): return jsonify({'error': 'Insufficient permissions'}), 403
+    d = request.json or {}
+    fields, vals = [], []
+    if 'first_performance_date' in d:
+        fp = (d.get('first_performance_date') or '').strip() or None
+        if fp and _conc_days_until(fp) is None:
+            return jsonify({'error': 'Use a valid date'}), 400
+        fields.append('first_performance_date=%s'); vals.append(fp)
+    for k in ('snack_pct', 'drink_pct', 'snack_unit_cost', 'drink_unit_cost'):
+        if k in d and d[k] not in (None, ''):
+            try: v = float(d[k])
+            except (TypeError, ValueError): return jsonify({'error': f'Invalid {k}'}), 400
+            if v < 0: return jsonify({'error': 'Values can\'t be negative'}), 400
+            fields.append(f'conc_{k}=%s'); vals.append(v)
+    if fields:
+        conn = get_db()
+        conn.execute(f'UPDATE bb_productions SET {",".join(fields)} WHERE id=%s', vals + [pid])
+        conn.commit(); conn.close()
+    return jsonify({'ok': True})
+
+@app.route('/api/productions/<int:pid>/concessions-estimate/apply', methods=['POST'])
+def apply_concessions_estimate(pid):
+    """Run the estimate and set the show's Concessions department budget to
+    it (creating the department if needed). Only within the window before the
+    first performance, and within the show's unallocated balance."""
+    u = current_user()
+    if not _conc_can_manage(u, pid): return jsonify({'error': 'Insufficient permissions'}), 403
+    d = request.json or {}
+    conn = get_db()
+    p = conn.execute('SELECT * FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+    if not p: conn.close(); return jsonify({'error': 'Not found'}), 404
+    p = dict(p)
+    if not p.get('board_approved'):
+        conn.close(); return jsonify({'error': 'The show budget must be approved before setting department budgets'}), 400
+    days = _conc_days_until(p.get('first_performance_date'))
+    if days is None:
+        conn.close(); return jsonify({'error': 'Set the first performance date first'}), 400
+    if days > CONC_WINDOW_DAYS:
+        conn.close(); return jsonify({'error': f'Too early — the estimator opens {CONC_WINDOW_DAYS} days before the first performance ({days - CONC_WINDOW_DAYS} more day{"s" if days - CONC_WINDOW_DAYS != 1 else ""}).'}), 400
+    try:
+        audience   = int(d.get('audience') or 0)
+        snack_pct  = float(d.get('snack_pct', CONC_DEFAULT_SNACK))
+        drink_pct  = float(d.get('drink_pct', CONC_DEFAULT_DRINK))
+        snack_cost = float(d.get('snack_unit_cost') or 0)
+        drink_cost = float(d.get('drink_unit_cost') or 0)
+    except (TypeError, ValueError):
+        conn.close(); return jsonify({'error': 'Check the numbers and try again'}), 400
+    if audience <= 0:
+        conn.close(); return jsonify({'error': 'Enter how many people are expected'}), 400
+    if snack_cost <= 0 or drink_cost <= 0:
+        conn.close(); return jsonify({'error': 'Enter a cost per snack and per drink'}), 400
+    est = _conc_calc(audience, snack_pct, drink_pct, snack_cost, drink_cost)
+    est['audience_source'] = d.get('audience_source') or 'manual'
+
+    dept = conn.execute('''SELECT * FROM bb_budgets WHERE production_id=%s AND is_active=1
+                           AND LOWER(name)=LOWER(%s) LIMIT 1''', (pid, CONC_DEPARTMENT_NAME)).fetchone()
+    dept = dict(dept) if dept else None
+    current = float(dept['total_amount']) if dept else 0.0
+    alloc = conn.execute('SELECT COALESCE(SUM(total_amount),0) AS t FROM bb_budgets WHERE production_id=%s AND is_active=1',
+                         (pid,)).fetchone()['t']
+    unallocated = round((p.get('total_budget') or 0) - (p.get('hard_costs_total') or 0) - float(alloc or 0), 2)
+    if est['total'] - current > unallocated + 0.005:
+        conn.close()
+        return jsonify({'error': f"The estimate is {est['total'] - current:,.2f} more than this show has left to allocate "
+                                 f"(${max(unallocated,0):,.2f}). Lower another department or ask for a budget increase.",
+                        'estimate': est}), 400
+    if dept and dept['spent'] and est['total'] < float(dept['spent']):
+        conn.close(); return jsonify({'error': f"Concessions has already spent ${float(dept['spent']):,.2f}, more than this estimate.",
+                                      'estimate': est}), 400
+    now = datetime.now().isoformat()
+    if dept:
+        conn.execute('UPDATE bb_budgets SET total_amount=%s WHERE id=%s', (est['total'], dept['id']))
+        bid = dept['id']
+    else:
+        conn.execute('''INSERT INTO bb_budgets (name,area,season,total_amount,production_id)
+                        VALUES (%s,%s,%s,%s,%s)''',
+                     (CONC_DEPARTMENT_NAME, CONC_DEPARTMENT_NAME, p.get('season') or '', est['total'], pid))
+        bid = conn.execute('SELECT lastval() AS id').fetchone()['id']
+    conn.execute('''UPDATE bb_productions SET conc_snack_pct=%s, conc_drink_pct=%s, conc_snack_unit_cost=%s,
+                    conc_drink_unit_cost=%s, conc_estimate_json=%s, conc_estimated_at=%s WHERE id=%s''',
+                 (snack_pct, drink_pct, snack_cost, drink_cost, json.dumps(est), now, pid))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'applied_concessions_estimate', 'production', pid,
+               f"{audience} people → ${est['total']:,.2f} (was ${current:,.2f})")
+    return jsonify({'ok': True, 'estimate': est, 'budget_id': bid, 'previous': current})
+
 @app.route('/api/productions/<int:pid>/suggested-concessions', methods=['GET'])
 def get_suggested_concessions(pid):
     """Historical average of comparable same-category shows' actual
@@ -4205,8 +4384,8 @@ def mobile_add_statement_item(token, sid):
     if u['role'] != 'admin' and not u.get('training_complete'):
         conn.close(); return jsonify({'error':'Please complete your purchasing training before using BloomBooks.'}),403
     s = conn.execute('SELECT * FROM bb_statements WHERE id=%s AND created_by=%s',(sid,u['id'])).fetchone()
-    if not s: conn.close(); return jsonify({'error':'Statement not found'}),404
-    if dict(s)['status'] != 'draft': conn.close(); return jsonify({'error':'Statement already submitted'}),400
+    if not s: conn.close(); return jsonify({'error':'Expense report not found'}),404
+    if dict(s)['status'] != 'draft': conn.close(); return jsonify({'error':'Expense report already submitted'}),400
 
     data = request.form if request.files else request.json or {}
     title   = (data.get('title') or '').strip()
@@ -4239,13 +4418,8 @@ def mobile_add_statement_item(token, sid):
     conn.execute('UPDATE bb_statements SET updated_at=%s WHERE id=%s',(now,sid))
 
     # Upload receipt if provided
-    if is_sap and 'file' in request.files and request.files['file'].filename:
-        if cloudinary.config().cloud_name:
-            try:
-                result = cloudinary.uploader.upload(request.files['file'],folder='bloombooks/receipts',resource_type='auto')
-                conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
-                             (req_id,result['secure_url'],result['public_id']))
-            except Exception: pass
+    if is_sap:
+        save_uploaded_receipts(conn, req_id)
 
     conn.commit(); conn.close()
     return jsonify({'ok':True,'request_id':req_id})
@@ -4302,13 +4476,11 @@ def submit_receipt_mobile(token):
         if not req:
             conn.close(); return jsonify({'error':'Request not found'}),404
         image_url = None
-        if 'file' in request.files and request.files['file'].filename:
+        if [f for f in request.files.getlist('file') if f and f.filename]:
             if not cloudinary.config().cloud_name:
                 conn.close(); return jsonify({'error':'File upload not configured — contact an admin'}),500
-            result = cloudinary.uploader.upload(request.files['file'],folder='bloombooks/receipts',resource_type='auto')
-            image_url = result['secure_url']
-            conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
-                         (request_id,image_url,result['public_id']))
+            urls = save_uploaded_receipts(conn, request_id)
+            image_url = urls[0] if urls else None
         if actual:
             try: conn.execute('UPDATE bb_purchase_requests SET actual_cost=%s WHERE id=%s',(float(actual),request_id))
             except Exception: pass
@@ -4366,13 +4538,8 @@ def mobile_new_request(token):
                   json.dumps(chain),0))
     row = conn.execute('SELECT lastval() AS id').fetchone()
     req_id = row['id']
-    if is_sap and 'file' in request.files and request.files['file'].filename:
-        if cloudinary.config().cloud_name:
-            try:
-                result = cloudinary.uploader.upload(request.files['file'],folder='bloombooks/receipts',resource_type='auto')
-                conn.execute('INSERT INTO bb_receipts (request_id,image_url,public_id) VALUES (%s,%s,%s)',
-                             (req_id,result['secure_url'],result['public_id']))
-            except Exception: pass
+    if is_sap:
+        save_uploaded_receipts(conn, req_id)
     conn.commit()
     log_action(uid,'mobile_new_request','request',req_id,title)
     user_info = get_user_email(uid)
