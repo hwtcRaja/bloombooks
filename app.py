@@ -3948,6 +3948,36 @@ def _conc_rolecall_audience(conn, pid, fresh=False):
     sold, comps = int(ct.get('tickets_sold') or 0), int(ct.get('comps') or 0)
     return {'tickets_sold': sold, 'comps': comps, 'as_of': (fin.get('as_of') or '')[:16].replace('T', ' ')}
 
+def _rc_performance_dates(conn, pid, fresh=False):
+    """Performance dates from RoleCall's ticketing setup (its performances
+    table), via the same financials API as ticket sales. Accepts either
+      "performances": [{"date": "YYYY-MM-DD", ...}, ...]   (also "starts_at")
+    or a bare "first_performance_date". Returns sorted ISO dates ([] if none)."""
+    link = get_rolecall_link(conn, pid)
+    if not link:
+        return []
+    fin = fetch_rolecall_financials(link['rc_production_id'], fresh=fresh) or {}
+    dates = []
+    for perf in fin.get('performances') or []:
+        if isinstance(perf, dict) and (perf.get('status') or '').lower() == 'cancelled':
+            continue   # RoleCall lists cancelled performances too; they don't open the show
+        raw = (perf.get('date') or perf.get('performance_date') or perf.get('starts_at') or '') if isinstance(perf, dict) else str(perf)
+        if _conc_days_until(raw) is not None:
+            dates.append(str(raw)[:10])
+    if not dates and _conc_days_until(fin.get('first_performance_date')) is not None:
+        dates.append(str(fin['first_performance_date'])[:10])
+    return sorted(set(dates))
+
+def _conc_first_performance(conn, p, fresh=False):
+    """(date, source, rolecall_dates). A date typed in BloomBooks overrides
+    RoleCall; otherwise RoleCall's earliest performance is used."""
+    rc_dates = _rc_performance_dates(conn, p['id'], fresh=fresh)
+    if p.get('first_performance_date'):
+        return p['first_performance_date'], 'manual', rc_dates
+    if rc_dates:
+        return rc_dates[0], 'rolecall', rc_dates
+    return None, None, rc_dates
+
 def _conc_calc(audience, snack_pct, drink_pct, snack_cost, drink_cost):
     snack_units = math.ceil(audience * snack_pct)
     drink_units = math.ceil(audience * drink_pct)
@@ -3981,11 +4011,18 @@ def get_concessions_estimate(pid):
     alloc = conn.execute('SELECT COALESCE(SUM(total_amount),0) AS t FROM bb_budgets WHERE production_id=%s AND is_active=1',
                          (pid,)).fetchone()['t']
     unallocated = round((p.get('total_budget') or 0) - (p.get('hard_costs_total') or 0) - float(alloc or 0), 2)
-    aud = _conc_rolecall_audience(conn, pid, fresh=request.args.get('refresh') == '1')
+    fresh = request.args.get('refresh') == '1'
+    aud = _conc_rolecall_audience(conn, pid, fresh=fresh)
+    first_perf, first_src, rc_dates = _conc_first_performance(conn, p, fresh=fresh)
+    linked = bool(get_rolecall_link(conn, pid))
     conn.close()
-    days = _conc_days_until(p.get('first_performance_date'))
+    days = _conc_days_until(first_perf)
     return jsonify({
-        'first_performance_date': p.get('first_performance_date'),
+        'first_performance_date': first_perf,
+        'first_performance_source': first_src,
+        'manual_first_performance_date': p.get('first_performance_date'),
+        'rolecall_performance_dates': rc_dates,
+        'rolecall_linked': linked,
         'days_until': days,
         'window_days': CONC_WINDOW_DAYS,
         'window_open': days is not None and days <= CONC_WINDOW_DAYS,
@@ -4041,9 +4078,10 @@ def apply_concessions_estimate(pid):
     p = dict(p)
     if not p.get('board_approved'):
         conn.close(); return jsonify({'error': 'The show budget must be approved before setting department budgets'}), 400
-    days = _conc_days_until(p.get('first_performance_date'))
+    first_perf, _, _ = _conc_first_performance(conn, p)
+    days = _conc_days_until(first_perf)
     if days is None:
-        conn.close(); return jsonify({'error': 'Set the first performance date first'}), 400
+        conn.close(); return jsonify({'error': 'No first performance date yet — add performances in RoleCall ticketing, or enter the date here'}), 400
     if days > CONC_WINDOW_DAYS:
         conn.close(); return jsonify({'error': f'Too early — the estimator opens {CONC_WINDOW_DAYS} days before the first performance ({days - CONC_WINDOW_DAYS} more day{"s" if days - CONC_WINDOW_DAYS != 1 else ""}).'}), 400
     try:
