@@ -1536,6 +1536,49 @@ async function renderApprovals() {
       </div>`;
     }
 
+    // Expense reports: items from the same report that are waiting on you
+    // are shown together so they can be approved in one go.
+    function reportGroup(items) {
+      const first = items[0];
+      const amt = r => +(r.actual_cost || r.estimated_cost || 0);
+      const total = round2(items.reduce((a,r)=>a+amt(r),0));
+      const sid = first.statement_id;
+      return `<div class="card mb-8" style="border:1.5px solid var(--teal)">
+        <div class="card-body" style="padding:11px 13px;font-size:13px">
+          <div class="text-xs fw-600" style="color:var(--teal);letter-spacing:.03em">EXPENSE REPORT</div>
+          <div class="fw-600" style="line-height:1.3">${escHtmlBB(first.statement_title||'Expense report')}</div>
+          <div class="text-xs text-muted mb-8">${first.submitter_name} · ${items.length} items · ${fmtMoney(total)}</div>
+          ${items.map(r => `<label class="flex flex-center gap-8" style="padding:4px 0;border-top:1px solid var(--border);cursor:pointer">
+              <input type="checkbox" class="rep-cb-${sid}" data-id="${r.id}" data-amount="${amt(r)}" checked onchange="updateReportGroup(${sid})">
+              <span style="flex:1;min-width:0">
+                <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtmlBB(r.title)}</span>
+                <span class="text-xs text-muted">${r.budget_name||''}${r.production_name?` · ${r.production_name}`:''}</span>
+              </span>
+              <span class="fw-600">${fmtMoney(amt(r))}</span>
+              <a href="#" class="text-xs" onclick="event.preventDefault();event.stopPropagation();showRequestDetail(${r.id})">view</a>
+            </label>`).join('')}
+          <textarea id="rep-note-${sid}" class="form-textarea mt-8 mb-6" style="min-height:34px;font-size:12px" placeholder="Note for the whole report (optional)..."></textarea>
+          <button class="btn btn-approve btn-sm w-full" id="rep-btn-${sid}" onclick="approveReportItems(${sid})">✓ Approve all ${items.length} · ${fmtMoney(total)}</button>
+          <div class="text-xs text-muted mt-6">Uncheck anything you want to handle separately — deny or send it back from its own card below.</div>
+          <details class="archive-fold" style="margin-top:4px"><summary>Item cards (${items.length})</summary>
+            <div class="mt-8">${items.map(r => requestCard(r)).join('')}</div></details>
+        </div></div>`;
+    }
+    function columnCards(data) {
+      const groups = {};
+      for (const r of data) if (r.statement_id && canActOn(r)) (groups[r.statement_id] ||= []).push(r);
+      const shown = new Set();
+      return data.map(r => {
+        const g = r.statement_id && canActOn(r) ? groups[r.statement_id] : null;
+        if (g && g.length > 1) {
+          if (shown.has(r.statement_id)) return '';
+          shown.add(r.statement_id);
+          return reportGroup(g);
+        }
+        return requestCard(r);
+      }).join('');
+    }
+
     const colDefs = [
       { key:'pending',  label:'Pending',   color:'#c97c10', data:pending  },
       { key:'inreview', label:'In Review', color:'#185fa5', data:inReview },
@@ -1555,7 +1598,7 @@ async function renderApprovals() {
             <div style="min-height:60px">
               ${col.data.length===0
                 ?'<div style="border:2px dashed var(--border);border-radius:var(--r);padding:16px;text-align:center;color:var(--ink3);font-size:12px">Nothing here</div>'
-                :col.data.map(r=>requestCard(r)).join('')}
+                :columnCards(col.data)}
             </div>
           </div>`).join('')}
         </div>
@@ -1574,6 +1617,29 @@ async function renderApprovals() {
     document.getElementById('content').innerHTML = `<div class="empty"><p>${e.message}</p></div>`;
   }
 }
+function updateReportGroup(sid) {
+  const sel = [...document.querySelectorAll(`.rep-cb-${sid}`)];
+  const on = sel.filter(c => c.checked);
+  const total = round2(on.reduce((a,c)=>a+parseFloat(c.dataset.amount||0),0));
+  const btn = document.getElementById(`rep-btn-${sid}`);
+  btn.disabled = on.length === 0;
+  btn.textContent = on.length === 0 ? 'Select items to approve'
+    : on.length === sel.length ? `✓ Approve all ${on.length} · ${fmtMoney(total)}` : `✓ Approve ${on.length} selected · ${fmtMoney(total)}`;
+}
+async function approveReportItems(sid) {
+  const ids = [...document.querySelectorAll(`.rep-cb-${sid}`)].filter(c => c.checked).map(c => parseInt(c.dataset.id));
+  if (!ids.length) return;
+  const note = document.getElementById(`rep-note-${sid}`)?.value || '';
+  const btn = document.getElementById(`rep-btn-${sid}`);
+  btn.disabled = true; btn.textContent = 'Approving…';
+  try {
+    const res = await api('POST', `/statements/${sid}/act`, {action: 'approve', request_ids: ids, note});
+    toast(`Approved ${res.count} item${res.count!==1?'s':''} (${fmtMoney(res.total)})${res.skipped?.length ? ` · ${res.skipped.length} skipped — no longer waiting on you` : ''}.`, 'success');
+    refreshBadges();
+    renderApprovals();
+  } catch(e) { toast(e.message, 'error'); updateReportGroup(sid); }
+}
+
 async function quickApprove(rid, action) {
   const note = document.getElementById(`note-${rid}`)?.value || '';
   const actEl = document.getElementById(`act-${rid}`);
