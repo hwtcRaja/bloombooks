@@ -4242,39 +4242,79 @@ def _conc_price_prompt(items):
         '"price":<number>,"units":<integer>,"url":"<url>"}]}]}'
     )
 
+CONC_PRICE_BATCH = 3   # items per Claude request — small enough to finish every search and still answer
+
+def _extract_price_json(text):
+    """Find the {"items": [...]} object in Claude's reply, even with prose or
+    code fences around it."""
+    dec = json.JSONDecoder()
+    for m in re.finditer(r'\{\s*"items"\s*:', text or ''):
+        try:
+            obj, _ = dec.raw_decode(text, m.start())
+            if isinstance(obj, dict) and isinstance(obj.get('items'), list):
+                return obj
+        except ValueError:
+            continue
+    return None
+
 def _call_claude_price_search(items):
+    """One Claude request (with follow-ups) for a small batch of items.
+    Returns (parsed_json, seen_urls). Raises with a specific reason if no
+    usable answer comes back."""
     key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
     headers = {'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'}
-    tools = [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 20,
+    tools = [{'type': 'web_search_20250305', 'name': 'web_search',
+              'max_uses': len(items) * len(CONC_PRICE_STORES) + 2,
               'allowed_domains': [d for _, d in CONC_PRICE_STORES]}]
     messages = [{'role': 'user', 'content': _conc_price_prompt(items)}]
-    seen_urls, text = set(), ''
-    for _ in range(5):   # web search can pause a long turn; continue it
+    seen_urls, searches, search_errors = set(), 0, set()
+    stop, last_text = None, ''
+    nudged = False
+    for _ in range(6):
         r = req_lib.post('https://api.anthropic.com/v1/messages', headers=headers, timeout=170,
-                         json={'model': CONC_PRICE_MODEL, 'max_tokens': 4096,
+                         json={'model': CONC_PRICE_MODEL, 'max_tokens': 8000,
                                'messages': messages, 'tools': tools})
         if r.status_code != 200:
             raise RuntimeError(f'Claude API error {r.status_code}: {r.text[:300]}')
         data = r.json()
+        stop = data.get('stop_reason')
+        text = ''
         for b in data.get('content', []):
-            if b.get('type') == 'web_search_tool_result' and isinstance(b.get('content'), list):
-                for res in b['content']:
-                    if res.get('url'):
-                        seen_urls.add(_norm_url(res['url']))
-            if b.get('type') == 'text':
+            t = b.get('type')
+            if t == 'server_tool_use':
+                searches += 1
+            elif t == 'web_search_tool_result':
+                c = b.get('content')
+                if isinstance(c, list):
+                    for res in c:
+                        if res.get('url'):
+                            seen_urls.add(_norm_url(res['url']))
+                elif isinstance(c, dict) and c.get('error_code'):
+                    search_errors.add(c['error_code'])
+            elif t == 'text':
                 text += b.get('text', '')
                 for cit in b.get('citations') or []:
                     if cit.get('url'):
                         seen_urls.add(_norm_url(cit['url']))
-        if data.get('stop_reason') == 'pause_turn':
-            messages.append({'role': 'assistant', 'content': data['content']})
-            text = ''
-            continue
-        break
-    m = re.search(r'\{.*\}', text, re.S)
-    if not m:
-        raise RuntimeError('No price data came back — try again in a bit.')
-    return json.loads(m.group(0)), seen_urls
+        last_text = text or last_text
+        found = _extract_price_json(text)
+        if found is not None:
+            return found, seen_urls
+        messages.append({'role': 'assistant', 'content': data['content']})
+        if stop == 'pause_turn':
+            continue          # long search turn — let it keep going
+        if nudged:
+            break
+        # Ended (or ran out of room) without the JSON: ask for it from what it found
+        messages.append({'role': 'user', 'content':
+            'Please reply now with ONLY the JSON described above, using the listings you already found. '
+            'Leave out anything you could not confirm. If you found nothing, reply {"items": []}.'})
+        nudged = True
+    why = f'stopped: {stop}, {searches} searches'
+    if search_errors:
+        why += ', search errors: ' + ', '.join(sorted(search_errors))
+    snippet = (last_text or '').strip().replace('\n', ' ')[:160]
+    raise RuntimeError(f'No price data came back ({why}).' + (f' Last reply: "{snippet}"' if snippet else ''))
 
 def _conc_summarize(items, raw, seen_urls):
     by_id = {i['id']: dict(i, listings=[]) for i in items}
@@ -4319,24 +4359,34 @@ def _conc_summarize(items, raw, seen_urls):
             'stores': [n for n, _ in CONC_PRICE_STORES], 'dropped': dropped, 'model': CONC_PRICE_MODEL}
 
 def _run_price_lookup(lookup_id, items):
-    try:
-        raw, seen = _call_claude_price_search(items)
-        result = _conc_summarize(items, raw, seen)
-        now = datetime.now().isoformat()
-        conn = get_db()
-        for it in result['items']:
-            listings = sorted(it['listings'], key=lambda L: L['per_unit'])
-            conn.execute('INSERT INTO bb_concession_item_prices (item_id, lookup_id, checked_at, listings_json) VALUES (%s,%s,%s,%s)',
-                         (it['id'], lookup_id, now, json.dumps(listings)))
-        conn.execute("UPDATE bb_concession_price_lookups SET status='done', finished_at=%s, result_json=%s WHERE id=%s",
-                     (now, json.dumps(result), lookup_id))
-        conn.commit(); conn.close()
-    except Exception as e:
-        app.logger.warning(f'Concessions price lookup {lookup_id} failed: {e}')
-        conn = get_db()
+    """Search in small batches, saving each batch's prices as it finishes, so
+    one slow or failed batch doesn't throw away the rest."""
+    results, failures = [], []
+    for k in range(0, len(items), CONC_PRICE_BATCH):
+        batch = items[k:k + CONC_PRICE_BATCH]
+        try:
+            raw, seen = _call_claude_price_search(batch)
+            summary = _conc_summarize(batch, raw, seen)
+            now = datetime.now().isoformat()
+            conn = get_db()
+            for it in summary['items']:
+                listings = sorted(it['listings'], key=lambda L: L['per_unit'])
+                conn.execute('INSERT INTO bb_concession_item_prices (item_id, lookup_id, checked_at, listings_json) VALUES (%s,%s,%s,%s)',
+                             (it['id'], lookup_id, now, json.dumps(listings)))
+            conn.commit(); conn.close()
+            results.extend(summary['items'])
+        except Exception as e:
+            app.logger.warning(f'Concessions price lookup {lookup_id}, items {[i["id"] for i in batch]} failed: {e}')
+            failures.append(f'{", ".join(i["name"] for i in batch)}: {e}')
+    conn = get_db()
+    if results:
+        conn.execute("UPDATE bb_concession_price_lookups SET status='done', finished_at=%s, result_json=%s, error=%s WHERE id=%s",
+                     (datetime.now().isoformat(), json.dumps({'items': results}),
+                      ('Some items failed — ' + ' | '.join(failures))[:900] if failures else None, lookup_id))
+    else:
         conn.execute("UPDATE bb_concession_price_lookups SET status='failed', finished_at=%s, error=%s WHERE id=%s",
-                     (datetime.now().isoformat(), str(e)[:500], lookup_id))
-        conn.commit(); conn.close()
+                     (datetime.now().isoformat(), (' | '.join(failures) or 'No results')[:900], lookup_id))
+    conn.commit(); conn.close()
 
 def _conc_price_user_ok(u):
     if not u:
@@ -4379,10 +4429,10 @@ def get_concession_prices():
     if newest:
         newest = dict(newest)
         secs = _secs_since(newest['started_at'])
-        out['running'] = newest['status'] == 'running' and secs is not None and secs < 600
+        out['running'] = newest['status'] == 'running' and secs is not None and secs < 1500
         if out['running']:
             out['running_item_ids'] = json.loads(newest.get('item_ids') or '[]')
-        if newest['status'] == 'failed':
+        if newest['status'] in ('failed', 'done') and newest.get('error'):
             out['last_error'] = newest['error']
     return jsonify(out)
 
@@ -4397,7 +4447,7 @@ def refresh_concession_prices():
                               WHERE status='running' ORDER BY id DESC LIMIT 1""").fetchone()
     if running:
         secs = _secs_since(running['started_at'])
-        if secs is not None and secs < 600:
+        if secs is not None and secs < 1500:
             conn.close(); return jsonify({'ok': True, 'running': True, 'id': running['id']})
     want = {int(x) for x in ((request.json or {}).get('item_ids') or []) if str(x).isdigit()}
     items = [dict(r) for r in conn.execute(
