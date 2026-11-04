@@ -16,6 +16,9 @@ import requests as req_lib
 import base64
 import time
 import threading
+import shutil
+import subprocess
+import tempfile
 import statistics
 from urllib.parse import urlparse
 from cryptography.fernet import Fernet, InvalidToken
@@ -2453,6 +2456,90 @@ def upload_slide():
         return jsonify({'ok': True, 'url': result['secure_url'], 'public_id': result['public_id']})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# ─── Upload a whole training deck (.pptx or .pdf) ──────────────────────────────
+# PowerPoint → PDF with LibreOffice (installed via nixpacks.toml), PDF → one PNG
+# per page with PyMuPDF, each PNG to Cloudinary, then the module's slide list is
+# replaced in one go. A PDF skips the LibreOffice step and matches PowerPoint
+# exactly, so it's the fallback if LibreOffice isn't on the server.
+DECK_MAX_PAGES = 60
+
+def _soffice_path():
+    for name in ('soffice', 'libreoffice'):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+def _pptx_to_pdf(src_path, workdir):
+    exe = _soffice_path()
+    if not exe:
+        raise RuntimeError("PowerPoint conversion isn't installed on the server. Upload the deck as a PDF instead "
+                           "(PowerPoint: File → Save As → PDF), or redeploy with nixpacks.toml so LibreOffice is included.")
+    env = dict(os.environ, HOME=workdir)   # LibreOffice needs a writable profile directory
+    r = subprocess.run([exe, '--headless', '--norestore', '--convert-to', 'pdf', '--outdir', workdir, src_path],
+                       capture_output=True, text=True, timeout=100, env=env)
+    pdf = os.path.splitext(src_path)[0] + '.pdf'
+    if r.returncode != 0 or not os.path.exists(pdf):
+        raise RuntimeError(f'Could not convert the PowerPoint ({(r.stderr or r.stdout or "no output").strip()[:200]})')
+    return pdf
+
+def _pdf_to_pngs(pdf_path, workdir, width=1600):
+    import pymupdf
+    doc = pymupdf.open(pdf_path)
+    if doc.page_count == 0:
+        raise RuntimeError('That file has no pages')
+    if doc.page_count > DECK_MAX_PAGES:
+        raise RuntimeError(f'That deck has {doc.page_count} slides — the limit is {DECK_MAX_PAGES}')
+    out = []
+    for i, page in enumerate(doc):
+        zoom = width / page.rect.width
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+        path = os.path.join(workdir, f'slide-{i + 1:02d}.png')
+        pix.save(path)
+        out.append(path)
+    doc.close()
+    return out
+
+@app.route('/api/training/deck', methods=['POST'])
+def upload_training_deck():
+    err = require_auth(['admin'])
+    if err: return err
+    u = current_user()
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify({'error': 'No file provided'}), 400
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in ('.pptx', '.ppt', '.pdf'):
+        return jsonify({'error': 'Upload a PowerPoint (.pptx) or PDF'}), 400
+    if not cloudinary.config().cloud_name:
+        return jsonify({'error': 'Cloudinary not configured'}), 500
+    workdir = tempfile.mkdtemp(prefix='deck-')
+    try:
+        src = os.path.join(workdir, 'deck' + ext)
+        f.save(src)
+        pdf = src if ext == '.pdf' else _pptx_to_pdf(src, workdir)
+        pngs = _pdf_to_pngs(pdf, workdir)
+        stamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        urls = []
+        for i, path in enumerate(pngs):
+            res = cloudinary.uploader.upload(path, folder='bloombooks/slides', public_id=f'deck-{stamp}-{i + 1:02d}')
+            urls.append(res['secure_url'])
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Converting the PowerPoint took too long. Try uploading it as a PDF.'}), 500
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        app.logger.error(f'Training deck upload failed: {e}')
+        return jsonify({'error': f'Upload failed: {str(e)[:200]}'}), 500
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    conn = get_db()
+    conn.execute('UPDATE bb_training_modules SET slides=%s WHERE is_active=1', (json.dumps(urls),))
+    conn.commit(); conn.close()
+    log_action(u['id'], 'uploaded_training_deck', 'training', None, f'{f.filename}: {len(urls)} slides')
+    return jsonify({'ok': True, 'slides': urls, 'count': len(urls)})
+
 
 @app.route('/api/training/slides/update', methods=['POST'])
 def update_slides():

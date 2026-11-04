@@ -1,0 +1,6 @@
+# Extra system packages for the Railway (Nixpacks) build.
+# LibreOffice turns an uploaded training deck (.pptx) into a PDF so each slide
+# can become an image. Carlito/Caladea are metric-compatible stand-ins for
+# Calibri/Cambria, the fonts the HWTC deck uses, so text wraps the same way.
+[phases.setup]
+aptPkgs = ["...", "libreoffice-impress", "fonts-crosextra-carlito", "fonts-crosextra-caladea"]
