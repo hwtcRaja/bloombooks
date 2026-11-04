@@ -56,6 +56,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .type-opt{border:2px solid var(--border);border-radius:var(--r-sm);padding:11px 12px;cursor:pointer;transition:all .15s}
 .type-opt.active-pre{border-color:var(--teal);background:var(--teal3)}
 .type-opt.active-sap{border-color:var(--amber);background:var(--amber-bg)}
+.type-opt.active-inv{border-color:#4F46E5;background:#EEF2FF}
+.type-toggle.three{grid-template-columns:1fr 1fr 1fr}
+@media(max-width:420px){.type-toggle.three{grid-template-columns:1fr}}
 .type-opt-title{font-weight:600;font-size:13px;margin-bottom:2px}
 .type-opt-sub{font-size:11px;color:var(--ink3)}
 
@@ -310,6 +313,7 @@ function showRErr(msg){const e=document.getElementById('r-error');e.textContent=
 // ══════════════════════════════════════════════
 function renderNewRequestTab() {
   fileBins.n = [];
+  nLinks = [{url:'',label:''}];
   const u = pageData.user;
   const budgets = pageData.budgets||[];
   const trained = u.role === 'admin' || u.training_complete;
@@ -352,11 +356,13 @@ function renderNewRequestTab() {
       <div><div class="user-name">${u.name}</div><div class="user-sub">Submit a new purchase request</div></div>
     </div>
     <div class="card"><div class="card-label">Request type</div><div class="card-body" style="padding-top:8px">
-      <div class="type-toggle">
+      <div class="type-toggle three">
         <div class="type-opt active-pre" id="ntype-pre" onclick="setNewType('pre_approval')">
           <div class="type-opt-title">Company Purchase Request</div><div class="type-opt-sub">Plan to buy — HWTC pays</div></div>
         <div class="type-opt" id="ntype-sap" onclick="setNewType('sap')">
           <div class="type-opt-title">SAP</div><div class="type-opt-sub">Already bought — reimburse me</div></div>
+        <div class="type-opt" id="ntype-inv" onclick="setNewType('invoice')">
+          <div class="type-opt-title">Invoice</div><div class="type-opt-sub">Approved order — pay the vendor's bill</div></div>
       </div>
     </div></div>
     <div class="card"><div class="card-label">Purchase details</div><div class="card-body">
@@ -380,9 +386,10 @@ function renderNewRequestTab() {
         <label class="form-label">Store / website</label>
         <input type="text" id="n-vendor" class="form-input" placeholder="e.g. Amazon, Target, Joann Fabrics"></div>
       <div id="n-url-field" class="form-group" style="margin-top:10px;display:none">
-        <label class="form-label">Product or order link (optional)</label>
-        <input type="url" id="n-item-url" class="form-input" placeholder="https://..." inputmode="url">
-        <div class="form-hint">For a single online item. Ordered several things? Skip this and attach the invoices.</div></div>
+        <label class="form-label">Product or order links (optional)</label>
+        <div id="n-links"></div>
+        <button type="button" onclick="addNLink()" style="margin-top:6px;border:1px dashed var(--border);background:none;border-radius:var(--r-sm);padding:7px 10px;font-size:13px;color:var(--teal);width:100%;cursor:pointer">+ Add another link</button>
+        <div class="form-hint">One per product, or a single cart / wishlist link. Label is optional — e.g. “Nerds 36ct ×4”.</div></div>
     </div></div>
     <div id="n-sap-section" style="display:none">
       <div class="card"><div class="card-label">SAP details</div><div class="card-body">
@@ -410,7 +417,20 @@ function renderNewRequestTab() {
             <input type="text" id="n-reimb-handle" class="form-input" placeholder="Username or info"></div>
         </div>
       </div></div>
-      <div class="card"><div class="card-label">Receipts</div><div class="card-body">
+    </div>
+    <div id="n-inv-section" style="display:none">
+      <div class="card"><div class="card-label">Invoice details</div><div class="card-body">
+        <div class="two-col">
+          <div class="form-group"><label class="form-label">Invoice number</label>
+            <input type="text" id="n-inv-number" class="form-input" placeholder="e.g. INV-10423"></div>
+          <div class="form-group"><label class="form-label">Due date</label>
+            <input type="date" id="n-inv-due" class="form-input"></div>
+        </div>
+        <div class="form-hint">Put the vendor in “Store / website” — that’s who gets paid. Note who approved the order below.</div>
+      </div></div>
+    </div>
+    <div id="n-upload-section" style="display:none">
+      <div class="card"><div class="card-label" id="n-upload-label">Receipts</div><div class="card-body">
         <div class="upload-zone" id="n-upload-zone" onclick="document.getElementById('n-file-input').click()"><div class="upload-text">Take photo or choose files</div>
           <div class="upload-sub">JPG, PNG, or PDF · Add every receipt or invoice for this purchase — e.g. an order that shipped in parts.</div>
         </div>
@@ -424,6 +444,8 @@ function renderNewRequestTab() {
     </div></div>
     <div id="n-error" class="form-error" style="margin-bottom:10px;display:none"></div>
     <button class="btn-primary" id="n-submit-btn" onclick="submitNewRequest()">Submit Request</button>`;
+  renderNLinks();
+  setNewType('pre_approval');   // shows the optional cart/quote upload
 }
 
 function toggleMobileEmergencyFields(isEmergency) {
@@ -437,11 +459,41 @@ function updateMobileReimbHandle(method) {
   if (input) input.placeholder = REIMB_LABELS[method]||'';
 }
 
+// ── Several product/order links on one request ─────────────────────────────
+let nLinks = [{url: '', label: ''}];
+function escH(v){ const d=document.createElement('div'); d.textContent=v||''; return d.innerHTML.replace(/"/g,'&quot;'); }
+function renderNLinks() {
+  const el=document.getElementById('n-links'); if(!el) return;
+  el.innerHTML = nLinks.map((l,i)=>`
+    <div style="display:flex;gap:6px;align-items:center;${i?'margin-top:6px':''}">
+      <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+        <input type="url" class="form-input" inputmode="url" placeholder="https://..." value="${escH(l.url)}" oninput="nLinks[${i}].url=this.value">
+        <input type="text" class="form-input" placeholder="Label (optional)" value="${escH(l.label)}" oninput="nLinks[${i}].label=this.value" style="font-size:13px">
+      </div>
+      ${nLinks.length>1?`<button type="button" onclick="nLinks.splice(${i},1);renderNLinks()" aria-label="Remove link" style="border:none;background:none;font-size:22px;color:var(--ink3);cursor:pointer;padding:0 4px">×</button>`:''}
+    </div>`).join('');
+}
+function addNLink(){ nLinks.push({url:'',label:''}); renderNLinks(); }
+function nLinksForSubmit(){
+  return nLinks.map(l=>({url:(l.url||'').trim(),label:(l.label||'').trim()})).filter(l=>l.url)
+    .map(l=>({...l,url:/^https?:\/\//i.test(l.url)?l.url:'https://'+l.url}));
+}
+
 function setNewType(type) {
-  newType=type; const isSAP=type==='sap';
-  document.getElementById('ntype-pre').className='type-opt'+(isSAP?'':' active-pre');
+  newType=type; const isSAP=type==='sap', isInv=type==='invoice';
+  document.getElementById('ntype-pre').className='type-opt'+(!isSAP&&!isInv?' active-pre':'');
   document.getElementById('ntype-sap').className='type-opt'+(isSAP?' active-sap':'');
+  document.getElementById('ntype-inv').className='type-opt'+(isInv?' active-inv':'');
   document.getElementById('n-sap-section').style.display=isSAP?'block':'none';
+  document.getElementById('n-inv-section').style.display=isInv?'block':'none';
+  document.getElementById('n-upload-section').style.display='block';
+  document.getElementById('n-upload-label').textContent=isInv?'Invoice':isSAP?'Receipts':'Cart, list, or quote (optional)';
+  const sub=document.querySelector('#n-upload-zone .upload-sub');
+  if (sub) sub.textContent = isInv ? 'JPG, PNG, or PDF · Attach the vendor’s invoice.'
+    : isSAP ? 'JPG, PNG, or PDF · Add every receipt or invoice for this purchase — e.g. an order that shipped in parts.'
+    : 'JPG, PNG, or PDF · Buying a list of things? A cart screenshot, shopping list, or vendor quote helps approvers.';
+  const costLbl=document.getElementById('n-cost')?.closest('.form-group')?.querySelector('.form-label');
+  if (costLbl) costLbl.innerHTML=(isInv?'Invoice amount':'Estimated cost')+' <span class="req">*</span>';
 }
 
 function setNewMethod(method) {
@@ -468,8 +520,8 @@ async function submitNewRequest() {
   const budget  = document.getElementById('n-budget')?.value||'';
   const prodId  = document.getElementById('n-prod')?.value||'';
   const vendor  = document.getElementById('n-vendor')?.value.trim()||'';
-  const rawUrl  = newMethod==='online'?(document.getElementById('n-item-url')?.value.trim()||''):'';
-  const itemUrl = rawUrl&&!rawUrl.match(/^https?:\/\//)?'https://'+rawUrl:rawUrl;
+  const itemLinks = newMethod==='online' ? nLinksForSubmit() : [];
+  const itemUrl = itemLinks.length ? itemLinks[0].url : '';
   const desc    = document.getElementById('n-desc')?.value.trim()||'';
   const isEmergency = newType==='sap' && (document.getElementById('n-is-emergency')?.checked||false);
   const emergencyReason = isEmergency ? (document.getElementById('n-sap-reason')?.value.trim()||'') : '';
@@ -483,17 +535,23 @@ async function submitNewRequest() {
   if (!cost)  { showNErr('Please enter the estimated cost.'); return; }
   if (!budget){ showNErr('Please select a budget or department.'); return; }
   if (newType==='sap'&&!fileBins.n.length){ showNErr('Please attach a receipt for this purchase.'); return; }
+  if (newType==='invoice'&&!vendor){ showNErr('Enter the vendor who sent the invoice in “Store / website”.'); return; }
+  if (newType==='invoice'&&!fileBins.n.length){ showNErr('Please attach the invoice.'); return; }
   if (isEmergency&&!authorizedBy){ showNErr('Please specify which Treasurer, President, or Vice President authorized this.'); return; }
   btn.disabled=true; btn.textContent='Submitting...';
   const fd=new FormData();
   fd.append('title',title); fd.append('estimated_cost',cost); fd.append('budget_id',budget);
   fd.append('type',newType); fd.append('purchase_method',newMethod); fd.append('vendor',vendor);
-  fd.append('item_url',itemUrl); fd.append('description',desc);
+  fd.append('item_url',itemUrl); fd.append('item_links',JSON.stringify(itemLinks)); fd.append('description',desc);
   fd.append('is_emergency',isEmergency?'1':'0'); fd.append('emergency_reason',emergencyReason);
   fd.append('authorized_by',authorizedBy); fd.append('reimb_method',reimbMethod);
   fd.append('reimb_handle',reimbHandle);
+  if (newType==='invoice'){
+    fd.append('invoice_number',document.getElementById('n-inv-number')?.value.trim()||'');
+    fd.append('invoice_due_date',document.getElementById('n-inv-due')?.value||'');
+  }
   if (prodId) fd.append('production_id',prodId);
-  if (newType==='sap') fileBins.n.forEach(f => fd.append('file', f));
+  fileBins.n.forEach(f => fd.append('file', f));
   try {
     const r=await fetch(`/api/receipt/${token}/new-request`,{method:'POST',body:fd});
     const d=await r.json();

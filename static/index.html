@@ -949,6 +949,7 @@ async function renderMyRequests() {
 // ── New Request ────────────────────────────────────────────────────────────────
 async function renderNewRequest() {
   fileBins.new = [];
+  _reqLinks = [{url: '', label: ''}];
   if (currentUser.role !== 'admin' && !currentUser.training_complete) {
     document.getElementById('content').innerHTML = `
       <div class="training-gate">        <div><h3>Training required before submitting requests</h3>
@@ -1040,9 +1041,10 @@ async function renderNewRequest() {
             <input type="text" id="req-vendor" class="form-input" placeholder="e.g. Amazon, Target, Home Depot">
           </div>
           <div id="url-field" class="form-group hidden">
-            <label class="form-label">Product or order link (optional)</label>
-            <input type="url" id="req-item-url" class="form-input" placeholder="https://www.amazon.com/...">
-            <div class="form-hint">For a single online item, so approvers can see it. Ordered several things? Skip this and attach the invoices.</div>
+            <label class="form-label">Product or order links (optional)</label>
+            <div id="req-links"></div>
+            <button type="button" class="btn btn-outline btn-sm mt-4" onclick="addReqLink()">+ Add another link</button>
+            <div class="form-hint">One per product, or a single cart / wishlist link. The label is optional — e.g. “Nerds 36ct ×4”.</div>
           </div>
             </div>
           </div>
@@ -1115,7 +1117,7 @@ async function renderNewRequest() {
           </div>
           <div id="sap-upload" class="hidden">
             <label class="form-label" id="sap-upload-label">Receipts <span class="req">*</span></label>
-            <div class="form-hint" style="margin:-2px 0 6px">Add every receipt or invoice for this purchase — e.g. an order that shipped in parts. One checkout = one request.</div>
+            <div class="form-hint" id="sap-upload-hint" style="margin:-2px 0 6px">Add every receipt or invoice for this purchase — e.g. an order that shipped in parts. One checkout = one request.</div>
             <div class="upload-area" onclick="document.getElementById('receipt-file-new').click()">
               <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin:0 auto;opacity:.5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
               <p>Click to upload receipt photos or PDFs — select several at once</p>
@@ -1150,6 +1152,8 @@ async function renderNewRequest() {
     // Owns an org budget while also on productions — default to org view
     populateBudgetDropdown(null);
   }
+  renderReqLinks();
+  toggleSAP(false);   // sets the optional cart/quote upload for company purchases
 }
 
 function onProductionChange(prodId) {
@@ -1250,15 +1254,40 @@ async function uploadFiles(rid, files) {
   await api('POST', `/requests/${rid}/receipts`, fd, true);
 }
 
+// ── Several product/order links on one request ─────────────────────────────
+let _reqLinks = [{url: '', label: ''}];
+function renderReqLinks() {
+  const el = document.getElementById('req-links'); if (!el) return;
+  el.innerHTML = _reqLinks.map((l, i) => `
+    <div class="flex gap-8 ${i ? 'mt-4' : ''}" style="align-items:center">
+      <input type="url" class="form-input" style="flex:2" placeholder="https://www.amazon.com/..." value="${escHtmlBB(l.url)}" oninput="_reqLinks[${i}].url=this.value">
+      <input type="text" class="form-input" style="flex:1" placeholder="Label (optional)" value="${escHtmlBB(l.label)}" oninput="_reqLinks[${i}].label=this.value">
+      ${_reqLinks.length > 1 ? `<button type="button" class="btn btn-outline btn-sm" style="padding:2px 8px" onclick="_reqLinks.splice(${i},1);renderReqLinks()" aria-label="Remove link">×</button>` : ''}
+    </div>`).join('');
+}
+function addReqLink() { _reqLinks.push({url: '', label: ''}); renderReqLinks(); }
+function reqLinksForSubmit() {
+  return _reqLinks.map(l => ({url: (l.url||'').trim(), label: (l.label||'').trim()}))
+    .filter(l => l.url).map(l => ({...l, url: /^https?:\/\//i.test(l.url) ? l.url : 'https://' + l.url}));
+}
+function linksList(r, size='13px') {
+  const links = r.item_links || [];
+  return links.map(l => `<div><a href="${escHtmlBB(l.url)}" target="_blank" rel="noopener" style="font-size:${size};color:var(--teal);word-break:break-all">${escHtmlBB(l.label || l.url)}</a></div>`).join('');
+}
+
 function toggleSAP(kind) {
   // kind: false (company purchase), true (SAP), or 'invoice'
   const isInvoice = kind === 'invoice', isSAP = kind === true;
   document.getElementById('sap-emergency-toggle').classList.toggle('hidden', !isSAP);
   document.getElementById('sap-reimb-field').classList.toggle('hidden', !isSAP);
-  document.getElementById('sap-upload').classList.toggle('hidden', !(isSAP || isInvoice));
+  document.getElementById('sap-upload').classList.remove('hidden');
   document.getElementById('invoice-fields').classList.toggle('hidden', !isInvoice);
   const lbl = document.getElementById('sap-upload-label');
-  if (lbl) lbl.innerHTML = (isInvoice ? 'Invoice' : 'Receipts') + ' <span class="req">*</span>';
+  if (lbl) lbl.innerHTML = isInvoice ? 'Invoice <span class="req">*</span>' : isSAP ? 'Receipts <span class="req">*</span>' : 'Cart, list, or quote <span class="text-xs text-muted">(optional)</span>';
+  const hint = document.getElementById('sap-upload-hint');
+  if (hint) hint.textContent = isInvoice ? 'Attach the vendor’s invoice.'
+    : isSAP ? 'Add every receipt or invoice for this purchase — e.g. an order that shipped in parts. One checkout = one request.'
+    : 'Buying a list of things? A screenshot of the cart, a shopping list, or a vendor quote helps approvers see what’s included.';
   const inv = document.getElementById('type-invoice');
   if (inv) { inv.style.border = isInvoice ? '2px solid var(--teal)' : '2px solid var(--border)'; inv.style.background = isInvoice ? 'var(--teal3)' : ''; }
   const cost = document.querySelector('label[for="req-cost"]') || document.getElementById('req-cost')?.closest('.form-group')?.querySelector('.form-label');
@@ -1303,8 +1332,8 @@ async function submitRequest() {
   const reimbHandle  = document.getElementById('req-reimb-handle')?.value.trim() || '';
   const method = document.querySelector('input[name="purchase-method"]:checked')?.value || 'in_store';
   const vendor  = document.getElementById('req-vendor')?.value.trim() || '';
-  const rawUrl  = method === 'online' ? (document.getElementById('req-item-url')?.value.trim() || '') : '';
-  const itemUrl = rawUrl && !rawUrl.match(/^https?:\/\//) ? 'https://' + rawUrl : rawUrl;
+  const itemLinks = method === 'online' ? reqLinksForSubmit() : [];
+  const itemUrl = itemLinks.length ? itemLinks[0].url : '';
   const prodEl  = document.getElementById('req-production');
   const prodId  = prodEl ? prodEl.value : null;
   const errEl   = document.getElementById('req-error');
@@ -1341,9 +1370,10 @@ async function submitRequest() {
       reimb_method: reimbMethod,
       reimb_handle: reimbHandle,
       purchase_method: method,
-      item_url: itemUrl
+      item_url: itemUrl,
+      item_links: itemLinks
     });
-    if (isSAP || isInvoice) await uploadFiles(d.id, fileBins.new);
+    if (fileBins.new.length) await uploadFiles(d.id, fileBins.new);
     toast('Request submitted! You\'ll hear back by email.', 'success');
     fileBins.new = [];
     nav('my-requests');
@@ -1374,8 +1404,8 @@ async function showRequestDetail(rid) {
       <div class="receipt-thumb" onclick="openLightbox('${rc.image_url}')" title="Click to view full size">
         <img src="${rc.image_url}" alt="Receipt" onerror="this.outerHTML='<span style=font-size:24px></span>'">
       </div>`).join('')}</div>
-     <div class="text-xs text-muted mt-4">${r.receipts.length} receipt${r.receipts.length!==1?'s':''} attached — click to view</div>` :
-    `<span class="text-xs text-muted">No receipts uploaded</span>`;
+     <div class="text-xs text-muted mt-4">${r.receipts.length} ${r.type==='pre_approval' ? 'file' : r.is_invoice ? 'invoice file' : 'receipt'}${r.receipts.length!==1?'s':''} attached — click to view</div>` :
+    `<span class="text-xs text-muted">No files attached</span>`;
 
   const uploadHtml = (r.status !== 'denied') ? `
     <div class="mt-16">
@@ -1416,7 +1446,7 @@ async function showRequestDetail(rid) {
         <div><div class="text-xs text-muted">Budget</div><div class="fw-600 text-sm mt-4">${r.budget_name||'—'} (${r.budget_area||''})</div>${r.budget_name?`<div class="mt-2">${budgetLeftLine(r)}</div>`:''}</div>
         <div><div class="text-xs text-muted">Type</div><div class="fw-600 text-sm mt-4">${r.production_name ? `Production expense — ${r.production_name}` : 'Org expense'}</div><div class="text-xs text-muted">${r.is_invoice ? `Vendor invoice — pay ${r.vendor||'the vendor'}${r.invoice_number?` · #${r.invoice_number}`:''}${r.invoice_due_date?` · due ${fmtDate(r.invoice_due_date+'T12:00:00')}`:''}` : r.is_sap ? 'Reimbursement (SAP) — already purchased' : 'Company Purchase Request — HWTC pays'}</div></div>
       </div>
-      ${r.item_url ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Product / order link</div><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:13px;color:var(--teal);word-break:break-all">${r.item_url}</a></div>` : ''}
+      ${(r.item_links||[]).length ? `<div class="mb-12"><div class="text-xs text-muted mb-4">Product / order link${r.item_links.length>1?'s':''}</div>${linksList(r)}</div>` : ''}
       ${r.description ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Description</div><div class="text-sm">${r.description}</div></div>` : ''}
       ${r.is_emergency ? `<div class="mb-16"><div class="text-xs text-muted mb-4">Emergency authorization</div><div class="text-sm" style="color:var(--amber)">${r.emergency_reason||''}${r.authorized_by?' — authorized by '+r.authorized_by:''}</div></div>` : ''}
       ${r.producer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Producer note</div><div class="text-sm">${r.producer_note}</div></div>` : ''}
@@ -1424,7 +1454,7 @@ async function showRequestDetail(rid) {
       ${r.treasurer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Treasurer note</div><div class="text-sm">${r.treasurer_note}</div></div>` : ''}
       ${r.president_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">President note</div><div class="text-sm">${r.president_note}</div></div>` : ''}
       <hr class="divider">
-      <div class="text-xs text-muted mb-8">Receipts</div>
+      <div class="text-xs text-muted mb-8">${r.type==='pre_approval' ? 'Attachments' : r.is_invoice ? 'Invoice' : 'Receipts'}</div>
       ${receiptsHtml}
       ${uploadHtml}
       ${approvalHtml}
@@ -1557,7 +1587,8 @@ async function renderApprovals() {
           <div class="fw-600 mb-1" style="line-height:1.3">${r.title}</div>
           <div class="text-xs text-muted mb-5">${r.submitter_name}${r.vendor?' · '+r.vendor:''}${r.budget_name?' · '+r.budget_name:''}${(r.receipts||[]).length>1?` · ${r.receipts.length} receipts`:''}</div>
           <div class="fw-600" style="font-size:15px">${fmtMoney(r.estimated_cost)}${r.actual_cost&&r.actual_cost!==r.estimated_cost?` <span class="text-xs text-muted">actual ${fmtMoney(r.actual_cost)}</span>`:''}</div>
-          ${r.item_url?`<div class="mt-4"><a href="${r.item_url}" target="_blank" rel="noopener" style="font-size:11px;color:var(--teal)">View item →</a></div>`:''}
+          ${(r.item_links||[]).length === 1 ? `<div class="mt-4"><a href="${escHtmlBB(r.item_links[0].url)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--teal)">View item →</a></div>`
+            : (r.item_links||[]).length > 1 ? `<details class="mt-4" style="font-size:11px"><summary style="cursor:pointer;color:var(--teal)">${r.item_links.length} links</summary><div class="mt-4">${linksList(r,'11px')}</div></details>` : ''}
           ${r.sap_reason?`<div class="mt-5 text-xs" style="color:var(--amber);background:var(--amber-bg);padding:4px 7px;border-radius:var(--r-sm)">SAP: ${r.sap_reason}</div>`:''}
           ${r.budget_name?`<div class="mt-5"><div class="budget-bar-wrap" style="height:3px"><div class="budget-bar-fill ${bp>90?'danger':bp>70?'warn':''}" style="width:${bp}%;height:3px"></div></div><div class="text-xs text-muted mt-1">${fmtMoney((r.budget_total||0)-(r.budget_spent||0))} left of ${fmtMoney(r.budget_total)}${r.budget_pending?` · <span style="color:var(--amber)">${fmtMoney(r.budget_pending)} pending</span>`:''}</div></div>`:''}
           ${r.receipts&&r.receipts.length>0?`<div class="flex gap-3 mt-5">${r.receipts.map(rc=>`<div class="receipt-thumb" style="width:36px;height:36px" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.outerHTML='<span></span>'"></div>`).join('')}</div>`:''}
