@@ -856,9 +856,7 @@ def build_approval_chain(production_id):
     through before it's fully approved.
 
     Production purchases:
-      • A producer is assigned to the show, and that producer is also a
-        Resident Producer  → Producer, Treasurer
-      • A producer is assigned, but is NOT a Resident Producer          → Producer, Resident Producer, Treasurer
+      • A producer is assigned to the show (Resident Producer or not)   → Producer, Treasurer
       • No producer assigned on the production                          → Treasurer, Resident Producer
 
     Company / org-level purchases (no production attached):
@@ -867,9 +865,7 @@ def build_approval_chain(production_id):
     if production_id:
         producers = get_production_producers(production_id)
         if producers:
-            if any(p.get('role') == 'resident_producer' for p in producers):
-                return ['pending_producer', 'pending_treasurer']
-            return ['pending_producer', 'pending_resident_producer', 'pending_treasurer']
+            return ['pending_producer', 'pending_treasurer']
         return ['pending_treasurer', 'pending_resident_producer']
     return ['pending_treasurer', 'pending_president']
 
