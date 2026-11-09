@@ -188,6 +188,8 @@ tr:hover td{background:var(--cream)}
 .conc-link{font-size:10px;color:var(--teal)}
 .conc-cost{text-align:right;white-space:nowrap;border-left:1px solid var(--border);min-width:96px}
 .conc-in{font-size:12px;padding:3px 6px}
+.private-box{background:#F3F4F6;border:1px dashed #9CA3AF;border-radius:6px}
+.private-tag{font-size:10px;font-weight:600;color:#4B5563;letter-spacing:.02em}
 .budget-bar-pending{height:100%;background:repeating-linear-gradient(45deg,var(--amber) 0 3px,var(--amber-bg) 3px 6px);opacity:.85}
 .budget-bar-fill{height:100%;border-radius:99px;background:var(--teal);transition:width .4s ease}
 .budget-bar-fill.warn{background:var(--amber)}
@@ -1454,6 +1456,15 @@ async function showRequestDetail(rid) {
       ${r.treasurer_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">Treasurer note</div><div class="text-sm">${r.treasurer_note}</div></div>` : ''}
       ${r.president_note ? `<div class="mb-8"><div class="text-xs text-muted mb-4">President note</div><div class="text-sm">${r.president_note}</div></div>` : ''}
       <hr class="divider">
+      ${r.private_note_count !== undefined ? `
+        <div class="private-box mb-12" style="padding:10px 12px">
+          <div class="private-tag mb-6">🔒 PRIVATE APPROVER NOTES <span style="font-weight:400">· ${escHtmlBB((r.submitter_name||'The submitter').split(' ')[0])} can’t see these</span></div>
+          <div id="pnotes-${r.id}" class="text-sm"><span class="text-xs text-muted">Loading…</span></div>
+          <div class="flex gap-6 mt-8">
+            <textarea id="pnote-new-${r.id}" class="form-textarea" style="min-height:34px;font-size:12px;background:#fff" placeholder="Add a private note…"></textarea>
+            <button class="btn btn-outline btn-sm" style="align-self:flex-end" onclick="addPrivateNote(${r.id})">Add</button>
+          </div>
+        </div>` : ''}
       <div class="text-xs text-muted mb-8">${r.type==='pre_approval' ? 'Attachments' : r.is_invoice ? 'Invoice' : 'Receipts'}</div>
       ${receiptsHtml}
       ${uploadHtml}
@@ -1466,6 +1477,7 @@ async function showRequestDetail(rid) {
     </div>`;
 
   showModal(html, 'large');
+  if (r.private_note_count !== undefined) loadPrivateNotes(r.id);
 }
 
 async function confirmDeleteRequest(rid, title) {
@@ -1593,10 +1605,15 @@ async function renderApprovals() {
           ${r.budget_name?`<div class="mt-5"><div class="budget-bar-wrap" style="height:3px"><div class="budget-bar-fill ${bp>90?'danger':bp>70?'warn':''}" style="width:${bp}%;height:3px"></div></div><div class="text-xs text-muted mt-1">${fmtMoney((r.budget_total||0)-(r.budget_spent||0))} left of ${fmtMoney(r.budget_total)}${r.budget_pending?` · <span style="color:var(--amber)">${fmtMoney(r.budget_pending)} pending</span>`:''}</div></div>`:''}
           ${r.receipts&&r.receipts.length>0?`<div class="flex gap-3 mt-5">${r.receipts.map(rc=>`<div class="receipt-thumb" style="width:36px;height:36px" onclick="openLightbox('${rc.image_url}')"><img src="${rc.image_url}" onerror="this.outerHTML='<span></span>'"></div>`).join('')}</div>`:''}
           ${approvalTrail(r)}
+          ${r.private_note_count ? `<div class="mt-4"><span class="badge" style="font-size:10px;background:#E5E7EB;color:#374151;cursor:pointer" onclick="showRequestDetail(${r.id})" title="Notes only approvers can see">🔒 ${r.private_note_count} private note${r.private_note_count!==1?'s':''}</span></div>` : ''}
           ${acting?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
             ${(()=>{ let ch=[]; try{ch=JSON.parse(r.approval_chain||'[]');}catch(e){} const isFinal = ch.length && ch[ch.length-1]===r.status;
               return isFinal ? `<input type="number" id="act-${r.id}" class="form-input mb-6" value="${r.actual_cost||r.estimated_cost}" step="0.01" placeholder="Actual cost" style="padding:5px 9px;font-size:12px">` : ''; })()}
-            <textarea id="note-${r.id}" class="form-textarea mb-6" style="min-height:38px;font-size:12px" placeholder="Note (optional)..."></textarea>
+            <textarea id="note-${r.id}" class="form-textarea mb-6" style="min-height:38px;font-size:12px" placeholder="Note to the submitter (optional)..."></textarea>
+            ${r.private_note_count !== undefined ? `<details class="mb-6" style="font-size:12px"><summary style="cursor:pointer;color:var(--ink3)">🔒 Private note for approvers${r.private_note_count ? ` · ${r.private_note_count} so far` : ''}</summary>
+              <textarea id="pnote-${r.id}" class="form-textarea private-box mt-4" style="min-height:38px;font-size:12px" placeholder="Only approvers see this — not ${escHtmlBB((r.submitter_name||'the submitter').split(' ')[0])}"></textarea>
+              ${r.private_note_count ? `<a href="#" class="text-xs" onclick="event.preventDefault();showRequestDetail(${r.id})">Read earlier private notes</a>` : ''}
+            </details>` : ''}
             <div class="flex gap-6">
               <button class="btn btn-approve btn-sm" style="flex:1" onclick="quickApprove(${r.id},'approve')">✓ Approve</button>
               <button class="btn btn-danger btn-sm" style="flex:1" onclick="quickApprove(${r.id},'deny')">✕ Deny</button>
@@ -1629,7 +1646,9 @@ async function renderApprovals() {
               <span class="fw-600">${fmtMoney(amt(r))}</span>
               <a href="#" class="text-xs" onclick="event.preventDefault();event.stopPropagation();showRequestDetail(${r.id})">view</a>
             </label>`).join('')}
-          <textarea id="rep-note-${sid}" class="form-textarea mt-8 mb-6" style="min-height:34px;font-size:12px" placeholder="Note for the whole report (optional)..."></textarea>
+          <textarea id="rep-note-${sid}" class="form-textarea mt-8 mb-6" style="min-height:34px;font-size:12px" placeholder="Note to the submitter for the whole report (optional)..."></textarea>
+          <details class="mb-6" style="font-size:12px"><summary style="cursor:pointer;color:var(--ink3)">🔒 Private note for approvers</summary>
+            <textarea id="rep-pnote-${sid}" class="form-textarea private-box mt-4" style="min-height:34px;font-size:12px" placeholder="Only approvers see this — saved on each item you approve"></textarea></details>
           <button class="btn btn-approve btn-sm w-full" id="rep-btn-${sid}" onclick="approveReportItems(${sid})">✓ Approve all ${items.length} · ${fmtMoney(total)}</button>
           <div class="text-xs text-muted mt-6">Uncheck anything you want to handle separately — deny or send it back from its own card below.</div>
           <details class="archive-fold" style="margin-top:4px"><summary>Item cards (${items.length})</summary>
@@ -1702,22 +1721,49 @@ async function approveReportItems(sid) {
   const ids = [...document.querySelectorAll(`.rep-cb-${sid}`)].filter(c => c.checked).map(c => parseInt(c.dataset.id));
   if (!ids.length) return;
   const note = document.getElementById(`rep-note-${sid}`)?.value || '';
+  const private_note = document.getElementById(`rep-pnote-${sid}`)?.value || '';
   const btn = document.getElementById(`rep-btn-${sid}`);
   btn.disabled = true; btn.textContent = 'Approving…';
   try {
-    const res = await api('POST', `/statements/${sid}/act`, {action: 'approve', request_ids: ids, note});
+    const res = await api('POST', `/statements/${sid}/act`, {action: 'approve', request_ids: ids, note, private_note});
     toast(`Approved ${res.count} item${res.count!==1?'s':''} (${fmtMoney(res.total)})${res.skipped?.length ? ` · ${res.skipped.length} skipped — no longer waiting on you` : ''}.`, 'success');
     refreshBadges();
     renderApprovals();
   } catch(e) { toast(e.message, 'error'); updateReportGroup(sid); }
 }
 
+const STAGE_SHORT = {pending_producer:'Producer stage', pending_resident_producer:'Resident Producer stage', pending_treasurer:'Treasurer stage',
+                     pending_president:'President stage', needs_revision:'While sent back'};
+async function loadPrivateNotes(rid) {
+  const el = document.getElementById(`pnotes-${rid}`); if (!el) return;
+  try {
+    const notes = await api('GET', `/requests/${rid}/private-notes`);
+    el.innerHTML = notes.length ? notes.map(n => `
+      <div style="padding:5px 0;border-top:1px solid #E5E7EB">
+        <div>${escHtmlBB(n.note)}</div>
+        <div class="text-xs text-muted">${escHtmlBB(n.author||'Someone')} · ${STAGE_SHORT[n.stage] || ''}${STAGE_SHORT[n.stage] ? ' · ' : ''}${fmtDate(n.created_at)}</div>
+      </div>`).join('') : '<span class="text-xs text-muted">No private notes yet.</span>';
+  } catch(e) { el.innerHTML = ''; }
+}
+async function addPrivateNote(rid) {
+  const ta = document.getElementById(`pnote-new-${rid}`);
+  const note = (ta?.value || '').trim();
+  if (!note) return;
+  try {
+    await api('POST', `/requests/${rid}/private-notes`, {note});
+    ta.value = '';
+    loadPrivateNotes(rid);
+    toast('Private note added.', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 async function quickApprove(rid, action) {
   const note = document.getElementById(`note-${rid}`)?.value || '';
+  const private_note = document.getElementById(`pnote-${rid}`)?.value || '';
   const actEl = document.getElementById(`act-${rid}`);
   const actual_cost = actEl ? parseFloat(actEl.value) : undefined;
   try {
-    await api('POST', `/requests/${rid}/approve`, {action, note, actual_cost});
+    await api('POST', `/requests/${rid}/approve`, {action, note, private_note, actual_cost});
     toast(action === 'approve' ? 'Approved!' : 'Denied.', action === 'approve' ? 'success' : 'info');
     refreshBadges();
     renderApprovals();
@@ -4604,6 +4650,8 @@ function showSendBackModal(rid, title) {
       <p class="text-sm mb-12">Tell <strong>${title}</strong>'s submitter what needs to be fixed before you can approve it.</p>
       <div class="form-group"><label class="form-label">What needs to change? <span class="req">*</span></label>
         <textarea id="sendback-note" class="form-textarea" placeholder="Be specific about what needs to be corrected or added..."></textarea></div>
+      <div class="form-group"><label class="form-label">🔒 Private note for approvers <span class="text-xs text-muted">(optional — the submitter won’t see this)</span></label>
+        <textarea id="sendback-pnote" class="form-textarea private-box" style="min-height:56px" placeholder="Context for whoever reviews it next..."></textarea></div>
       <div id="sendback-error" class="form-error hidden"></div>
     </div>
     <div class="modal-footer">
@@ -4619,7 +4667,7 @@ async function doSendBack(rid) {
   errEl.classList.add('hidden');
   if (!note) { errEl.textContent='Please explain what needs to change'; errEl.classList.remove('hidden'); return; }
   try {
-    await api('POST', `/requests/${rid}/send-back`, {note});
+    await api('POST', `/requests/${rid}/send-back`, {note, private_note: document.getElementById('sendback-pnote')?.value || ''});
     toast('Sent back for revision.','info');
     closeModal();
     renderApprovals();
