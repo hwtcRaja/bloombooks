@@ -1114,7 +1114,8 @@ def rolecall_ticket_lines(conn, pid, fresh=False):
     c2d = lambda c: round(int(c or 0) / 100.0, 2)
     tickets, svc, ads = c2d(er.get('ticket_sales_cents')), c2d(er.get('service_fees_cents')), c2d(er.get('program_ads_cents'))
     sqfee, dons = c2d(ex.get('square_processing_fees_cents')), c2d(cr.get('checkout_donations_cents'))
-    if not (ct.get('tickets_sold') or ads or dons):
+    conc = c2d(er.get('concessions_cents') or er.get('concession_sales_cents'))
+    if not (ct.get('tickets_sold') or ads or dons or conc):
         return []          # nothing sold yet (or this production doesn't use RoleCall ticketing)
     # The ticket forecast from Build Show is the "expected" for ticket sales,
     # unless someone already added their own ticket-sales line (then that one
@@ -1133,6 +1134,28 @@ def rolecall_ticket_lines(conn, pid, fresh=False):
                               + (f" · {comps} comps (${c2d(ct.get('comp_face_value_cents')):,.2f} face value)" if comps else '')
                               + (f" · forecast ${est:,.2f}" if est else '')
                               + f" — live from RoleCall{(' as of ' + asof) if asof else ''}"))]
+    if conc:
+        # Same rule as tickets: the Build Show concessions estimate is the
+        # "expected" unless someone keeps their own Concessions line for it.
+        has_manual_conc = conn.execute(
+            "SELECT 1 FROM bb_production_revenue WHERE production_id=%s AND LOWER(source) LIKE '%%concession%%' LIMIT 1", (pid,)).fetchone()
+        cest = 0.0
+        if not has_manual_conc:
+            p2 = conn.execute('SELECT est_concessions FROM bb_productions WHERE id=%s', (pid,)).fetchone()
+            cest = float((p2 or {}).get('est_concessions') or 0)
+        n_items, n_orders = int(ct.get('concession_items') or 0), int(ct.get('concession_orders') or 0)
+        cinfo = fin.get('concessions') or {}
+        unrung, failed = c2d(cinfo.get('unrung_cash_cents')), int(cinfo.get('performances_failed') or 0)
+        detail = ' · '.join(x for x in [f'{n_items} items' if n_items else '', f'{n_orders} sales' if n_orders else '',
+                                         f'incl. ${unrung:,.2f} unrung cash' if unrung else '',
+                                         f'{failed} performance{"s" if failed != 1 else ""} not read from Square yet' if failed else '',
+                                         f'forecast ${cest:,.2f}' if cest else ''] if x)
+        rows.append(dict(base, source='Concessions (RoleCall)', available=True,
+                         expected=round(max(cest, conc), 2) if cest else conc, actual=conc,
+                         description=(detail + ' — ' if detail else '') + f"live from RoleCall{(' as of ' + asof) if asof else ''}"))
+    elif (fin.get('concessions') or {}).get('status') == 'pending':
+        rows.append(dict(base, source='Concessions (RoleCall)', available=False, expected=0, actual=0, exclude_from_total=True,
+                         description='RoleCall is adding up show-night sales from Square — click Refresh in a minute.'))
     if svc:
         rows.append(dict(base, source='Ticket Service Fees (RoleCall)', available=True, expected=svc, actual=svc,
                          description='Service fees buyers paid on top of ticket prices'))
@@ -1143,6 +1166,11 @@ def rolecall_ticket_lines(conn, pid, fresh=False):
         pend = int(ex.get('square_fees_still_pending_orders') or 0)
         rows.append(dict(base, source='Square Processing Fees (RoleCall)', available=True, expected=-sqfee, actual=-sqfee,
                          description='Taken out by Square before deposit' + (f' ({pend} orders still waiting on Square)' if pend else '')))
+    cfee = c2d(ex.get('concession_square_fees_cents'))
+    if cfee:
+        cpend = int(ex.get('concession_fees_still_pending') or 0)
+        rows.append(dict(base, source='Concession Card Fees (RoleCall)', available=True, expected=-cfee, actual=-cfee,
+                         description='Square’s fees on card sales at concessions' + (f' ({cpend} sales still waiting on Square)' if cpend else '')))
     if dons:
         rows.append(dict(base, source='Ticket Checkout Donations (RoleCall)', available=True, expected=dons, actual=dons,
                          exclude_from_total=True, description='Contributed income, so it is shown here but not counted in show revenue'))
@@ -4778,6 +4806,12 @@ def get_suggested_concessions(pid):
             row = conn.execute('''SELECT COALESCE(SUM(actual),0) as actual FROM bb_production_revenue
                 WHERE production_id=%s AND LOWER(source)='concessions' ''', (c['id'],)).fetchone()
             actual = row['actual'] if row else 0
+            if not actual:
+                try:
+                    actual = sum(r['actual'] for r in rolecall_ticket_lines(conn, c['id'])
+                                 if r.get('source') == 'Concessions (RoleCall)')
+                except Exception:
+                    actual = 0
             if actual and actual > 0:
                 amounts.append(actual)
                 used_shows.append(c['name'])
