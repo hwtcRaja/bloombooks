@@ -360,6 +360,16 @@ def init_db():
         updated_at         TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
 
+    # Notes approvers leave for each other on a request — never shown to the submitter
+    c.execute('''CREATE TABLE IF NOT EXISTS bb_request_private_notes (
+        id         SERIAL PRIMARY KEY,
+        request_id INTEGER REFERENCES bb_purchase_requests(id) ON DELETE CASCADE,
+        user_id    INTEGER REFERENCES bb_users(id),
+        stage      TEXT,
+        note       TEXT NOT NULL,
+        created_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
+    )''')
+
     # Concessions price lookup: the items we price, and saved lookups
     c.execute('''CREATE TABLE IF NOT EXISTS bb_concession_items (
         id         SERIAL PRIMARY KEY,
@@ -1504,11 +1514,14 @@ def notify_statement_submitted(statement_title, items, default_production_id,
 
 def notify_request_status_change(req_id, req_title, submitter_id, new_status,
                                   acted_by_name, note, production_id, estimated_cost,
-                                  actual_cost=None, req_type=None):
-    """Notify relevant parties when a request status changes."""
+                                  actual_cost=None, req_type=None, private_note=None):
+    """Notify relevant parties when a request status changes. A private note
+    goes only to approvers, never to the submitter."""
     submitter = get_user_email(submitter_id)
     amount    = f'${float(actual_cost or estimated_cost):.2f}'
     note_html = f'<p><em>Note: {note}</em></p>' if note else ''
+    sub_addr  = ((submitter or {}).get('email') or '').strip().lower()
+    priv_for  = lambda addr: private_note_html(private_note) if (addr or '').strip().lower() != sub_addr else ''
 
     if new_status == 'pending_treasurer':
         if submitter:
@@ -1519,7 +1532,7 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
         for a in get_admin_emails():
             send_email(a['email'], f'Awaiting treasurer review: {req_title}',
                 email_html('Treasurer Review Needed',
-                    f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Treasurer review needed.</p>{note_html}',
+                    f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Treasurer review needed.</p>{note_html}' + priv_for(a['email']),
                     'Review in BloomBooks', app_link('request', req_id)))
 
     elif new_status == 'pending_resident_producer':
@@ -1531,7 +1544,7 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
         for a in get_role_emails('resident_producer'):
             send_email(a['email'], f'Resident Producer review needed: {req_title}',
                 email_html('Resident Producer Review Needed',
-                    f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Your review is needed.</p>{note_html}',
+                    f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Your review is needed.</p>{note_html}' + priv_for(a['email']),
                     'Review in BloomBooks', app_link('request', req_id)))
 
     elif new_status == 'pending_president':
@@ -1543,7 +1556,7 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
         for a in get_role_emails('president'):
             send_email(a['email'], f'President review needed: {req_title}',
                 email_html('President Review Needed',
-                    f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Your review is needed.</p>{note_html}',
+                    f'<p><strong>{acted_by_name}</strong> approved <strong>{req_title}</strong> ({amount}). Your review is needed.</p>{note_html}' + priv_for(a['email']),
                     'Review in BloomBooks', app_link('request', req_id)))
 
     elif new_status == 'approved':
@@ -1581,11 +1594,11 @@ def notify_request_status_change(req_id, req_title, submitter_id, new_status,
         denied_admin_body = f'<p><strong>{acted_by_name}</strong> denied the request for <strong>{req_title}</strong>.</p>{note_html}'
         for a in get_admin_emails():
             send_email(a['email'], f'Request denied: {req_title}',
-                email_html('Request Denied', denied_admin_body, 'View in BloomBooks', app_link('request', req_id)))
+                email_html('Request Denied', denied_admin_body + priv_for(a['email']), 'View in BloomBooks', app_link('request', req_id)))
         if production_id:
             for p in get_production_producers(production_id):
                 send_email(p['email'], f'Request denied: {req_title}',
-                    email_html('Request Denied', denied_admin_body, 'View in BloomBooks', app_link('request', req_id)))
+                    email_html('Request Denied', denied_admin_body + priv_for(p['email']), 'View in BloomBooks', app_link('request', req_id)))
 
 
 def notify_reimbursement_paid(user_id, amount, method, req_title):
@@ -1943,6 +1956,10 @@ def list_requests():
 
     rows = conn.execute(base, params).fetchall()
     pending = pending_by_budget(conn)
+    pn_counts = {r['request_id']: r['n'] for r in conn.execute(
+        'SELECT request_id, COUNT(*) AS n FROM bb_request_private_notes GROUP BY request_id').fetchall()}
+    my_prod_ids = {r['production_id'] for r in conn.execute(
+        "SELECT production_id FROM bb_production_members WHERE user_id=%s AND member_role='producer'", (u['id'],)).fetchall()}
     conn.close()
     result = []
     for row in rows:
@@ -1953,6 +1970,8 @@ def list_requests():
         # request displayed as a Company Purchase. Derive it here.
         r['is_sap'] = 1 if r.get('type') == 'sap' else 0
         r['is_invoice'] = 1 if r.get('type') == 'invoice' else 0
+        if r.get('submitted_by') != u['id'] and (u['role'] in APPROVER_ROLES or r.get('production_id') in my_prod_ids):
+            r['private_note_count'] = pn_counts.get(r['id'], 0)   # absent = this user can't see private notes
         r['item_links'] = clean_item_links(r.get('item_links')) or ([{'url': r['item_url'], 'label': ''}] if r.get('item_url') else [])
         conn2 = get_db()
         receipts = conn2.execute('SELECT * FROM bb_receipts WHERE request_id=%s',(r['id'],)).fetchall()
@@ -2112,6 +2131,58 @@ def _apply_request_action(conn, u, req, chain, step, action, note, actual=None):
                      (new_status, note, u['id'], now, next_step, now, rid))
     return new_status
 
+# ─── Private approver notes ───────────────────────────────────────────────────
+# Approvers can leave notes for each other on a request. The submitter never
+# sees them — not in BloomBooks, not in emails — even if they also hold an
+# approver role (a treasurer submitting their own request, say).
+APPROVER_ROLES = ('admin', 'treasurer', 'president', 'resident_producer')
+
+def can_see_private_notes(u, req):
+    if not u or not req or u['id'] == req.get('submitted_by'):
+        return False
+    return u['role'] in APPROVER_ROLES or bool(req.get('production_id') and is_producer_of(u['id'], req['production_id']))
+
+def add_private_note(conn, u, req, note, stage=None):
+    note = (note or '').strip()
+    if note:
+        conn.execute('INSERT INTO bb_request_private_notes (request_id, user_id, stage, note) VALUES (%s,%s,%s,%s)',
+                     (req['id'], u['id'], stage or req.get('status'), note[:2000]))
+    return note
+
+def private_note_html(note):
+    return (f'<div style="margin:10px 0;padding:8px 12px;background:#F3F4F6;border-left:3px solid #6B7280;font-size:13px">'
+            f'<strong>Private note for approvers:</strong> {note}<br><span style="color:#888;font-size:11px">'
+            f'The person who submitted this can\'t see it.</span></div>') if note else ''
+
+@app.route('/api/requests/<int:rid>/private-notes', methods=['GET'])
+def list_private_notes(rid):
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    conn = get_db()
+    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s', (rid,)).fetchone()
+    if not req or not can_see_private_notes(u, dict(req)):
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    rows = [dict(r) for r in conn.execute('''SELECT n.id, n.stage, n.note, n.created_at, us.name AS author
+                                              FROM bb_request_private_notes n LEFT JOIN bb_users us ON us.id=n.user_id
+                                              WHERE n.request_id=%s ORDER BY n.id''', (rid,)).fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+@app.route('/api/requests/<int:rid>/private-notes', methods=['POST'])
+def create_private_note(rid):
+    u = current_user()
+    if not u: return jsonify({'error': 'Not authenticated'}), 401
+    note = ((request.json or {}).get('note') or '').strip()
+    if not note: return jsonify({'error': 'Write a note first'}), 400
+    conn = get_db()
+    req = conn.execute('SELECT * FROM bb_purchase_requests WHERE id=%s', (rid,)).fetchone()
+    if not req or not can_see_private_notes(u, dict(req)):
+        conn.close(); return jsonify({'error': 'Not found'}), 404
+    add_private_note(conn, u, dict(req), note)
+    conn.commit(); conn.close()
+    log_action(u['id'], 'added_private_note', 'request', rid)
+    return jsonify({'ok': True})
+
 @app.route('/api/requests/<int:rid>/approve', methods=['POST'])
 def approve_request(rid):
     u = current_user()
@@ -2147,6 +2218,7 @@ def approve_request(rid):
         conn.close()
         return jsonify({'error': "Action must be 'approve' or 'deny'"}), 400
     actual = data.get('actual_cost', req['estimated_cost'])
+    private = add_private_note(conn, u, req, data.get('private_note'), stage) if can_see_private_notes(u, req) else ''
     new_status = _apply_request_action(conn, u, req, chain, step, action, note, actual)
 
     conn.commit()
@@ -2156,7 +2228,7 @@ def approve_request(rid):
     notify_request_status_change(
         req_id=rid, req_title=req['title'],
         submitter_id=req['submitted_by'], new_status=new_status,
-        acted_by_name=u['name'], note=note,
+        acted_by_name=u['name'], note=note, private_note=private,
         production_id=req.get('production_id'),
         estimated_cost=req['estimated_cost'],
         actual_cost=req.get('actual_cost'),
@@ -2167,7 +2239,7 @@ def approve_request(rid):
 STAGE_NAMES = {'pending_producer': 'Producer', 'pending_resident_producer': 'Resident Producer',
                'pending_treasurer': 'Treasurer', 'pending_president': 'President'}
 
-def notify_bulk_actions(done, acted_by, note, report_title, actor_email=''):
+def notify_bulk_actions(done, acted_by, note, report_title, actor_email='', private_note=''):
     """One email per person for a batch of approvals on an expense report:
     the submitter gets a summary, each next-stage approver gets one list."""
     note_html = f'<p style="color:#666;font-size:13px"><em>Note: {note}</em></p>' if note else ''
@@ -2207,6 +2279,9 @@ def notify_bulk_actions(done, acted_by, note, report_title, actor_email=''):
         body = (f'<p><strong>{acted_by}</strong> approved {len(items)} item{"s" if len(items) != 1 else ""} '
                 f'from the expense report <strong>{report_title}</strong> (${total:,.2f}). Your review is needed.</p>'
                 f'<table style="width:100%">{rows(items)}</table>{note_html}')
+        submitters = {(get_user_email(i['submitted_by']) or {}).get('email', '').strip().lower() for i in items}
+        if private_note and person['email'].strip().lower() not in submitters:
+            body += private_note_html(private_note)
         send_email(person['email'], f'Expense report needs your review: {report_title} ({len(items)} items)',
                    email_html('Expense Report — Review Needed', body, 'Review in BloomBooks', app_link('approvals')))
 
@@ -2219,6 +2294,7 @@ def act_on_statement(sid):
     if not u: return jsonify({'error': 'Not authenticated'}), 401
     data = request.json or {}
     action, note = data.get('action', 'approve'), (data.get('note') or '').strip()
+    private = (data.get('private_note') or '').strip()
     if action not in ('approve', 'deny'):
         return jsonify({'error': "Action must be 'approve' or 'deny'"}), 400
     want = {int(x) for x in (data.get('request_ids') or []) if str(x).isdigit()}
@@ -2236,6 +2312,8 @@ def act_on_statement(sid):
         step = req.get('approval_step') or 0
         if step >= len(chain) or chain[step] != req['status'] or not _actor_authorized_for_stage(u, req['status'], req.get('production_id')):
             skipped.append(req['title']); continue
+        if can_see_private_notes(u, req):
+            add_private_note(conn, u, req, private, req['status'])
         new_status = _apply_request_action(conn, u, req, chain, step, action, note)
         done.append({'id': req['id'], 'title': req['title'], 'new_status': new_status,
                      'submitted_by': req['submitted_by'], 'production_id': req.get('production_id'),
@@ -2245,7 +2323,7 @@ def act_on_statement(sid):
     conn.commit(); conn.close()
     for d in done:
         log_action(u['id'], f'{action}d_request', 'request', d['id'], f'status→{d["new_status"]} (expense report {sid})')
-    notify_bulk_actions(done, u['name'], note, dict(st)['title'], u.get('email', ''))
+    notify_bulk_actions(done, u['name'], note, dict(st)['title'], u.get('email', ''), private)
     return jsonify({'ok': True, 'count': len(done), 'skipped': skipped,
                     'total': round(sum(float(d['amount']) for d in done), 2)})
 
@@ -3307,6 +3385,10 @@ def send_back_request(rid):
                     needs_revision=1, revision_note=%s, updated_at=%s WHERE id=%s''',
                  (note, now, rid))
     conn.commit(); conn.close()
+    if (data.get('private_note') or '').strip() and can_see_private_notes(u, req):
+        _pc = get_db()
+        add_private_note(_pc, u, req, data.get('private_note'), req.get('status'))
+        _pc.commit(); _pc.close()
     log_action(u['id'],'sent_back_request','request',rid,note)
     # Notify submitter
     submitter = get_user_email(req['submitted_by'])
