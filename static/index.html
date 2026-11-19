@@ -4379,7 +4379,7 @@ async function renderStatements() {
               return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
                 <div style="flex:1">
                   <div class="text-sm fw-600">${item.title}</div>
-                  <div class="text-xs text-muted">${item.vendor||''}${item.purchase_method==='online'?' ·':' ·'}</div>
+                  <div class="text-xs text-muted">${item.vendor ? escHtmlBB(item.vendor) + ' · ' : ''}${item.budget_name ? escHtmlBB(item.budget_name) : '<span style="color:var(--red)">No budget — edit to pick one</span>'}</div>
                 </div>
                 <div class="text-sm fw-600">${fmtMoney(item.actual_cost||item.estimated_cost)}</div>
                 <span class="badge ${iBadgeCls}" style="font-size:10px">${iBadgeLabel}</span>
@@ -4439,16 +4439,33 @@ async function createStatement() {
   } catch(e) { errEl.textContent=e.message; errEl.classList.remove('hidden'); }
 }
 
-function showAddStatementItemModal(sid) {
+async function showAddStatementItemModal(sid) {
   fileBins.sitem = [];
+  await loadBudgets();
   const html = buildItemFormHTML(sid, null);
   showModal(html, 'large');
 }
 
-function editStatementItem(sid, item) {
+async function editStatementItem(sid, item) {
   fileBins.sitem = [];
+  await loadBudgets();
   const html = buildItemFormHTML(sid, item);
   showModal(html, 'large');
+}
+
+// Budgets this person can charge — the server already limits /budgets to those
+let _lastItemBudget = null;
+function itemBudgetOptions(selected) {
+  const usable = allBudgets.filter(b => b.is_active && !['closed','archived'].includes(b.production_status));
+  const hasKids = new Set(usable.filter(b => b.parent_id).map(b => b.parent_id));
+  const leaves = usable.filter(b => !hasKids.has(b.id));
+  const opt = b => `<option value="${b.id}" ${+selected===b.id?'selected':''}>${escHtmlBB(b.name)} (${fmtMoney(b.total_amount - b.spent)} left)</option>`;
+  const byShow = {};
+  for (const b of leaves.filter(b => b.production_id)) (byShow[b.production_name || 'Production'] ||= []).push(b);
+  const org = leaves.filter(b => !b.production_id);
+  return `<option value="">Choose a budget…</option>`
+    + Object.entries(byShow).sort().map(([n, list]) => `<optgroup label="${escHtmlBB(n)}">${list.map(opt).join('')}</optgroup>`).join('')
+    + (org.length ? `<optgroup label="Organization">${org.map(opt).join('')}</optgroup>` : '');
 }
 
 function buildItemFormHTML(sid, item) {
@@ -4466,6 +4483,9 @@ function buildItemFormHTML(sid, item) {
           <div class="fw-600 text-sm">SAP</div><div class="text-xs text-muted">Already bought — reimburse me</div></div>
       </div>
       <input type="hidden" id="sitem-type" value="${item?.type||'pre_approval'}">
+      <div class="form-group"><label class="form-label">Budget <span class="req">*</span></label>
+        <select id="sitem-budget" class="form-select">${itemBudgetOptions(item?.budget_id || _lastItemBudget)}</select>
+        <div class="form-hint">Each purchase on a report can come out of a different budget.</div></div>
       <div class="form-group"><label class="form-label">Item description <span class="req">*</span></label>
         <input type="text" id="sitem-title" class="form-input" value="${item?.title||''}" placeholder="e.g. Fabric for Act 2 costumes"></div>
       <div class="form-row">
@@ -4569,8 +4589,10 @@ function getItemFormData() {
   const rawUrl = document.getElementById('sitem-url')?.value.trim()||'';
   const itemUrl= rawUrl&&!rawUrl.match(/^https?:\/\//)?'https://'+rawUrl:rawUrl;
   const isEmergency = type === 'sap' && (document.getElementById('sitem-is-emergency')?.checked || false);
+  const budgetVal = document.getElementById('sitem-budget')?.value;
   return {
     type,
+    budget_id:      budgetVal ? parseInt(budgetVal) : null,
     title:          document.getElementById('sitem-title').value.trim(),
     estimated_cost: parseFloat(document.getElementById('sitem-cost').value||0),
     vendor:         document.getElementById('sitem-vendor').value.trim(),
@@ -4589,8 +4611,10 @@ async function saveStatementItem(sid) {
   const data  = getItemFormData();
   const errEl = document.getElementById('sitem-error');
   errEl.classList.add('hidden');
+  if (!data.budget_id) { errEl.textContent='Pick the budget this purchase comes out of'; errEl.classList.remove('hidden'); return; }
   if (!data.title) { errEl.textContent='Description is required'; errEl.classList.remove('hidden'); return; }
   if (!data.estimated_cost) { errEl.textContent='Amount is required'; errEl.classList.remove('hidden'); return; }
+  _lastItemBudget = data.budget_id;
   if (data.type==='sap'&&!data._files.length) { errEl.textContent='Please attach a receipt for this purchase'; errEl.classList.remove('hidden'); return; }
   if (data.is_emergency&&!data.authorized_by) { errEl.textContent='Please specify which Treasurer, President, or Vice President authorized this'; errEl.classList.remove('hidden'); return; }
   try {
