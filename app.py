@@ -3259,6 +3259,11 @@ def add_statement_item(sid):
     data = request.json
     if not data.get('title') or not data.get('estimated_cost'):
         conn.close(); return jsonify({'error':'Title and estimated cost are required'}),400
+    item_budget = s.get('budget_id') or data.get('budget_id')
+    if not item_budget:
+        conn.close(); return jsonify({'error':'Pick the budget this purchase comes out of'}),400
+    if not user_can_use_budget(u, int(item_budget)):
+        conn.close(); return jsonify({'error':'You are not permitted to submit against that budget.'}),403
     now = datetime.now().isoformat()
     # Create as a draft request (status='draft')
     conn.execute('''INSERT INTO bb_purchase_requests
@@ -3291,6 +3296,8 @@ def update_statement_item(sid, rid):
     s = conn.execute('SELECT * FROM bb_statements WHERE id=%s',(sid,)).fetchone()
     if not s or dict(s)['created_by'] != u['id']:
         conn.close(); return jsonify({'error':'Insufficient permissions'}),403
+    if not conn.execute('SELECT 1 FROM bb_statement_items WHERE statement_id=%s AND request_id=%s', (sid, rid)).fetchone():
+        conn.close(); return jsonify({'error':'That item is not on this expense report'}),404
     data = request.json
     fields,vals = [],[]
     for f in ['title','description','vendor','estimated_cost','actual_cost','purchase_method',
@@ -3298,6 +3305,13 @@ def update_statement_item(sid, rid):
         if f in data:
             fields.append(f'{f}=%s')
             vals.append(float(data[f]) if f in ('estimated_cost','actual_cost') else data[f])
+    if data.get('budget_id'):
+        if dict(s)['status'] != 'draft':
+            conn.close(); return jsonify({'error':'The budget can only be changed before the report is submitted — ask an approver to move it'}),400
+        if not user_can_use_budget(u, int(data['budget_id'])):
+            conn.close(); return jsonify({'error':'You are not permitted to submit against that budget.'}),403
+        fields += ['budget_id=%s', 'production_id=%s']
+        vals += [int(data['budget_id']), production_for_budget(data['budget_id'])]
     if fields:
         vals.append(rid)
         conn.execute(f'UPDATE bb_purchase_requests SET {",".join(fields)} WHERE id=%s',vals)
@@ -3338,6 +3352,12 @@ def submit_statement(sid):
                             WHERE si.statement_id=%s''',(sid,)).fetchall()
     if not items:
         conn.close(); return jsonify({'error':'Add at least one item before submitting'}),400
+    no_budget = [dict(i)['title'] for i in items if not dict(i).get('budget_id')]
+    if no_budget:
+        conn.close(); return jsonify({'error':'Pick a budget for: ' + ', '.join(no_budget)}),400
+    not_allowed = [dict(i)['title'] for i in items if not user_can_use_budget(u, dict(i)['budget_id'])]
+    if not_allowed:
+        conn.close(); return jsonify({'error':'You are not permitted to use the budget on: ' + ', '.join(not_allowed)}),403
     now = datetime.now().isoformat()
     # Determine initial status for each item — each item's own production_id
     # drives its chain (a statement's items don't have to share one show).
